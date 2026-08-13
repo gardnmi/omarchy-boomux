@@ -112,7 +112,12 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: ""
+    iconComponent: Component {
+      BoomuxIcon {
+        anchors.fill: parent
+        color: root.foreground
+      }
+    }
     active: root.runningCount > 0
     tooltipText: root.online
       ? root.shells.length + " Boomux terminal" + (root.shells.length === 1 ? "" : "s")
@@ -159,11 +164,10 @@ Panel {
           fontFamily: root.fontFamily
 
           iconComponent: Component {
-            Text {
-              text: ""
+            BoomuxIcon {
+              width: Style.font.display
+              height: Style.font.display
               color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
             }
           }
         }
@@ -269,6 +273,53 @@ Panel {
           horizontalAlignment: Text.AlignHCenter
         }
       }
+    }
+  }
+
+  component BoomuxIcon: Item {
+    property color color: root.foreground
+    onColorChanged: iconCanvas.requestPaint()
+
+    Canvas {
+      id: iconCanvas
+      anchors.fill: parent
+      onPaint: {
+        var context = getContext("2d")
+        var size = Math.min(width, height)
+        context.clearRect(0, 0, width, height)
+        context.fillStyle = parent.color
+        context.strokeStyle = parent.color
+        context.lineCap = "round"
+
+        context.beginPath()
+        context.arc(width * 0.42, height * 0.61, size * 0.29, 0, Math.PI * 2)
+        context.fill()
+
+        context.lineWidth = size * 0.12
+        context.beginPath()
+        context.moveTo(width * 0.59, height * 0.39)
+        context.lineTo(width * 0.69, height * 0.29)
+        context.stroke()
+
+        context.lineWidth = size * 0.08
+        context.beginPath()
+        context.moveTo(width * 0.7, height * 0.28)
+        context.bezierCurveTo(width * 0.8, height * 0.16, width * 0.86, height * 0.28, width * 0.91, height * 0.17)
+        context.stroke()
+
+        context.lineWidth = size * 0.06
+        context.beginPath()
+        context.moveTo(width * 0.91, height * 0.09)
+        context.lineTo(width * 0.91, height * 0.01)
+        context.moveTo(width * 0.96, height * 0.13)
+        context.lineTo(width, height * 0.09)
+        context.moveTo(width * 0.86, height * 0.13)
+        context.lineTo(width * 0.82, height * 0.09)
+        context.stroke()
+      }
+
+      onWidthChanged: requestPaint()
+      onHeightChanged: requestPaint()
     }
   }
 }
