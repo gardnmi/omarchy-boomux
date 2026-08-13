@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Mike Gardner",
   "license": "MIT",
-  "description": "Monitor agent attention and open Boomux terminals from the Omarchy bar.",
+  "description": "Monitor Boomux Agents and open managed terminals from the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Boomux",
-    "description": "Monitor agent attention and open an existing Boomux terminal.",
+    "description": "Monitor Agents and open an existing Boomux terminal.",
     "category": "Development",
     "aliases": ["terminal", "workspace"],
     "allowMultiple": false,

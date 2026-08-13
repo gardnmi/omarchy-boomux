@@ -1,12 +1,15 @@
 # Boomux for Omarchy
 
-An MVP Omarchy Quattro bar plugin for opening existing Boomux terminals.
+An Omarchy Quattro bar plugin for monitoring Boomux Agents and opening managed
+terminals.
 
-The plugin polls `boomux list --json` and `boomux attention list --json`. It
-highlights blocked agents, keeps completed work visible, and displays every
-managed terminal. Click an attention or terminal row, or select it with the
-arrow keys and press Enter, to run `boomux open <shell-id>` in a new native
-terminal window. Opening an attention item does not acknowledge it.
+The plugin polls `boomux list --json` and `boomux agent list --json`. Active
+Agents are shown separately with their live `working`, `idle`, or `blocked`
+state and durable blocked attention. Shells represented by an Agent are omitted
+from the terminal section, so each managed process appears once. Click an Agent
+or terminal row, or select it with the arrow keys and press Enter, to run
+`boomux open <shell-id>` in a new native terminal window. Opening an Agent does
+not acknowledge its attention.
 
 ## Requirements
 

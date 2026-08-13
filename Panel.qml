@@ -16,26 +16,31 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property var shells: []
-  property var attention: []
+  property var agents: []
   property bool online: false
   property bool refreshing: false
+  property int refreshPending: 0
   property string error: ""
   property int selectedIndex: 0
 
-  readonly property int itemCount: attention.length + shells.length
+  readonly property var visibleAgents: agents.filter(function(agent) {
+    var state = agent.observation ? agent.observation.state : "unknown"
+    return state !== "inactive" && state !== "done"
+  })
+  readonly property var terminalShells: shells.filter(function(shell) {
+    return !visibleAgents.some(function(agent) { return agent.shell_id === shell.id })
+  })
+  readonly property int itemCount: visibleAgents.length + terminalShells.length
   readonly property var selectedItem: {
-    if (selectedIndex < attention.length) return attention[selectedIndex]
-    var shellIndex = selectedIndex - attention.length
-    return shellIndex >= 0 && shellIndex < shells.length ? shells[shellIndex] : null
+    if (selectedIndex < visibleAgents.length) return visibleAgents[selectedIndex]
+    var shellIndex = selectedIndex - visibleAgents.length
+    return shellIndex >= 0 && shellIndex < terminalShells.length ? terminalShells[shellIndex] : null
   }
-  readonly property int runningCount: shells.filter(function(shell) {
-    return shell.status === "running"
+  readonly property int blockedCount: visibleAgents.filter(function(agent) {
+    return agent.attention && agent.attention.reason === "blocked"
   }).length
-  readonly property int blockedCount: attention.filter(function(item) {
-    return item.reason === "blocked"
-  }).length
-  readonly property int completedCount: attention.filter(function(item) {
-    return item.reason === "completed"
+  readonly property int workingCount: visibleAgents.filter(function(agent) {
+    return agent.observation && agent.observation.state === "working"
   }).length
 
   visible: true
@@ -43,11 +48,12 @@ Panel {
   implicitHeight: button.implicitHeight
 
   function refresh() {
-    if (listProcess.running || attentionProcess.running) return
+    if (listProcess.running || agentProcess.running) return
     refreshing = true
+    refreshPending = 2
     error = ""
     listProcess.running = true
-    attentionProcess.running = true
+    agentProcess.running = true
   }
 
   function parseShells(raw) {
@@ -68,19 +74,24 @@ Panel {
     }
   }
 
-  function parseAttention(raw) {
+  function parseAgents(raw) {
     try {
       var response = JSON.parse(String(raw || ""))
-      if (response.schema !== "boomux.cli/v1" || !response.data || !Array.isArray(response.data.attention))
-        throw new Error("unexpected Boomux attention response")
+      if (response.schema !== "boomux.cli/v1" || !response.data || !Array.isArray(response.data.agents))
+        throw new Error("unexpected Boomux Agent response")
 
-      attention = response.data.attention
+      agents = response.data.agents
       clampSelection()
     } catch (exception) {
-      attention = []
+      agents = []
       clampSelection()
       console.warn("io.github.gardnmi.boomux:", exception)
     }
+  }
+
+  function finishRefresh() {
+    refreshPending = Math.max(0, refreshPending - 1)
+    refreshing = refreshPending > 0
   }
 
   function clampSelection() {
@@ -90,16 +101,15 @@ Panel {
   function moveSelection(offset) {
     if (itemCount === 0) return
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
-    if (selectedIndex < attention.length)
-      attentionList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    if (selectedIndex < visibleAgents.length)
+      agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
     else
-      shellList.positionViewAtIndex(selectedIndex - attention.length, ListView.Contain)
+      shellList.positionViewAtIndex(selectedIndex - visibleAgents.length, ListView.Contain)
   }
 
   function openItem(item) {
     if (!item || openProcess.running) return
-    if (item.agent && !item.shell_is_retained) return
-    var shellId = item.agent ? item.agent.shell_id : item.id
+    var shellId = item.shell_id || item.id
     if (!shellId) return
     openProcess.command = ["boomux", "open", String(shellId)]
     openProcess.running = true
@@ -121,7 +131,7 @@ Panel {
     }
 
     onExited: function(exitCode) {
-      if (!attentionProcess.running) root.refreshing = false
+      root.finishRefresh()
       if (exitCode !== 0) {
         root.online = false
         root.shells = []
@@ -131,17 +141,17 @@ Panel {
   }
 
   Process {
-    id: attentionProcess
-    command: ["boomux", "attention", "list", "--json"]
+    id: agentProcess
+    command: ["boomux", "agent", "list", "--json"]
 
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.parseAttention(text)
+      onStreamFinished: root.parseAgents(text)
     }
 
     onExited: function(exitCode) {
-      if (!listProcess.running) root.refreshing = false
-      if (exitCode !== 0) root.attention = []
+      root.finishRefresh()
+      if (exitCode !== 0) root.agents = []
     }
   }
 
@@ -174,11 +184,11 @@ Panel {
         }
 
         Text {
-          visible: root.attention.length > 0
+          visible: root.blockedCount > 0
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          text: String(root.blockedCount > 0 ? root.blockedCount : root.completedCount)
-          color: root.blockedCount > 0 ? root.urgent : Color.accent
+          text: String(root.blockedCount)
+          color: root.urgent
           font.family: root.fontFamily
           font.pixelSize: Math.max(7, Math.round(parent.height * 0.42))
           font.bold: true
@@ -189,7 +199,8 @@ Panel {
     tooltipText: root.online
       ? (root.blockedCount > 0
           ? root.blockedCount + " Boomux agent" + (root.blockedCount === 1 ? "" : "s") + " blocked"
-          : root.shells.length + " Boomux terminal" + (root.shells.length === 1 ? "" : "s"))
+          : root.visibleAgents.length + " agent" + (root.visibleAgents.length === 1 ? "" : "s")
+            + " · " + root.terminalShells.length + " terminal" + (root.terminalShells.length === 1 ? "" : "s"))
       : "Boomux unavailable"
 
     onPressed: function(buttonCode) {
@@ -225,11 +236,11 @@ Panel {
         PanelHero {
           width: parent.width
           title: "Boomux"
-          meta: root.blockedCount > 0 ? "NEEDS ATTENTION" : (root.online ? "TERMINALS" : "UNAVAILABLE")
+          meta: root.blockedCount > 0 ? "NEEDS ATTENTION" : (root.online ? "WORKSPACES" : "UNAVAILABLE")
           detail: root.online
             ? (root.blockedCount > 0
-                ? root.blockedCount + " blocked · " + root.completedCount + " completed"
-                : root.shells.length + " total · " + root.runningCount + " running")
+                ? root.blockedCount + " blocked · " + root.workingCount + " working"
+                : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals")
             : "boomux was not found"
           foreground: root.foreground
           fontFamily: root.fontFamily
@@ -248,54 +259,57 @@ Panel {
         }
 
         PanelSectionHeader {
-          visible: root.attention.length > 0
+          visible: root.visibleAgents.length > 0
           width: parent.width
-          text: "NEEDS ATTENTION"
+          text: "AGENTS"
           foreground: root.foreground
           fontFamily: root.fontFamily
         }
 
         ListView {
-          id: attentionList
-          visible: root.attention.length > 0
+          id: agentList
+          visible: root.visibleAgents.length > 0
           width: parent.width
-          implicitHeight: Math.min(contentHeight, Style.space(root.shells.length > 0 ? 160 : 300))
-          model: root.attention
+          implicitHeight: Math.min(contentHeight, Style.space(root.terminalShells.length > 0 ? 220 : 420))
+          model: root.visibleAgents
           spacing: Style.space(4)
           clip: true
           boundsBehavior: Flickable.StopAtBounds
-          currentIndex: root.selectedIndex < root.attention.length ? root.selectedIndex : -1
+          currentIndex: root.selectedIndex < root.visibleAgents.length ? root.selectedIndex : -1
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
           delegate: Rectangle {
-            id: attentionRow
+            id: agentRow
             required property var modelData
             required property int index
+
+            readonly property string state: modelData.observation ? modelData.observation.state : "unknown"
+            readonly property bool needsAttention: modelData.attention && modelData.attention.reason === "blocked"
 
             width: ListView.view.width
             height: Style.space(64)
             radius: Style.cornerRadius
             color: index === root.selectedIndex
               ? Style.selectedFillFor(root.foreground, Color.accent)
-              : (attentionMouse.containsMouse
+              : (agentMouse.containsMouse
                   ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
                   : "transparent")
-            opacity: modelData.shell_is_retained ? 1 : 0.55
 
             Text {
-              id: attentionGlyph
+              id: agentGlyph
               anchors.left: parent.left
               anchors.leftMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
-              text: attentionRow.modelData.reason === "blocked" ? "!" : "✓"
-              color: attentionRow.modelData.reason === "blocked" ? root.urgent : Color.accent
+              text: agentRow.needsAttention ? "!" : (agentRow.state === "working" ? "●" : "○")
+              color: agentRow.needsAttention ? root.urgent
+                : (agentRow.state === "working" ? Color.accent : root.dim)
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
-              font.bold: true
+              font.bold: agentRow.needsAttention
             }
 
             Column {
-              anchors.left: attentionGlyph.right
+              anchors.left: agentGlyph.right
               anchors.leftMargin: Style.space(12)
               anchors.right: parent.right
               anchors.rightMargin: Style.space(10)
@@ -304,21 +318,21 @@ Panel {
 
               Text {
                 width: parent.width
-                text: String(attentionRow.modelData.workspace_name) + " / "
-                  + String(attentionRow.modelData.agent ? attentionRow.modelData.agent.name : "Agent")
+                text: String(agentRow.modelData.workspace_name) + " / " + String(agentRow.modelData.name)
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
-                font.bold: attentionRow.index === root.selectedIndex
+                font.bold: agentRow.index === root.selectedIndex
                 elide: Text.ElideRight
               }
 
               Text {
                 width: parent.width
-                text: attentionRow.modelData.shell_is_retained
-                  ? String(attentionRow.modelData.observation ? attentionRow.modelData.observation.evidence : "")
-                  : "Terminal no longer retained"
-                color: root.dim
+                text: agentRow.state + (agentRow.needsAttention ? " · needs attention" : "")
+                  + (agentRow.modelData.observation && agentRow.modelData.observation.evidence
+                  ? " · " + String(agentRow.modelData.observation.evidence)
+                  : "")
+                color: agentRow.needsAttention ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
@@ -326,18 +340,17 @@ Panel {
             }
 
             MouseArea {
-              id: attentionMouse
+              id: agentMouse
               anchors.fill: parent
               hoverEnabled: true
-              enabled: attentionRow.modelData.shell_is_retained
-              onEntered: root.selectedIndex = attentionRow.index
-              onClicked: root.openItem(attentionRow.modelData)
+              onEntered: root.selectedIndex = agentRow.index
+              onClicked: root.openItem(agentRow.modelData)
             }
           }
         }
 
         PanelSectionHeader {
-          visible: root.attention.length > 0 && root.shells.length > 0
+          visible: root.terminalShells.length > 0
           width: parent.width
           text: "TERMINALS"
           foreground: root.foreground
@@ -358,15 +371,15 @@ Panel {
 
         ListView {
           id: shellList
-          visible: root.shells.length > 0
+          visible: root.terminalShells.length > 0
           width: parent.width
-          implicitHeight: Math.min(contentHeight, Style.space(root.attention.length > 0 ? 220 : 420))
-          model: root.shells
+          implicitHeight: Math.min(contentHeight, Style.space(root.visibleAgents.length > 0 ? 220 : 420))
+          model: root.terminalShells
           spacing: Style.space(4)
           clip: true
           boundsBehavior: Flickable.StopAtBounds
-          currentIndex: root.selectedIndex >= root.attention.length
-            ? root.selectedIndex - root.attention.length
+          currentIndex: root.selectedIndex >= root.visibleAgents.length
+            ? root.selectedIndex - root.visibleAgents.length
             : -1
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -378,7 +391,7 @@ Panel {
             width: ListView.view.width
             height: Style.space(58)
             radius: Style.cornerRadius
-            color: index + root.attention.length === root.selectedIndex
+            color: index + root.visibleAgents.length === root.selectedIndex
               ? Style.selectedFillFor(root.foreground, Color.accent)
               : (rowMouse.containsMouse
                   ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
@@ -409,7 +422,7 @@ Panel {
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
-                font.bold: shellRow.index + root.attention.length === root.selectedIndex
+                font.bold: shellRow.index + root.visibleAgents.length === root.selectedIndex
                 elide: Text.ElideRight
               }
 
@@ -427,7 +440,7 @@ Panel {
               id: rowMouse
               anchors.fill: parent
               hoverEnabled: true
-              onEntered: root.selectedIndex = shellRow.index + root.attention.length
+              onEntered: root.selectedIndex = shellRow.index + root.visibleAgents.length
               onClicked: root.openItem(shellRow.modelData)
             }
           }
