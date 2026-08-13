@@ -11,6 +11,11 @@ or terminal row, or select it with the arrow keys and press Enter, to run
 `boomux open <shell-id>` in a new native terminal window. Opening an Agent does
 not acknowledge its attention.
 
+Agent rows use their backing Boomux shell name. The widget also watches live
+state transitions: when an Agent changes from `working` to `idle`, the bomb and
+a count turn accent-colored until the panel is opened. This completion marker is
+local to the widget and is separate from Boomux's durable attention queue.
+
 ## Requirements
 
 - Omarchy Quattro
