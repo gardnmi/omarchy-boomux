@@ -148,6 +148,12 @@ Panel {
     completedAgents = ({})
   }
 
+  function openDashboard() {
+    if (!bar) return
+    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux boomux")
+    close()
+  }
+
   onOpenedChanged: if (opened) {
     clearCompletedAgents()
     refresh()
@@ -269,27 +275,50 @@ Panel {
         width: parent.width
         spacing: Style.space(12)
 
-        PanelHero {
+        Item {
+          id: heroHeader
           width: parent.width
-          title: "Boomux"
-          meta: root.blockedCount > 0 ? "NEEDS ATTENTION"
-            : (root.completedCount > 0 ? "AGENT FINISHED" : (root.online ? "WORKSPACES" : "UNAVAILABLE"))
-          detail: root.online
-            ? (root.blockedCount > 0
-                ? root.blockedCount + " blocked · " + root.workingCount + " working"
-                : (root.completedCount > 0
-                    ? root.completedCount + " finished · " + root.workingCount + " working"
-                    : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals"))
-            : "boomux was not found"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
+          implicitHeight: hero.implicitHeight
 
-          iconComponent: Component {
-            BoomuxIcon {
-              width: Style.font.display
-              height: Style.font.display
-              color: root.blockedCount > 0 ? root.urgent
-                : (root.completedCount > 0 ? Color.accent : root.foreground)
+          PanelHero {
+            id: hero
+            width: parent.width
+            title: "Boomux"
+            meta: root.blockedCount > 0 ? "NEEDS ATTENTION"
+              : (root.completedCount > 0 ? "AGENT FINISHED" : (root.online ? "WORKSPACES" : "UNAVAILABLE"))
+            detail: root.online
+              ? (root.blockedCount > 0
+                  ? root.blockedCount + " blocked · " + root.workingCount + " working"
+                  : (root.completedCount > 0
+                      ? root.completedCount + " finished · " + root.workingCount + " working"
+                      : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals"))
+              : "boomux was not found"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+
+            iconComponent: Component {
+              BoomuxIcon {
+                width: Style.font.display
+                height: Style.font.display
+                color: root.blockedCount > 0 ? root.urgent
+                  : (root.completedCount > 0 ? Color.accent : root.foreground)
+              }
+            }
+
+            trailingControl: Component {
+              Button {
+                text: "Open TUI"
+                iconText: ""
+                tooltipText: "Open the Boomux dashboard"
+                bordered: true
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                fontSize: Style.font.caption
+                iconSize: Style.font.body
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(4)
+                onClicked: root.openDashboard()
+              }
             }
           }
         }

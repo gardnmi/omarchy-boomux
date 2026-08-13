@@ -15,6 +15,8 @@ Agent rows use their backing Boomux shell name. The widget also watches live
 state transitions: when an Agent changes from `working` to `idle`, the bomb and
 a count turn accent-colored until the panel is opened. This completion marker is
 local to the widget and is separate from Boomux's durable attention queue.
+The panel's **Open TUI** button launches the Boomux dashboard in a new native
+terminal window.
 
 ## Requirements
 
