@@ -1,17 +1,21 @@
 # Boomux for Omarchy
 
-See every Boomux Agent's working, blocked, and finished state from the Omarchy
-bar, then jump directly into its managed terminal.
+Monitor every Boomux Agent and manage native-terminal workspaces without leaving
+the Omarchy bar.
 
 ![Boomux Agents and managed terminals in the Omarchy bar](preview.png)
 
 ## Features
 
-- Separates active Agents from ordinary Boomux terminals without duplicate rows
+- Keeps active Agents in a dedicated status tab
 - Shows live `working`, `idle`, and `blocked` Agent states
 - Highlights finished work and blocked attention in the bar
 - Keeps finished markers visible until you open the corresponding Agent
-- Opens any Agent or terminal by its exact Boomux shell ID
+- Lists workspaces and their Agent, shell, command, and launcher items
+- Opens complete workspaces or individual managed items
+- Creates workspaces and pending login shells
+- Starts new OpenCode or Pi command shells and lets their lifecycle integration
+  register the Agent
 - Acknowledges current durable attention when you open its Agent
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
@@ -24,8 +28,9 @@ bar, then jump directly into its managed terminal.
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
-The terminal list works with Boomux alone. Agent states require a Boomux
-lifecycle integration for a supported coding agent. For OpenCode or Pi, run:
+Workspace management works with Boomux alone. Agent states and Agent creation
+require the corresponding coding-agent executable and Boomux lifecycle
+integration. For OpenCode or Pi, run:
 
 ```bash
 boomux integration setup opencode
@@ -59,13 +64,23 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | --- | --- |
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
-| Up / Down | Select an Agent or terminal |
+| Tab or `1` / `2` | Switch between Agents and Workspaces |
+| Up / Down | Select an Agent or workspace |
 | Enter | Open the selected item in its native terminal |
+| `N` | Create a workspace |
 | `R` | Refresh immediately |
 | Escape | Close the panel |
 
-The **Open Boomux TUI** button launches the Boomux dashboard in a new native
-terminal window.
+The **Open TUI** button launches the Boomux dashboard in a new native terminal
+window. In the Workspaces tab, select a workspace to inspect its items. The
+action bar can open that workspace, create another workspace, add a login shell,
+or start an OpenCode or Pi Agent shell. Clicking a shell, command, or Agent opens
+its managed terminal; clicking a launcher invokes that detached command.
+
+Agent creation records and opens a command-backed shell whose exact command is
+`opencode` or `pi`. The installed lifecycle integration creates the authoritative
+Agent record after the coding-agent host starts; the plugin does not fabricate
+Agent lifecycle state.
 
 The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert
@@ -93,12 +108,15 @@ and data.
 ## Data And Privacy
 
 - The plugin runs local `boomux list --json` and `boomux agent list --json`
-  commands once per second.
+  commands once per second, along with workspace list and inspect commands.
 - It makes no network requests and does not read or store credentials.
 - It does not modify Boomux or Omarchy configuration directly.
 - Opening an Agent can run the local, revision-conditional
   `boomux attention acknowledge` command before opening its terminal.
 - Opening the dashboard or a managed shell launches a native terminal process.
+- Workspace actions can create or open workspaces, create shells, and invoke
+  existing launchers. Opening a workspace runs all of its launchers and opens
+  all of its shells using Boomux's normal restore behavior.
 
 ## Troubleshooting
 

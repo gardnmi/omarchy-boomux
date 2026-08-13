@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "author": "Mike Gardner",
   "license": "MIT",
-  "description": "See Boomux Agents working, blocked, and finished, then jump into their terminals.",
+  "description": "Monitor Agents and manage Boomux workspaces from the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Boomux",
-    "description": "Monitor Boomux Agents and open managed terminals.",
+    "description": "Monitor Agents and manage Boomux workspaces.",
     "category": "Development",
     "aliases": ["boomux", "agent", "agents", "terminal", "workspace"],
     "allowMultiple": false,
