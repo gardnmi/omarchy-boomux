@@ -1,0 +1,3 @@
+[tasks.restart]
+description = "Deploy the local plugin and restart Omarchy shell"
+run = "bash deploy-local.sh"
