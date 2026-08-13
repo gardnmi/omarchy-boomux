@@ -3,7 +3,7 @@
 Monitor every Boomux Agent and manage native-terminal workspaces without leaving
 the Omarchy bar.
 
-![Boomux Agents and managed terminals in the Omarchy bar](preview.png)
+![Boomux Agent status in the Omarchy bar](preview.png)
 
 ## Features
 
@@ -20,6 +20,8 @@ the Omarchy bar.
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
 - Polls local Boomux state once per second for responsive updates
+
+![Boomux workspace management in the Omarchy bar](assets/workspaces.png)
 
 ## Requirements
 
