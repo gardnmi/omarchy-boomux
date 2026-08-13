@@ -1,61 +1,158 @@
 # Boomux for Omarchy
 
-An Omarchy Quattro bar plugin for monitoring Boomux Agents and opening managed
-terminals.
+See every Boomux Agent's working, blocked, and finished state from the Omarchy
+bar, then jump directly into its managed terminal.
 
-The plugin polls `boomux list --json` and `boomux agent list --json`. Active
-Agents are shown separately with their live `working`, `idle`, or `blocked`
-state and durable blocked attention. Shells represented by an Agent are omitted
-from the terminal section, so each managed process appears once. Click an Agent
-or terminal row, or select it with the arrow keys and press Enter, to run
-`boomux open <shell-id>` in a new native terminal window. Opening an Agent does
-not acknowledge its attention.
+![Boomux Agents and managed terminals in the Omarchy bar](preview.png)
 
-Agent rows use their backing Boomux shell name. The widget also watches live
-state transitions: when an Agent changes from `working` to `idle`, the bomb and
-a count turn accent-colored and the Agent row shows `finished` until that row is
-opened. This completion marker is local to the widget and is separate from
-Boomux's durable attention queue. Agent and terminal state is polled once per
-second.
-The panel's **Open TUI** button launches the Boomux dashboard in a new native
-terminal window.
-Opening an Agent row conditionally acknowledges its current durable attention
-before opening the backing shell. Urgent styling follows the Agent's current
-blocked lifecycle state, so it clears when work resumes.
+## Features
 
-The bomb icon is from [Font Awesome Free](https://fontawesome.com/icons/bomb),
-licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-Its spark turns yellow while blocked or finished attention is active.
+- Separates active Agents from ordinary Boomux terminals without duplicate rows
+- Shows live `working`, `idle`, and `blocked` Agent states
+- Highlights finished work and blocked attention in the bar
+- Keeps finished markers visible until you open the corresponding Agent
+- Opens any Agent or terminal by its exact Boomux shell ID
+- Acknowledges current durable attention when you open its Agent
+- Launches the full Boomux TUI in a new native terminal
+- Supports mouse and keyboard navigation and follows the active Omarchy theme
+- Polls local Boomux state once per second for responsive updates
 
 ## Requirements
 
-- Omarchy Quattro
-- `boomux` on `PATH`
+- Omarchy with the Quattro shell plugin system
+- [Boomux](https://github.com/gardnmi/boomux) `0.13.0` or newer available on
+  `PATH`
+- A configured native terminal supported by `xdg-terminal-exec`
+
+The terminal list works with Boomux alone. Agent states require a Boomux
+lifecycle integration for a supported coding agent. For OpenCode or Pi, run:
+
+```bash
+boomux integration setup opencode
+# or
+boomux integration setup pi
+```
+
+Follow the setup command's restart and verification guidance. See the
+[Boomux installation instructions](https://github.com/gardnmi/boomux#install)
+if `boomux` is not installed yet.
 
 ## Install
+
+Review the source before installing. Omarchy plugins run as unsandboxed code
+inside the long-running shell process.
 
 ```bash
 omarchy plugin add https://github.com/gardnmi/omarchy-boomux.git --enable
 ```
 
-The widget is placed in the right bar section by default. Right-click the bar
-icon or press `R` in the panel to refresh immediately.
+The widget defaults to the right bar section. If you installed it without
+`--enable`, enable it later with:
 
-For local testing from this repository, deploy every plugin asset while the
-shell is stopped to avoid partial hot reloads:
+```bash
+omarchy plugin enable io.github.gardnmi.boomux --section right
+```
+
+## Use
+
+| Input | Action |
+| --- | --- |
+| Left click | Open or close the panel |
+| Right click | Refresh immediately |
+| Up / Down | Select an Agent or terminal |
+| Enter | Open the selected item in its native terminal |
+| `R` | Refresh immediately |
+| Escape | Close the panel |
+
+The **Open Boomux TUI** button launches the Boomux dashboard in a new native
+terminal window.
+
+The bomb icon changes with Agent state. Blocked work uses the urgent color;
+finished work uses the accent color. The spark turns yellow while either alert
+is active. Finished markers are local to this widget and clear when you open the
+corresponding Agent. Durable blocked attention is conditionally acknowledged
+with the exact Agent ID and observation revision when that Agent is opened.
+
+## Update
+
+```bash
+omarchy plugin update io.github.gardnmi.boomux
+omarchy restart shell
+```
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.gardnmi.boomux
+```
+
+Removal deletes only the plugin checkout and its bar entry. It does not remove
+Boomux, stop or delete Boomux workspaces, or remove Boomux Agent integrations
+and data.
+
+## Data And Privacy
+
+- The plugin runs local `boomux list --json` and `boomux agent list --json`
+  commands once per second.
+- It makes no network requests and does not read or store credentials.
+- It does not modify Boomux or Omarchy configuration directly.
+- Opening an Agent can run the local, revision-conditional
+  `boomux attention acknowledge` command before opening its terminal.
+- Opening the dashboard or a managed shell launches a native terminal process.
+
+## Troubleshooting
+
+### Boomux is unavailable
+
+Confirm Boomux is installed and healthy:
+
+```bash
+command -v boomux
+boomux doctor
+boomux list --json
+```
+
+### Agents appear as terminals
+
+Confirm a lifecycle integration is installed and reporting:
+
+```bash
+boomux integration status
+boomux agent list --json
+```
+
+Restart the coding-agent host after installing or updating its integration.
+
+### The panel looks stale
+
+Right-click the bomb or press `R`. If plugin code was just updated, run:
+
+```bash
+omarchy restart shell
+```
+
+## Development
+
+Deploy the complete working tree while Quickshell is stopped, then restart it:
 
 ```bash
 mise run restart
 ```
 
-The installed checkout will be dirty after local deployment. Restore or remove
-the local files before using `omarchy plugin update` again.
+This makes the installed plugin checkout dirty. Restore or remove local test
+changes before using `omarchy plugin update` again.
 
-## Validate
-
-From an Omarchy Quattro checkout:
+Validate the repository with:
 
 ```bash
 omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Panel.qml
+xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 ```
+
+## License
+
+The plugin code is licensed under the [MIT License](LICENSE). The bomb icon is
+adapted from [Font Awesome Free](https://fontawesome.com/icons/bomb) under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
