@@ -2,9 +2,11 @@
 
 An MVP Omarchy Quattro bar plugin for opening existing Boomux terminals.
 
-The plugin polls `boomux list --json` and displays every managed terminal. Click
-a terminal, or select it with the arrow keys and press Enter, to run `boomux
-open <shell-id>` in a new native terminal window.
+The plugin polls `boomux list --json` and `boomux attention list --json`. It
+highlights blocked agents, keeps completed work visible, and displays every
+managed terminal. Click an attention or terminal row, or select it with the
+arrow keys and press Enter, to run `boomux open <shell-id>` in a new native
+terminal window. Opening an attention item does not acknowledge it.
 
 ## Requirements
 
@@ -34,5 +36,5 @@ From an Omarchy Quattro checkout:
 
 ```bash
 omarchy plugin validate .
-qmllint Panel.qml
+qmllint -I /usr/share/omarchy/shell Panel.qml
 ```

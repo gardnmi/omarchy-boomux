@@ -11,20 +11,31 @@ Panel {
   ipcTarget: "io.github.gardnmi.boomux"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property var shells: []
+  property var attention: []
   property bool online: false
   property bool refreshing: false
   property string error: ""
   property int selectedIndex: 0
 
-  readonly property var selectedShell: shells.length > 0 && selectedIndex < shells.length
-    ? shells[selectedIndex]
-    : null
+  readonly property int itemCount: attention.length + shells.length
+  readonly property var selectedItem: {
+    if (selectedIndex < attention.length) return attention[selectedIndex]
+    var shellIndex = selectedIndex - attention.length
+    return shellIndex >= 0 && shellIndex < shells.length ? shells[shellIndex] : null
+  }
   readonly property int runningCount: shells.filter(function(shell) {
     return shell.status === "running"
+  }).length
+  readonly property int blockedCount: attention.filter(function(item) {
+    return item.reason === "blocked"
+  }).length
+  readonly property int completedCount: attention.filter(function(item) {
+    return item.reason === "completed"
   }).length
 
   visible: true
@@ -32,10 +43,11 @@ Panel {
   implicitHeight: button.implicitHeight
 
   function refresh() {
-    if (listProcess.running) return
+    if (listProcess.running || attentionProcess.running) return
     refreshing = true
     error = ""
     listProcess.running = true
+    attentionProcess.running = true
   }
 
   function parseShells(raw) {
@@ -46,7 +58,7 @@ Panel {
 
       shells = response.data.shells
       online = true
-      selectedIndex = Math.max(0, Math.min(selectedIndex, shells.length - 1))
+      clampSelection()
     } catch (exception) {
       online = false
       shells = []
@@ -56,15 +68,40 @@ Panel {
     }
   }
 
-  function moveSelection(offset) {
-    if (shells.length === 0) return
-    selectedIndex = Math.max(0, Math.min(selectedIndex + offset, shells.length - 1))
-    shellList.positionViewAtIndex(selectedIndex, ListView.Contain)
+  function parseAttention(raw) {
+    try {
+      var response = JSON.parse(String(raw || ""))
+      if (response.schema !== "boomux.cli/v1" || !response.data || !Array.isArray(response.data.attention))
+        throw new Error("unexpected Boomux attention response")
+
+      attention = response.data.attention
+      clampSelection()
+    } catch (exception) {
+      attention = []
+      clampSelection()
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
   }
 
-  function openShell(shell) {
-    if (!shell || openProcess.running) return
-    openProcess.command = ["boomux", "open", String(shell.id)]
+  function clampSelection() {
+    selectedIndex = Math.max(0, Math.min(selectedIndex, itemCount - 1))
+  }
+
+  function moveSelection(offset) {
+    if (itemCount === 0) return
+    selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
+    if (selectedIndex < attention.length)
+      attentionList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    else
+      shellList.positionViewAtIndex(selectedIndex - attention.length, ListView.Contain)
+  }
+
+  function openItem(item) {
+    if (!item || openProcess.running) return
+    if (item.agent && !item.shell_is_retained) return
+    var shellId = item.agent ? item.agent.shell_id : item.id
+    if (!shellId) return
+    openProcess.command = ["boomux", "open", String(shellId)]
     openProcess.running = true
     close()
   }
@@ -84,12 +121,27 @@ Panel {
     }
 
     onExited: function(exitCode) {
-      root.refreshing = false
+      if (!attentionProcess.running) root.refreshing = false
       if (exitCode !== 0) {
         root.online = false
         root.shells = []
         root.error = "Boomux is unavailable"
       }
+    }
+  }
+
+  Process {
+    id: attentionProcess
+    command: ["boomux", "attention", "list", "--json"]
+
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.parseAttention(text)
+    }
+
+    onExited: function(exitCode) {
+      if (!listProcess.running) root.refreshing = false
+      if (exitCode !== 0) root.attention = []
     }
   }
 
@@ -113,14 +165,31 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     iconComponent: Component {
-      BoomuxIcon {
+      Item {
         anchors.fill: parent
-        color: root.foreground
+
+        BoomuxIcon {
+          anchors.fill: parent
+          color: root.blockedCount > 0 ? root.urgent : root.foreground
+        }
+
+        Text {
+          visible: root.attention.length > 0
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          text: String(root.blockedCount > 0 ? root.blockedCount : root.completedCount)
+          color: root.blockedCount > 0 ? root.urgent : Color.accent
+          font.family: root.fontFamily
+          font.pixelSize: Math.max(7, Math.round(parent.height * 0.42))
+          font.bold: true
+        }
       }
     }
-    active: root.runningCount > 0
+    active: root.blockedCount > 0
     tooltipText: root.online
-      ? root.shells.length + " Boomux terminal" + (root.shells.length === 1 ? "" : "s")
+      ? (root.blockedCount > 0
+          ? root.blockedCount + " Boomux agent" + (root.blockedCount === 1 ? "" : "s") + " blocked"
+          : root.shells.length + " Boomux terminal" + (root.shells.length === 1 ? "" : "s"))
       : "Boomux unavailable"
 
     onPressed: function(buttonCode) {
@@ -143,7 +212,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveSelection(dy) }
-      onActivateRequested: root.openShell(root.selectedShell)
+      onActivateRequested: root.openItem(root.selectedItem)
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
@@ -156,9 +225,11 @@ Panel {
         PanelHero {
           width: parent.width
           title: "Boomux"
-          meta: root.online ? "TERMINALS" : "UNAVAILABLE"
+          meta: root.blockedCount > 0 ? "NEEDS ATTENTION" : (root.online ? "TERMINALS" : "UNAVAILABLE")
           detail: root.online
-            ? root.shells.length + " total · " + root.runningCount + " running"
+            ? (root.blockedCount > 0
+                ? root.blockedCount + " blocked · " + root.completedCount + " completed"
+                : root.shells.length + " total · " + root.runningCount + " running")
             : "boomux was not found"
           foreground: root.foreground
           fontFamily: root.fontFamily
@@ -167,7 +238,7 @@ Panel {
             BoomuxIcon {
               width: Style.font.display
               height: Style.font.display
-              color: root.foreground
+              color: root.blockedCount > 0 ? root.urgent : root.foreground
             }
           }
         }
@@ -176,8 +247,105 @@ Panel {
           foreground: root.foreground
         }
 
+        PanelSectionHeader {
+          visible: root.attention.length > 0
+          width: parent.width
+          text: "NEEDS ATTENTION"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        ListView {
+          id: attentionList
+          visible: root.attention.length > 0
+          width: parent.width
+          implicitHeight: Math.min(contentHeight, Style.space(root.shells.length > 0 ? 160 : 300))
+          model: root.attention
+          spacing: Style.space(4)
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          currentIndex: root.selectedIndex < root.attention.length ? root.selectedIndex : -1
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          delegate: Rectangle {
+            id: attentionRow
+            required property var modelData
+            required property int index
+
+            width: ListView.view.width
+            height: Style.space(64)
+            radius: Style.cornerRadius
+            color: index === root.selectedIndex
+              ? Style.selectedFillFor(root.foreground, Color.accent)
+              : (attentionMouse.containsMouse
+                  ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                  : "transparent")
+            opacity: modelData.shell_is_retained ? 1 : 0.55
+
+            Text {
+              id: attentionGlyph
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              text: attentionRow.modelData.reason === "blocked" ? "!" : "✓"
+              color: attentionRow.modelData.reason === "blocked" ? root.urgent : Color.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Column {
+              anchors.left: attentionGlyph.right
+              anchors.leftMargin: Style.space(12)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Text {
+                width: parent.width
+                text: String(attentionRow.modelData.workspace_name) + " / "
+                  + String(attentionRow.modelData.agent ? attentionRow.modelData.agent.name : "Agent")
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: attentionRow.index === root.selectedIndex
+                elide: Text.ElideRight
+              }
+
+              Text {
+                width: parent.width
+                text: attentionRow.modelData.shell_is_retained
+                  ? String(attentionRow.modelData.observation ? attentionRow.modelData.observation.evidence : "")
+                  : "Terminal no longer retained"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+
+            MouseArea {
+              id: attentionMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: attentionRow.modelData.shell_is_retained
+              onEntered: root.selectedIndex = attentionRow.index
+              onClicked: root.openItem(attentionRow.modelData)
+            }
+          }
+        }
+
+        PanelSectionHeader {
+          visible: root.attention.length > 0 && root.shells.length > 0
+          width: parent.width
+          text: "TERMINALS"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
         Text {
-          visible: root.error !== "" || (root.online && root.shells.length === 0)
+          visible: root.error !== "" || (root.online && root.itemCount === 0)
           width: parent.width
           text: root.error !== "" ? root.error : "No Boomux terminals"
           color: root.dim
@@ -192,12 +360,14 @@ Panel {
           id: shellList
           visible: root.shells.length > 0
           width: parent.width
-          implicitHeight: Math.min(contentHeight, Style.space(420))
+          implicitHeight: Math.min(contentHeight, Style.space(root.attention.length > 0 ? 220 : 420))
           model: root.shells
           spacing: Style.space(4)
           clip: true
           boundsBehavior: Flickable.StopAtBounds
-          currentIndex: root.selectedIndex
+          currentIndex: root.selectedIndex >= root.attention.length
+            ? root.selectedIndex - root.attention.length
+            : -1
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
           delegate: Rectangle {
@@ -208,7 +378,7 @@ Panel {
             width: ListView.view.width
             height: Style.space(58)
             radius: Style.cornerRadius
-            color: index === root.selectedIndex
+            color: index + root.attention.length === root.selectedIndex
               ? Style.selectedFillFor(root.foreground, Color.accent)
               : (rowMouse.containsMouse
                   ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
@@ -239,7 +409,7 @@ Panel {
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
-                font.bold: shellRow.index === root.selectedIndex
+                font.bold: shellRow.index + root.attention.length === root.selectedIndex
                 elide: Text.ElideRight
               }
 
@@ -257,14 +427,14 @@ Panel {
               id: rowMouse
               anchors.fill: parent
               hoverEnabled: true
-              onEntered: root.selectedIndex = shellRow.index
-              onClicked: root.openShell(shellRow.modelData)
+              onEntered: root.selectedIndex = shellRow.index + root.attention.length
+              onClicked: root.openItem(shellRow.modelData)
             }
           }
         }
 
         Text {
-          visible: root.shells.length > 0
+          visible: root.itemCount > 0
           width: parent.width
           text: "Enter opens · R refreshes"
           color: root.dim
