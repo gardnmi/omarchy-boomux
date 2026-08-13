@@ -23,6 +23,10 @@ Opening an Agent row conditionally acknowledges its current durable attention
 before opening the backing shell. Urgent styling follows the Agent's current
 blocked lifecycle state, so it clears when work resumes.
 
+The bomb icon is from [Font Awesome Free](https://fontawesome.com/icons/bomb),
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Its spark turns yellow while blocked or finished attention is active.
+
 ## Requirements
 
 - Omarchy Quattro
@@ -37,13 +41,15 @@ omarchy plugin add https://github.com/gardnmi/omarchy-boomux.git --enable
 The widget is placed in the right bar section by default. Right-click the bar
 icon or press `R` in the panel to refresh immediately.
 
-For local testing, copy this repository to
-`~/.config/omarchy/plugins/io.github.gardnmi.boomux`, then run:
+For local testing from this repository, deploy every plugin asset while the
+shell is stopped to avoid partial hot reloads:
 
 ```bash
-omarchy-shell shell rescanPlugins
-omarchy plugin enable io.github.gardnmi.boomux --section right
+mise run restart
 ```
+
+The installed checkout will be dirty after local deployment. Restore or remove
+the local files before using `omarchy plugin update` again.
 
 ## Validate
 

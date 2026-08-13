@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -265,6 +266,7 @@ Panel {
           anchors.fill: parent
           color: root.blockedCount > 0 ? root.urgent
             : (root.completedCount > 0 ? Color.accent : root.foreground)
+          lit: root.blockedCount > 0 || root.completedCount > 0
         }
 
         Text {
@@ -341,6 +343,7 @@ Panel {
               height: Style.font.display * 1.15
               color: root.blockedCount > 0 ? root.urgent
                 : (root.completedCount > 0 ? Color.accent : root.foreground)
+              lit: root.blockedCount > 0 || root.completedCount > 0
             }
           }
         }
@@ -568,52 +571,35 @@ Panel {
   }
 
   component BoomuxIcon: Item {
+    id: boomuxIcon
     property color color: root.foreground
-    onColorChanged: iconCanvas.requestPaint()
+    property bool lit: false
 
-    Canvas {
-      id: iconCanvas
+    Image {
+      id: bombImage
       anchors.fill: parent
-      onPaint: {
-        var context = getContext("2d")
-        var size = Math.min(width, height)
-        context.clearRect(0, 0, width, height)
-        context.strokeStyle = parent.color
-        context.lineCap = "round"
-        context.lineJoin = "round"
+      source: Qt.resolvedUrl("assets/bomb.svg")
+      fillMode: Image.PreserveAspectFit
+      sourceSize.width: Math.round(width * 2)
+      sourceSize.height: Math.round(height * 2)
+      visible: false
+      layer.enabled: true
+    }
 
-        context.lineWidth = size * 0.085
-        context.beginPath()
-        context.arc(width * 0.41, height * 0.6, size * 0.31, 0, Math.PI * 2)
-        context.stroke()
+    MultiEffect {
+      anchors.fill: bombImage
+      source: bombImage
+      colorization: 1.0
+      colorizationColor: boomuxIcon.color
+    }
 
-        context.lineWidth = size * 0.085
-        context.beginPath()
-        context.moveTo(width * 0.6, height * 0.37)
-        context.lineTo(width * 0.67, height * 0.3)
-        context.lineTo(width * 0.72, height * 0.35)
-        context.lineTo(width * 0.78, height * 0.28)
-        context.stroke()
-
-        context.lineWidth = size * 0.07
-        context.beginPath()
-        context.moveTo(width * 0.41, height * 0.78)
-        context.bezierCurveTo(width * 0.5, height * 0.77, width * 0.57, height * 0.72, width * 0.61, height * 0.65)
-        context.stroke()
-
-        context.lineWidth = size * 0.07
-        context.beginPath()
-        context.moveTo(width * 0.79, height * 0.18)
-        context.lineTo(width * 0.79, height * 0.07)
-        context.moveTo(width * 0.86, height * 0.24)
-        context.lineTo(width * 0.96, height * 0.21)
-        context.moveTo(width * 0.73, height * 0.21)
-        context.lineTo(width * 0.68, height * 0.12)
-        context.stroke()
-      }
-
-      onWidthChanged: requestPaint()
-      onHeightChanged: requestPaint()
+    Image {
+      anchors.fill: parent
+      source: Qt.resolvedUrl("assets/bomb-spark.svg")
+      fillMode: Image.PreserveAspectFit
+      sourceSize.width: Math.round(width * 2)
+      sourceSize.height: Math.round(height * 2)
+      visible: boomuxIcon.lit
     }
   }
 }
