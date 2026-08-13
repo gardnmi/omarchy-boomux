@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.gardnmi.boomux",
+  "name": "Boomux",
+  "version": "0.1.0",
+  "author": "Mike Gardner",
+  "license": "MIT",
+  "description": "List and open Boomux terminals from the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Boomux",
+    "description": "Open an existing Boomux terminal.",
+    "category": "Development",
+    "aliases": ["terminal", "workspace"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
