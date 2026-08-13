@@ -3,7 +3,7 @@
 Monitor every Boomux Agent and manage native-terminal workspaces without leaving
 the Omarchy bar.
 
-![Boomux Agent status in the Omarchy bar](preview.png)
+![Boomux Agent status in the Omarchy bar](assets/agents.png)
 
 ## Features
 
