@@ -23,6 +23,7 @@ Panel {
   property bool agentBaselineReady: false
   property var previousAgentStates: ({})
   property var completedAgents: ({})
+  property var dismissedAttention: ({})
   property string error: ""
   property int selectedIndex: 0
 
@@ -40,7 +41,7 @@ Panel {
     return shellIndex >= 0 && shellIndex < terminalShells.length ? terminalShells[shellIndex] : null
   }
   readonly property int blockedCount: visibleAgents.filter(function(agent) {
-    return agent.attention && agent.attention.reason === "blocked"
+    return agentNeedsAttention(agent)
   }).length
   readonly property int workingCount: visibleAgents.filter(function(agent) {
     return agent.observation && agent.observation.state === "working"
@@ -132,6 +133,7 @@ Panel {
     if (!item || openProcess.running) return
     var shellId = item.shell_id || item.id
     if (!shellId) return
+    if (item.shell_id) acknowledgeAgent(item)
     openProcess.command = ["boomux", "open", String(shellId)]
     openProcess.running = true
     close()
@@ -142,6 +144,34 @@ Panel {
     for (var i = 0; i < shells.length; i++)
       if (shells[i].id === agent.shell_id) return shells[i].name
     return agent.name
+  }
+
+  function attentionRevision(agent) {
+    return agent && agent.attention && agent.attention.observation
+      ? Number(agent.attention.observation.revision)
+      : 0
+  }
+
+  function agentNeedsAttention(agent) {
+    if (!agent || !agent.observation || agent.observation.state !== "blocked") return false
+    var revision = attentionRevision(agent)
+    return revision > 0 && Number(dismissedAttention[agent.id] || 0) !== revision
+  }
+
+  function acknowledgeAgent(agent) {
+    var revision = attentionRevision(agent)
+    if (revision <= 0) return
+
+    var nextDismissed = ({})
+    for (var id in dismissedAttention) nextDismissed[id] = dismissedAttention[id]
+    nextDismissed[agent.id] = revision
+    dismissedAttention = nextDismissed
+
+    if (!acknowledgeProcess.running) {
+      acknowledgeProcess.command = ["boomux", "attention", "acknowledge", String(agent.id),
+        "--observation-revision", String(revision), "--json"]
+      acknowledgeProcess.running = true
+    }
   }
 
   function clearCompletedAgents() {
@@ -198,6 +228,14 @@ Panel {
     id: openProcess
     onExited: function(exitCode) {
       if (exitCode !== 0) console.warn("io.github.gardnmi.boomux: failed to open terminal")
+    }
+  }
+
+  Process {
+    id: acknowledgeProcess
+    onExited: function(exitCode) {
+      if (exitCode !== 0) console.warn("io.github.gardnmi.boomux: failed to acknowledge attention")
+      root.refresh()
     }
   }
 
@@ -275,52 +313,44 @@ Panel {
         width: parent.width
         spacing: Style.space(12)
 
-        Item {
-          id: heroHeader
+        PanelHero {
+          id: hero
           width: parent.width
-          implicitHeight: hero.implicitHeight
+          title: "Boomux"
+          meta: root.blockedCount > 0 ? "NEEDS ATTENTION"
+            : (root.completedCount > 0 ? "AGENT FINISHED" : (root.online ? "WORKSPACES" : "UNAVAILABLE"))
+          detail: root.online
+            ? (root.blockedCount > 0
+                ? root.blockedCount + " blocked · " + root.workingCount + " working"
+                : (root.completedCount > 0
+                    ? root.completedCount + " finished · " + root.workingCount + " working"
+                    : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals"))
+            : "boomux was not found"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
 
-          PanelHero {
-            id: hero
-            width: parent.width
-            title: "Boomux"
-            meta: root.blockedCount > 0 ? "NEEDS ATTENTION"
-              : (root.completedCount > 0 ? "AGENT FINISHED" : (root.online ? "WORKSPACES" : "UNAVAILABLE"))
-            detail: root.online
-              ? (root.blockedCount > 0
-                  ? root.blockedCount + " blocked · " + root.workingCount + " working"
-                  : (root.completedCount > 0
-                      ? root.completedCount + " finished · " + root.workingCount + " working"
-                      : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals"))
-              : "boomux was not found"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-
-            iconComponent: Component {
-              BoomuxIcon {
-                width: Style.font.display
-                height: Style.font.display
-                color: root.blockedCount > 0 ? root.urgent
-                  : (root.completedCount > 0 ? Color.accent : root.foreground)
-              }
-            }
-
-            trailingControl: Component {
-              Button {
-                text: "Open TUI"
-                iconText: ""
-                tooltipText: "Open the Boomux dashboard"
-                bordered: true
-                foreground: hero.foreground
-                fontFamily: hero.fontFamily
-                fontSize: Style.font.caption
-                iconSize: Style.font.body
-                horizontalPadding: Style.space(8)
-                verticalPadding: Style.space(4)
-                onClicked: root.openDashboard()
-              }
+          iconComponent: Component {
+            BoomuxIcon {
+              width: Style.font.display * 1.15
+              height: Style.font.display * 1.15
+              color: root.blockedCount > 0 ? root.urgent
+                : (root.completedCount > 0 ? Color.accent : root.foreground)
             }
           }
+        }
+
+        Button {
+          width: parent.width
+          text: "Open Boomux TUI"
+          iconText: ""
+          tooltipText: "Open the Boomux dashboard"
+          bordered: true
+          leftAlign: true
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.caption
+          iconSize: Style.font.body
+          onClicked: root.openDashboard()
         }
 
         PanelSeparator {
@@ -353,7 +383,7 @@ Panel {
             required property int index
 
             readonly property string state: modelData.observation ? modelData.observation.state : "unknown"
-            readonly property bool needsAttention: modelData.attention && modelData.attention.reason === "blocked"
+            readonly property bool needsAttention: root.agentNeedsAttention(modelData)
             readonly property bool justCompleted: !!root.completedAgents[modelData.id]
 
             width: ListView.view.width
@@ -546,33 +576,33 @@ Panel {
         context.lineCap = "round"
         context.lineJoin = "round"
 
-        context.lineWidth = size * 0.1
+        context.lineWidth = size * 0.085
         context.beginPath()
-        context.arc(width * 0.4, height * 0.61, size * 0.3, 0, Math.PI * 2)
+        context.arc(width * 0.41, height * 0.6, size * 0.31, 0, Math.PI * 2)
         context.stroke()
 
-        context.lineWidth = size * 0.1
+        context.lineWidth = size * 0.085
         context.beginPath()
-        context.moveTo(width * 0.59, height * 0.39)
-        context.lineTo(width * 0.67, height * 0.31)
-        context.lineTo(width * 0.72, height * 0.36)
-        context.lineTo(width * 0.78, height * 0.29)
+        context.moveTo(width * 0.6, height * 0.37)
+        context.lineTo(width * 0.67, height * 0.3)
+        context.lineTo(width * 0.72, height * 0.35)
+        context.lineTo(width * 0.78, height * 0.28)
         context.stroke()
 
-        context.lineWidth = size * 0.08
+        context.lineWidth = size * 0.07
         context.beginPath()
-        context.moveTo(width * 0.4, height * 0.78)
-        context.bezierCurveTo(width * 0.5, height * 0.77, width * 0.58, height * 0.71, width * 0.62, height * 0.64)
+        context.moveTo(width * 0.41, height * 0.78)
+        context.bezierCurveTo(width * 0.5, height * 0.77, width * 0.57, height * 0.72, width * 0.61, height * 0.65)
         context.stroke()
 
-        context.lineWidth = size * 0.08
+        context.lineWidth = size * 0.07
         context.beginPath()
-        context.moveTo(width * 0.8, height * 0.2)
-        context.lineTo(width * 0.8, height * 0.09)
-        context.moveTo(width * 0.87, height * 0.25)
-        context.lineTo(width * 0.97, height * 0.22)
-        context.moveTo(width * 0.75, height * 0.22)
-        context.lineTo(width * 0.7, height * 0.13)
+        context.moveTo(width * 0.79, height * 0.18)
+        context.lineTo(width * 0.79, height * 0.07)
+        context.moveTo(width * 0.86, height * 0.24)
+        context.lineTo(width * 0.96, height * 0.21)
+        context.moveTo(width * 0.73, height * 0.21)
+        context.lineTo(width * 0.68, height * 0.12)
         context.stroke()
       }
 
