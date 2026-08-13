@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "Mike Gardner",
   "license": "MIT",
   "description": "Monitor Boomux Agents and open managed terminals from the Omarchy bar.",

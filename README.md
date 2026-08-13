@@ -17,6 +17,9 @@ a count turn accent-colored until the panel is opened. This completion marker is
 local to the widget and is separate from Boomux's durable attention queue.
 The panel's **Open TUI** button launches the Boomux dashboard in a new native
 terminal window.
+Opening an Agent row conditionally acknowledges its current durable attention
+before opening the backing shell. Urgent styling follows the Agent's current
+blocked lifecycle state, so it clears when work resumes.
 
 ## Requirements
 
