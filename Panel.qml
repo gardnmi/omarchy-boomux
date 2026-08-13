@@ -94,7 +94,7 @@ Panel {
         var agent = nextAgents[i]
         var state = agent.observation ? agent.observation.state : "unknown"
         nextStates[agent.id] = state
-        if (agentBaselineReady && !opened && previousAgentStates[agent.id] === "working" && state === "idle")
+        if (agentBaselineReady && previousAgentStates[agent.id] === "working" && state === "idle")
           nextCompleted[agent.id] = true
         if (state === "working" || state === "blocked") delete nextCompleted[agent.id]
       }
@@ -133,7 +133,10 @@ Panel {
     if (!item || openProcess.running) return
     var shellId = item.shell_id || item.id
     if (!shellId) return
-    if (item.shell_id) acknowledgeAgent(item)
+    if (item.shell_id) {
+      clearCompletedAgent(item.id)
+      acknowledgeAgent(item)
+    }
     openProcess.command = ["boomux", "open", String(shellId)]
     openProcess.running = true
     close()
@@ -174,8 +177,12 @@ Panel {
     }
   }
 
-  function clearCompletedAgents() {
-    completedAgents = ({})
+  function clearCompletedAgent(agentId) {
+    if (!completedAgents[agentId]) return
+    var nextCompleted = ({})
+    for (var id in completedAgents)
+      if (id !== agentId) nextCompleted[id] = completedAgents[id]
+    completedAgents = nextCompleted
   }
 
   function openDashboard() {
@@ -185,7 +192,6 @@ Panel {
   }
 
   onOpenedChanged: if (opened) {
-    clearCompletedAgents()
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -240,7 +246,7 @@ Panel {
   }
 
   Timer {
-    interval: 5000
+    interval: 1000
     running: true
     repeat: true
     triggeredOnStart: true
