@@ -795,197 +795,203 @@ Panel {
               id: workspaceList
               visible: root.workspaces.length > 0
               width: parent.width
-              implicitHeight: Math.min(contentHeight, Style.space(430))
+              implicitHeight: Math.min(contentHeight, Style.space(150))
               model: root.workspaces
-              spacing: Style.space(6)
+              spacing: Style.space(3)
               clip: true
               boundsBehavior: Flickable.StopAtBounds
               currentIndex: root.activeTab === "workspaces" ? root.selectedIndex : -1
               ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              delegate: Item {
-                id: workspaceCard
+              delegate: Rectangle {
                 required property var modelData
                 required property int index
-                readonly property bool expanded: modelData.id === root.selectedWorkspaceId
-                  && root.workspaceDetail !== null
-                  && root.workspaceDetail.id === modelData.id
-
                 width: ListView.view.width
-                height: cardColumn.implicitHeight
-
+                height: Style.space(50)
+                radius: Style.cornerRadius
+                color: modelData.id === root.selectedWorkspaceId
+                  ? Style.selectedFillFor(root.foreground, Color.accent)
+                  : (workspaceMouse.containsMouse
+                    ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                    : "transparent")
                 Column {
-                  id: cardColumn
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(10)
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(2)
+                  Text {
+                    width: parent.width
+                    text: String(modelData.name)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: modelData.id === root.selectedWorkspaceId
+                    elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width
+                    text: modelData.shell_count + " items · " + modelData.agent_count + " agents"
+                    color: modelData.attention_count > 0 ? root.urgent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+                MouseArea {
+                  id: workspaceMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onEntered: root.selectedIndex = index
+                  onClicked: root.selectWorkspace(modelData.id)
+                  onDoubleClicked: root.openWorkspace(modelData)
+                }
+              }
+            }
+
+            BorderSurface {
+              visible: root.workspaceDetail !== null
+              width: parent.width
+              implicitHeight: detailColumn.implicitHeight + Style.space(18)
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.025)
+              borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+              radius: Style.cornerRadius
+
+              Column {
+                id: detailColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(9)
+                spacing: Style.space(6)
+
+                Text {
+                  width: parent.width
+                  text: root.workspaceDetail ? String(root.workspaceDetail.name) : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  text: root.workspaceDetail && root.workspaceDetail.default_cwd
+                    ? String(root.workspaceDetail.default_cwd) : "No default directory"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideMiddle
+                }
+
+                Row {
                   width: parent.width
                   spacing: Style.space(5)
+                  Button {
+                    width: (parent.width - parent.spacing * 2) / 3
+                    text: "Open"
+                    iconText: ""
+                    tooltipText: "Open selected workspace"
+                    bordered: true
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    iconSize: Style.font.body
+                    onClicked: root.openWorkspace(root.workspaceDetail)
+                  }
+                  Button {
+                    width: (parent.width - parent.spacing * 2) / 3
+                    text: "Shell"
+                    iconText: "+"
+                    tooltipText: "Add shell to selected workspace"
+                    bordered: true
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    iconSize: Style.font.body
+                    onClicked: root.showForm("shell")
+                  }
+                  Button {
+                    width: (parent.width - parent.spacing * 2) / 3
+                    text: "Agent"
+                    iconText: "+"
+                    tooltipText: "Start Agent in selected workspace"
+                    bordered: true
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    iconSize: Style.font.body
+                    onClicked: root.showForm("agent")
+                  }
+                }
 
-                  Rectangle {
-                    width: parent.width
-                    height: Style.space(52)
+                PanelSectionHeader {
+                  width: parent.width
+                  text: "ITEMS"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                Text {
+                  visible: root.workspaceItems.length === 0
+                  width: parent.width
+                  text: "Empty workspace · add a shell or Agent"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  horizontalAlignment: Text.AlignHCenter
+                  topPadding: Style.space(10)
+                  bottomPadding: Style.space(10)
+                }
+
+                Repeater {
+                  model: root.workspaceItems
+                  delegate: Rectangle {
+                    required property var modelData
+                    width: detailColumn.width
+                    height: Style.space(54)
                     radius: Style.cornerRadius
-                    color: workspaceCard.expanded
-                      ? Style.selectedFillFor(root.foreground, Color.accent)
-                      : (workspaceMouse.containsMouse
-                        ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-                        : "transparent")
-
-                    Column {
+                    color: itemMouse.containsMouse
+                      ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                      : "transparent"
+                    Text {
+                      id: kindGlyph
                       anchors.left: parent.left
-                      anchors.leftMargin: Style.space(10)
-                      anchors.right: expandGlyph.left
-                      anchors.rightMargin: Style.space(8)
+                      anchors.leftMargin: Style.space(9)
                       anchors.verticalCenter: parent.verticalCenter
-                      spacing: Style.space(2)
+                      text: modelData.kind === "agent" ? "●"
+                        : (modelData.kind === "command" ? ">" : (modelData.kind === "launcher" ? "↗" : "○"))
+                      color: modelData.status === "blocked" ? root.urgent
+                        : (modelData.status === "working" || modelData.status === "running" ? Color.accent : root.dim)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    Column {
+                      anchors.left: kindGlyph.right
+                      anchors.leftMargin: Style.space(10)
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(9)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(1)
                       Text {
                         width: parent.width
-                        text: String(workspaceCard.modelData.name)
+                        text: String(modelData.name) + "  ·  " + String(modelData.kind)
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.body
-                        font.bold: workspaceCard.expanded
                         elide: Text.ElideRight
                       }
                       Text {
                         width: parent.width
-                        text: workspaceCard.modelData.shell_count + " items · "
-                          + workspaceCard.modelData.agent_count + " agents"
-                        color: workspaceCard.modelData.attention_count > 0 ? root.urgent : root.dim
+                        text: String(modelData.status) + (modelData.detail ? " · " + String(modelData.detail) : "")
+                        color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
+                        elide: Text.ElideMiddle
                       }
                     }
-
-                    Text {
-                      id: expandGlyph
-                      anchors.right: parent.right
-                      anchors.rightMargin: Style.space(10)
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: workspaceCard.expanded ? "⌃" : "⌄"
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                    }
-
                     MouseArea {
-                      id: workspaceMouse
+                      id: itemMouse
                       anchors.fill: parent
                       hoverEnabled: true
-                      onEntered: root.selectedIndex = workspaceCard.index
-                      onClicked: root.selectWorkspace(workspaceCard.modelData.id)
-                      onDoubleClicked: root.openWorkspace(workspaceCard.modelData)
-                    }
-                  }
-
-                  Row {
-                    visible: workspaceCard.expanded
-                    width: parent.width
-                    spacing: Style.space(5)
-                    Button {
-                      width: (parent.width - parent.spacing * 2) / 3
-                      text: "Open"
-                      iconText: ""
-                      tooltipText: "Open this workspace"
-                      bordered: true
-                      foreground: root.foreground
-                      fontSize: Style.font.caption
-                      iconSize: Style.font.body
-                      onClicked: root.openWorkspace(workspaceCard.modelData)
-                    }
-                    Button {
-                      width: (parent.width - parent.spacing * 2) / 3
-                      text: "Shell"
-                      iconText: "+"
-                      tooltipText: "Add shell to this workspace"
-                      bordered: true
-                      foreground: root.foreground
-                      fontSize: Style.font.caption
-                      iconSize: Style.font.body
-                      onClicked: root.showForm("shell")
-                    }
-                    Button {
-                      width: (parent.width - parent.spacing * 2) / 3
-                      text: "Agent"
-                      iconText: "+"
-                      tooltipText: "Start Agent in this workspace"
-                      bordered: true
-                      foreground: root.foreground
-                      fontSize: Style.font.caption
-                      iconSize: Style.font.body
-                      onClicked: root.showForm("agent")
-                    }
-                  }
-
-                  PanelSectionHeader {
-                    visible: workspaceCard.expanded
-                    width: parent.width
-                    text: "ITEMS"
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                  }
-
-                  Text {
-                    visible: workspaceCard.expanded && root.workspaceItems.length === 0
-                    width: parent.width
-                    text: "Empty workspace · add a shell or Agent"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    horizontalAlignment: Text.AlignHCenter
-                    topPadding: Style.space(12)
-                    bottomPadding: Style.space(12)
-                  }
-
-                  Repeater {
-                    model: workspaceCard.expanded ? root.workspaceItems : []
-                    delegate: Rectangle {
-                      required property var modelData
-                      width: workspaceCard.width
-                      height: Style.space(54)
-                      radius: Style.cornerRadius
-                      color: itemMouse.containsMouse
-                        ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-                        : "transparent"
-                      Text {
-                        id: kindGlyph
-                        anchors.left: parent.left
-                        anchors.leftMargin: Style.space(9)
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.kind === "agent" ? "●"
-                          : (modelData.kind === "command" ? ">" : (modelData.kind === "launcher" ? "↗" : "○"))
-                        color: modelData.status === "blocked" ? root.urgent
-                          : (modelData.status === "working" || modelData.status === "running" ? Color.accent : root.dim)
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.body
-                      }
-                      Column {
-                        anchors.left: kindGlyph.right
-                        anchors.leftMargin: Style.space(10)
-                        anchors.right: parent.right
-                        anchors.rightMargin: Style.space(9)
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Style.space(1)
-                        Text {
-                          width: parent.width
-                          text: String(modelData.name) + "  ·  " + String(modelData.kind)
-                          color: root.foreground
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.body
-                          elide: Text.ElideRight
-                        }
-                        Text {
-                          width: parent.width
-                          text: String(modelData.status) + (modelData.detail ? " · " + String(modelData.detail) : "")
-                          color: root.dim
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
-                          elide: Text.ElideMiddle
-                        }
-                      }
-                      MouseArea {
-                        id: itemMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: root.openWorkspaceItem(modelData)
-                      }
+                      onClicked: root.openWorkspaceItem(modelData)
                     }
                   }
                 }
