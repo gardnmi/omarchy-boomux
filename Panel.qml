@@ -20,6 +20,9 @@ Panel {
   property bool online: false
   property bool refreshing: false
   property int refreshPending: 0
+  property bool agentBaselineReady: false
+  property var previousAgentStates: ({})
+  property var completedAgents: ({})
   property string error: ""
   property int selectedIndex: 0
 
@@ -42,6 +45,7 @@ Panel {
   readonly property int workingCount: visibleAgents.filter(function(agent) {
     return agent.observation && agent.observation.state === "working"
   }).length
+  readonly property int completedCount: Object.keys(completedAgents).length
 
   visible: true
   implicitWidth: button.implicitWidth
@@ -80,7 +84,24 @@ Panel {
       if (response.schema !== "boomux.cli/v1" || !response.data || !Array.isArray(response.data.agents))
         throw new Error("unexpected Boomux Agent response")
 
-      agents = response.data.agents
+      var nextAgents = response.data.agents
+      var nextStates = ({})
+      var nextCompleted = ({})
+      for (var completedId in completedAgents) nextCompleted[completedId] = true
+
+      for (var i = 0; i < nextAgents.length; i++) {
+        var agent = nextAgents[i]
+        var state = agent.observation ? agent.observation.state : "unknown"
+        nextStates[agent.id] = state
+        if (agentBaselineReady && !opened && previousAgentStates[agent.id] === "working" && state === "idle")
+          nextCompleted[agent.id] = true
+        if (state === "working" || state === "blocked") delete nextCompleted[agent.id]
+      }
+
+      previousAgentStates = nextStates
+      completedAgents = nextCompleted
+      agentBaselineReady = true
+      agents = nextAgents
       clampSelection()
     } catch (exception) {
       agents = []
@@ -116,7 +137,25 @@ Panel {
     close()
   }
 
+  function agentDisplayName(agent) {
+    if (!agent) return "Agent"
+    for (var i = 0; i < shells.length; i++)
+      if (shells[i].id === agent.shell_id) return shells[i].name
+    return agent.name
+  }
+
+  function clearCompletedAgents() {
+    completedAgents = ({})
+  }
+
+  function openDashboard() {
+    if (!bar) return
+    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux boomux")
+    close()
+  }
+
   onOpenedChanged: if (opened) {
+    clearCompletedAgents()
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -180,27 +219,30 @@ Panel {
 
         BoomuxIcon {
           anchors.fill: parent
-          color: root.blockedCount > 0 ? root.urgent : root.foreground
+          color: root.blockedCount > 0 ? root.urgent
+            : (root.completedCount > 0 ? Color.accent : root.foreground)
         }
 
         Text {
-          visible: root.blockedCount > 0
+          visible: root.blockedCount > 0 || root.completedCount > 0
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          text: String(root.blockedCount)
-          color: root.urgent
+          text: String(root.blockedCount > 0 ? root.blockedCount : root.completedCount)
+          color: root.blockedCount > 0 ? root.urgent : Color.accent
           font.family: root.fontFamily
           font.pixelSize: Math.max(7, Math.round(parent.height * 0.42))
           font.bold: true
         }
       }
     }
-    active: root.blockedCount > 0
+    active: root.blockedCount > 0 || root.completedCount > 0
     tooltipText: root.online
       ? (root.blockedCount > 0
           ? root.blockedCount + " Boomux agent" + (root.blockedCount === 1 ? "" : "s") + " blocked"
-          : root.visibleAgents.length + " agent" + (root.visibleAgents.length === 1 ? "" : "s")
-            + " · " + root.terminalShells.length + " terminal" + (root.terminalShells.length === 1 ? "" : "s"))
+          : (root.completedCount > 0
+              ? root.completedCount + " Boomux agent" + (root.completedCount === 1 ? "" : "s") + " finished"
+              : root.visibleAgents.length + " agent" + (root.visibleAgents.length === 1 ? "" : "s")
+                + " · " + root.terminalShells.length + " terminal" + (root.terminalShells.length === 1 ? "" : "s")))
       : "Boomux unavailable"
 
     onPressed: function(buttonCode) {
@@ -233,23 +275,50 @@ Panel {
         width: parent.width
         spacing: Style.space(12)
 
-        PanelHero {
+        Item {
+          id: heroHeader
           width: parent.width
-          title: "Boomux"
-          meta: root.blockedCount > 0 ? "NEEDS ATTENTION" : (root.online ? "WORKSPACES" : "UNAVAILABLE")
-          detail: root.online
-            ? (root.blockedCount > 0
-                ? root.blockedCount + " blocked · " + root.workingCount + " working"
-                : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals")
-            : "boomux was not found"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
+          implicitHeight: hero.implicitHeight
 
-          iconComponent: Component {
-            BoomuxIcon {
-              width: Style.font.display
-              height: Style.font.display
-              color: root.blockedCount > 0 ? root.urgent : root.foreground
+          PanelHero {
+            id: hero
+            width: parent.width
+            title: "Boomux"
+            meta: root.blockedCount > 0 ? "NEEDS ATTENTION"
+              : (root.completedCount > 0 ? "AGENT FINISHED" : (root.online ? "WORKSPACES" : "UNAVAILABLE"))
+            detail: root.online
+              ? (root.blockedCount > 0
+                  ? root.blockedCount + " blocked · " + root.workingCount + " working"
+                  : (root.completedCount > 0
+                      ? root.completedCount + " finished · " + root.workingCount + " working"
+                      : root.visibleAgents.length + " agents · " + root.terminalShells.length + " terminals"))
+              : "boomux was not found"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+
+            iconComponent: Component {
+              BoomuxIcon {
+                width: Style.font.display
+                height: Style.font.display
+                color: root.blockedCount > 0 ? root.urgent
+                  : (root.completedCount > 0 ? Color.accent : root.foreground)
+              }
+            }
+
+            trailingControl: Component {
+              Button {
+                text: "Open TUI"
+                iconText: ""
+                tooltipText: "Open the Boomux dashboard"
+                bordered: true
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                fontSize: Style.font.caption
+                iconSize: Style.font.body
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(4)
+                onClicked: root.openDashboard()
+              }
             }
           }
         }
@@ -285,6 +354,7 @@ Panel {
 
             readonly property string state: modelData.observation ? modelData.observation.state : "unknown"
             readonly property bool needsAttention: modelData.attention && modelData.attention.reason === "blocked"
+            readonly property bool justCompleted: !!root.completedAgents[modelData.id]
 
             width: ListView.view.width
             height: Style.space(64)
@@ -300,9 +370,10 @@ Panel {
               anchors.left: parent.left
               anchors.leftMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
-              text: agentRow.needsAttention ? "!" : (agentRow.state === "working" ? "●" : "○")
+              text: agentRow.needsAttention ? "!"
+                : (agentRow.justCompleted ? "✓" : (agentRow.state === "working" ? "●" : "○"))
               color: agentRow.needsAttention ? root.urgent
-                : (agentRow.state === "working" ? Color.accent : root.dim)
+                : ((agentRow.justCompleted || agentRow.state === "working") ? Color.accent : root.dim)
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               font.bold: agentRow.needsAttention
@@ -318,7 +389,7 @@ Panel {
 
               Text {
                 width: parent.width
-                text: String(agentRow.modelData.workspace_name) + " / " + String(agentRow.modelData.name)
+                text: String(agentRow.modelData.workspace_name) + " / " + root.agentDisplayName(agentRow.modelData)
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -328,7 +399,8 @@ Panel {
 
               Text {
                 width: parent.width
-                text: agentRow.state + (agentRow.needsAttention ? " · needs attention" : "")
+                text: (agentRow.justCompleted ? "finished" : agentRow.state)
+                  + (agentRow.needsAttention ? " · needs attention" : "")
                   + (agentRow.modelData.observation && agentRow.modelData.observation.evidence
                   ? " · " + String(agentRow.modelData.observation.evidence)
                   : "")
@@ -470,34 +542,37 @@ Panel {
         var context = getContext("2d")
         var size = Math.min(width, height)
         context.clearRect(0, 0, width, height)
-        context.fillStyle = parent.color
         context.strokeStyle = parent.color
         context.lineCap = "round"
+        context.lineJoin = "round"
 
+        context.lineWidth = size * 0.1
         context.beginPath()
-        context.arc(width * 0.42, height * 0.61, size * 0.29, 0, Math.PI * 2)
-        context.fill()
+        context.arc(width * 0.4, height * 0.61, size * 0.3, 0, Math.PI * 2)
+        context.stroke()
 
-        context.lineWidth = size * 0.12
+        context.lineWidth = size * 0.1
         context.beginPath()
         context.moveTo(width * 0.59, height * 0.39)
-        context.lineTo(width * 0.69, height * 0.29)
+        context.lineTo(width * 0.67, height * 0.31)
+        context.lineTo(width * 0.72, height * 0.36)
+        context.lineTo(width * 0.78, height * 0.29)
         context.stroke()
 
         context.lineWidth = size * 0.08
         context.beginPath()
-        context.moveTo(width * 0.7, height * 0.28)
-        context.bezierCurveTo(width * 0.8, height * 0.16, width * 0.86, height * 0.28, width * 0.91, height * 0.17)
+        context.moveTo(width * 0.4, height * 0.78)
+        context.bezierCurveTo(width * 0.5, height * 0.77, width * 0.58, height * 0.71, width * 0.62, height * 0.64)
         context.stroke()
 
-        context.lineWidth = size * 0.06
+        context.lineWidth = size * 0.08
         context.beginPath()
-        context.moveTo(width * 0.91, height * 0.09)
-        context.lineTo(width * 0.91, height * 0.01)
-        context.moveTo(width * 0.96, height * 0.13)
-        context.lineTo(width, height * 0.09)
-        context.moveTo(width * 0.86, height * 0.13)
-        context.lineTo(width * 0.82, height * 0.09)
+        context.moveTo(width * 0.8, height * 0.2)
+        context.lineTo(width * 0.8, height * 0.09)
+        context.moveTo(width * 0.87, height * 0.25)
+        context.lineTo(width * 0.97, height * 0.22)
+        context.moveTo(width * 0.75, height * 0.22)
+        context.lineTo(width * 0.7, height * 0.13)
         context.stroke()
       }
 
