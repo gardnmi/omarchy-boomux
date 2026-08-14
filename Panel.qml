@@ -47,7 +47,8 @@ Panel {
 
   readonly property var visibleAgents: agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
-    return (state !== "inactive" && state !== "done") || attentionRevision(agent) > 0
+    return (agentIsCurrent(agent) && state !== "inactive" && state !== "done")
+      || attentionRevision(agent) > 0
   })
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
@@ -362,6 +363,16 @@ Panel {
     if (!agent || !agent.shell_id) return false
     for (var i = 0; i < shells.length; i++)
       if (shells[i].id === agent.shell_id) return true
+    return false
+  }
+
+  function agentIsCurrent(agent) {
+    if (!agent || !agent.shell_id || !agent.run_id) return false
+    for (var i = 0; i < shells.length; i++) {
+      var shell = shells[i]
+      if (shell.id === agent.shell_id && shell.run && shell.run.id === agent.run_id)
+        return true
+    }
     return false
   }
 
