@@ -100,7 +100,8 @@ finished work uses the accent color. The spark turns yellow while either alert
 is active. Use the Agent row's **Dismiss** button or press `D` to clear a local
 finished marker and acknowledge durable attention without opening the terminal.
 Durable attention is acknowledged with the exact Agent ID and observation
-revision; failed acknowledgements remain visible.
+revision. Blocked attention is also acknowledged when that Agent reports it is
+working again. Failed acknowledgements remain visible for manual dismissal.
 
 ## Update
 
@@ -127,10 +128,11 @@ and data.
   second and inspects the selected workspace.
 - It makes no network requests and does not read or store credentials.
 - It does not modify Boomux or Omarchy configuration directly.
-- After an Agent terminal opens successfully or its notification is explicitly
-  dismissed, the plugin can run the local, revision-conditional
-  `boomux attention acknowledge` command. Attention for an Agent whose shell was
-  removed can also be dismissed directly from its row.
+- After an Agent terminal opens successfully, its notification is explicitly
+  dismissed, or a blocked Agent reports `working` again, the plugin can run the
+  local, revision-conditional `boomux attention acknowledge` command. Attention
+  for an Agent whose shell was removed can also be dismissed directly from its
+  row.
 - Opening the dashboard or a managed shell launches a native terminal process.
 - Workspace actions can create or open workspaces, create shells, and invoke
   existing launchers. Workspace restore can run commands, open native
