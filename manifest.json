@@ -4,7 +4,7 @@
   "name": "Boomux",
   "version": "0.8.0",
   "author": "Mike Gardner",
-  "license": "MIT",
+  "license": "MIT AND CC-BY-4.0",
   "description": "Monitor Agents and manage Boomux workspaces from the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",

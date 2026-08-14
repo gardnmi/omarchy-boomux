@@ -26,7 +26,7 @@ the Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.13.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.14.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
@@ -39,6 +39,9 @@ boomux integration setup opencode
 # or
 boomux integration setup pi
 ```
+
+The plugin does not automatically start a stopped Boomux daemon. Launch Boomux
+or open a managed workspace before using the panel.
 
 Follow the setup command's restart and verification guidance. See the
 [Boomux installation instructions](https://github.com/gardnmi/boomux#install)
@@ -68,16 +71,22 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Right click | Refresh immediately |
 | Tab or `1` / `2` | Switch between Agents and Workspaces |
 | Up / Down | Select an Agent or workspace |
-| Enter | Open the selected item in its native terminal |
+| Enter | Open a selected Agent or load the selected workspace details |
 | `N` | Create a workspace |
 | `R` | Refresh immediately |
 | Escape | Close the panel |
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. In the Workspaces tab, select a workspace to inspect its items. The
-action bar can open that workspace, create another workspace, add a login shell,
-or start an OpenCode or Pi Agent shell. Clicking a shell, command, or Agent opens
-its managed terminal; clicking a launcher invokes that detached command.
+window. **New Workspace** is a global action. Selecting a workspace shows its
+directory, items, and scoped **Open**, **Shell**, and **Agent** actions below the
+workspace list. Clicking a shell, command, or Agent opens its managed terminal;
+clicking a launcher invokes that detached command.
+
+Opening a complete workspace requires confirmation because Boomux invokes its
+launchers, takes over active terminal controllers, and restarts exited shells.
+Workspace restore is non-transactional, so some items can open even if another
+item fails. Opening an individual exited shell or command restarts its stored
+process.
 
 Agent creation records and opens a command-backed shell whose exact command is
 `opencode` or `pi`. The installed lifecycle integration creates the authoritative
@@ -94,8 +103,9 @@ with the exact Agent ID and observation revision when that Agent is opened.
 
 ```bash
 omarchy plugin update io.github.gardnmi.boomux
-omarchy restart shell
 ```
+
+Omarchy rescans plugins after an update; a shell restart is not normally needed.
 
 ## Remove
 
@@ -109,16 +119,19 @@ and data.
 
 ## Data And Privacy
 
-- The plugin runs local `boomux list --json` and `boomux agent list --json`
-  commands once per second, along with workspace list and inspect commands.
+- The plugin checks local daemon status once per second without starting it. If
+  Boomux is already running, it polls Agent, shell, and workspace state once per
+  second and inspects the selected workspace.
 - It makes no network requests and does not read or store credentials.
 - It does not modify Boomux or Omarchy configuration directly.
-- Opening an Agent can run the local, revision-conditional
-  `boomux attention acknowledge` command before opening its terminal.
+- After an Agent terminal opens successfully, the plugin can run the local,
+  revision-conditional `boomux attention acknowledge` command. Attention for an
+  Agent whose shell was removed can be acknowledged directly from its row.
 - Opening the dashboard or a managed shell launches a native terminal process.
 - Workspace actions can create or open workspaces, create shells, and invoke
-  existing launchers. Opening a workspace runs all of its launchers and opens
-  all of its shells using Boomux's normal restore behavior.
+  existing launchers. Confirmed workspace restore can run commands, open native
+  terminals, disconnect existing writable terminal controllers, and restart
+  exited shells.
 
 ## Troubleshooting
 
@@ -145,10 +158,11 @@ Restart the coding-agent host after installing or updating its integration.
 
 ### The panel looks stale
 
-Right-click the bomb or press `R`. If plugin code was just updated, run:
+Right-click the bomb or press `R`. If plugin code was just updated but did not
+reload, request a plugin rescan:
 
 ```bash
-omarchy restart shell
+omarchy-shell shell rescanPlugins
 ```
 
 ## Development
