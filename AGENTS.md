@@ -57,9 +57,6 @@ plugin must never fabricate an Agent registration or lifecycle observation.
 
 - Check `boomux daemon status --json` before daemon-backed polling. A stopped
   daemon must remain stopped; the widget must not resurrect it.
-- `boomux workspace open` requires confirmation. Its message must disclose that
-  launchers run, active terminal controllers are taken over, exited shells are
-  restarted, and partial success is possible.
 - Opening an exited shell or command starts a new run. Preserve clear status in
   the item row and document this behavior.
 - Acknowledge Agent attention only after `boomux open` succeeds.

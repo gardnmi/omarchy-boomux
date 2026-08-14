@@ -34,7 +34,6 @@ Panel {
   property var acknowledgeQueue: []
   property var activeAcknowledgement: null
   property var pendingOpenAgent: null
-  property var workspaceToOpen: null
   property string inspectRequestedId: ""
   property string inspectActiveId: ""
   property string error: ""
@@ -97,7 +96,6 @@ Panel {
     agents = []
     workspaceDetail = null
     selectedWorkspaceId = ""
-    workspaceToOpen = null
     previousAgentStates = ({})
     completedAgents = ({})
     agentBaselineReady = false
@@ -323,14 +321,6 @@ Panel {
 
   function openWorkspace(workspace) {
     if (!workspace || actionProcess.running) return
-    openWorkspaceDialog.selectedIndex = 1
-    workspaceToOpen = workspace
-  }
-
-  function confirmOpenWorkspace() {
-    var workspace = workspaceToOpen
-    workspaceToOpen = null
-    if (!workspace || actionProcess.running) return
     pendingAction = "open-workspace"
     actionMessage = "Opening " + String(workspace.name) + "..."
     actionProcess.command = ["boomux", "workspace", "open", String(workspace.id)]
@@ -514,7 +504,6 @@ Panel {
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   } else {
-    workspaceToOpen = null
     cancelForm()
   }
 
@@ -677,28 +666,14 @@ Panel {
       anchors.fill: parent
       blocked: root.editing
       onMoveRequested: function(dx, dy) {
-        if (root.workspaceToOpen && (dx !== 0 || dy !== 0))
-          openWorkspaceDialog.selectedIndex = openWorkspaceDialog.selectedIndex === 0 ? 1 : 0
-        else if (dy !== 0) root.moveSelection(dy)
+        if (dy !== 0) root.moveSelection(dy)
       }
-      onActivateRequested: {
-        if (root.workspaceToOpen) {
-          if (openWorkspaceDialog.selectedIndex === 0) root.workspaceToOpen = null
-          else root.confirmOpenWorkspace()
-        }
-        else root.activateSelected()
-      }
-      onCloseRequested: {
-        if (root.workspaceToOpen) root.workspaceToOpen = null
-        else root.close()
-      }
+      onActivateRequested: root.activateSelected()
+      onCloseRequested: root.close()
       onTabRequested: function(direction) {
-        if (root.workspaceToOpen)
-          openWorkspaceDialog.selectedIndex = openWorkspaceDialog.selectedIndex === 0 ? 1 : 0
-        else root.selectTab(root.activeTab === "agents" ? "workspaces" : "agents")
+        root.selectTab(root.activeTab === "agents" ? "workspaces" : "agents")
       }
       onTextKey: function(text) {
-        if (root.workspaceToOpen) return
         if (text === "r" || text === "R") root.refresh()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
@@ -1175,20 +1150,6 @@ Panel {
           horizontalAlignment: Text.AlignHCenter
           wrapMode: Text.Wrap
         }
-      }
-
-      ConfirmDialog {
-        id: openWorkspaceDialog
-        anchors.fill: parent
-        z: 10
-        opened: root.workspaceToOpen !== null
-        message: root.workspaceToOpen
-          ? "Open " + String(root.workspaceToOpen.name)
-            + "? This runs its launchers, takes over active terminal controllers, and restarts exited shells. Some items may still open if another fails."
-          : ""
-        confirmText: "Open"
-        onCanceled: root.workspaceToOpen = null
-        onConfirmed: root.confirmOpenWorkspace()
       }
     }
   }
