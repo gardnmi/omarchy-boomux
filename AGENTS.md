@@ -59,7 +59,8 @@ plugin must never fabricate an Agent registration or lifecycle observation.
   daemon must remain stopped; the widget must not resurrect it.
 - Opening an exited shell or command starts a new run. Preserve clear status in
   the item row and document this behavior.
-- Acknowledge Agent attention only after `boomux open` succeeds.
+- Acknowledge Agent attention only after `boomux open` succeeds or the user
+  explicitly dismisses its notification.
 - Queue acknowledgements and use the exact Agent ID plus attention observation
   revision. Do not optimistically hide durable attention before CLI success.
 - Durable attention is authoritative even when the current Agent state has
