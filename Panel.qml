@@ -331,7 +331,7 @@ Panel {
     if (!shell || !shell.id || openProcess.running) return
     pendingOpenAgent = agent || null
     actionMessage = "Opening terminal..."
-    openProcess.command = ["boomux", "open", String(shell.id)]
+    openProcess.command = ["boomux", "open", String(shell.id), "--takeover"]
     openProcess.running = true
   }
 

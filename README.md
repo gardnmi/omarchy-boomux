@@ -81,7 +81,9 @@ The **Open TUI** button launches the Boomux dashboard in a new native terminal
 window. **New Workspace** is a global action. Selecting a workspace shows its
 directory, items, and scoped **Open**, **Shell**, and **Agent** actions below the
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;
-clicking a launcher invokes that detached command.
+clicking a launcher invokes that detached command. Opening a managed terminal
+takes over its writable controller so the new window receives the authoritative
+terminal size and input stream.
 
 Opening a complete workspace starts immediately. Boomux invokes its launchers,
 takes over active terminal controllers, and restarts exited shells. Workspace
