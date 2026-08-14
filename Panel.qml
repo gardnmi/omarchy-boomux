@@ -322,6 +322,7 @@ Panel {
 
   function openWorkspace(workspace) {
     if (!workspace || actionProcess.running) return
+    openWorkspaceDialog.selectedIndex = 1
     workspaceToOpen = workspace
   }
 
@@ -665,7 +666,9 @@ Panel {
       anchors.fill: parent
       blocked: root.editing
       onMoveRequested: function(dx, dy) {
-        if (!root.workspaceToOpen && dy !== 0) root.moveSelection(dy)
+        if (root.workspaceToOpen && (dx !== 0 || dy !== 0))
+          openWorkspaceDialog.selectedIndex = openWorkspaceDialog.selectedIndex === 0 ? 1 : 0
+        else if (dy !== 0) root.moveSelection(dy)
       }
       onActivateRequested: {
         if (root.workspaceToOpen) {
