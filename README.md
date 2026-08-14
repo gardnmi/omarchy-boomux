@@ -72,6 +72,7 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Tab or `1` / `2` | Switch between Agents and Workspaces |
 | Up / Down | Select an Agent or workspace |
 | Enter | Open a selected Agent or load the selected workspace details |
+| `D` | Dismiss the selected Agent notification |
 | `N` | Create a workspace |
 | `R` | Refresh immediately |
 | Escape | Close the panel |
@@ -94,9 +95,10 @@ Agent lifecycle state.
 
 The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert
-is active. Finished markers are local to this widget and clear when you open the
-corresponding Agent. Durable blocked attention is conditionally acknowledged
-with the exact Agent ID and observation revision when that Agent is opened.
+is active. Use the Agent row's **Dismiss** button or press `D` to clear a local
+finished marker and acknowledge durable attention without opening the terminal.
+Durable attention is acknowledged with the exact Agent ID and observation
+revision; failed acknowledgements remain visible.
 
 ## Update
 
@@ -123,12 +125,13 @@ and data.
   second and inspects the selected workspace.
 - It makes no network requests and does not read or store credentials.
 - It does not modify Boomux or Omarchy configuration directly.
-- After an Agent terminal opens successfully, the plugin can run the local,
-  revision-conditional `boomux attention acknowledge` command. Attention for an
-  Agent whose shell was removed can be acknowledged directly from its row.
+- After an Agent terminal opens successfully or its notification is explicitly
+  dismissed, the plugin can run the local, revision-conditional
+  `boomux attention acknowledge` command. Attention for an Agent whose shell was
+  removed can also be dismissed directly from its row.
 - Opening the dashboard or a managed shell launches a native terminal process.
 - Workspace actions can create or open workspaces, create shells, and invoke
-  existing launchers. Confirmed workspace restore can run commands, open native
+  existing launchers. Workspace restore can run commands, open native
   terminals, disconnect existing writable terminal controllers, and restart
   exited shells.
 

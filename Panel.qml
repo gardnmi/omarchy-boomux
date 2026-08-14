@@ -46,7 +46,7 @@ Panel {
 
   readonly property var visibleAgents: agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
-    return (agentIsCurrent(agent) && state !== "inactive" && state !== "done")
+    return (agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
       || attentionRevision(agent) > 0
   })
   readonly property var selectedWorkspace: {
@@ -281,7 +281,7 @@ Panel {
       var agent = workspaceDetail.agents[i]
       var state = agent.observation ? agent.observation.state : "unknown"
       if (agent.shell_id === shell.id && agent.run_id === (shell.run ? shell.run.id : "")
-          && state !== "inactive" && state !== "done") return agent
+          && state !== "inactive" && state !== "done" && agentIsProjectedCurrent(agent)) return agent
     }
     return null
   }
@@ -366,6 +366,26 @@ Panel {
     return false
   }
 
+  function agentIsProjectedCurrent(agent) {
+    if (!agentIsCurrent(agent)) return false
+    var observedAt = agent.observation ? Number(agent.observation.observed_at_ms || 0) : 0
+    var startedAt = Number(agent.started_at_ms || 0)
+    for (var i = 0; i < agents.length; i++) {
+      var candidate = agents[i]
+      var state = candidate.observation ? candidate.observation.state : "unknown"
+      if (candidate.id === agent.id || candidate.shell_id !== agent.shell_id
+          || candidate.run_id !== agent.run_id || state === "inactive" || state === "done") continue
+      var candidateObservedAt = candidate.observation
+        ? Number(candidate.observation.observed_at_ms || 0) : 0
+      var candidateStartedAt = Number(candidate.started_at_ms || 0)
+      if (candidateObservedAt > observedAt
+          || (candidateObservedAt === observedAt && candidateStartedAt > startedAt)
+          || (candidateObservedAt === observedAt && candidateStartedAt === startedAt
+            && String(candidate.id) > String(agent.id))) return false
+    }
+    return true
+  }
+
   function openWorkspaceItem(item) {
     if (!item) return
     if (item.kind === "launcher") {
@@ -405,15 +425,26 @@ Panel {
     return attentionRevision(agent) > 0 && attentionReason(agent) === "blocked"
   }
 
-  function acknowledgeAgent(agent) {
+  function acknowledgeAgent(agent, dismissed) {
     var revision = attentionRevision(agent)
     if (revision <= 0) return
     var queue = acknowledgeQueue.slice()
     for (var i = 0; i < queue.length; i++)
       if (queue[i].agentId === String(agent.id) && queue[i].revision === revision) return
-    queue.push({ agentId: String(agent.id), revision: revision })
+    queue.push({ agentId: String(agent.id), revision: revision, dismissed: !!dismissed })
     acknowledgeQueue = queue
     startNextAcknowledgement()
+  }
+
+  function dismissAgent(agent) {
+    if (!agent || (!completedAgents[agent.id] && attentionRevision(agent) <= 0)) return
+    clearCompletedAgent(agent.id)
+    if (attentionRevision(agent) > 0) {
+      actionMessage = "Dismissing Agent notification..."
+      acknowledgeAgent(agent, true)
+    } else {
+      actionMessage = "Agent notification dismissed"
+    }
   }
 
   function startNextAcknowledgement() {
@@ -427,10 +458,12 @@ Panel {
 
   function countCompletedAgents() {
     var completed = ({})
-    for (var id in completedAgents) completed[id] = true
-    for (var i = 0; i < agents.length; i++)
+    for (var i = 0; i < agents.length; i++) {
+      if (completedAgents[agents[i].id] && agentIsProjectedCurrent(agents[i]))
+        completed[agents[i].id] = true
       if (attentionReason(agents[i]) === "completed" && attentionRevision(agents[i]) > 0)
         completed[agents[i].id] = true
+    }
     return Object.keys(completed).length
   }
 
@@ -596,9 +629,15 @@ Panel {
 
   Process {
     id: acknowledgeProcess
+    stdout: StdioCollector { id: acknowledgeStdout; waitForEnd: true }
+    stderr: StdioCollector { id: acknowledgeStderr; waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode !== 0) root.actionMessage = "Could not acknowledge Agent attention"
-      else if (root.opened) root.actionMessage = "Agent attention acknowledged"
+      var dismissed = root.activeAcknowledgement && root.activeAcknowledgement.dismissed
+      if (exitCode !== 0)
+        root.actionMessage = root.processError(acknowledgeStderr.text || acknowledgeStdout.text,
+          dismissed ? "Could not dismiss Agent notification" : "Could not acknowledge Agent attention")
+      else if (root.opened)
+        root.actionMessage = dismissed ? "Agent notification dismissed" : "Agent attention acknowledged"
       var queue = root.acknowledgeQueue.slice()
       if (queue.length > 0) queue.shift()
       root.acknowledgeQueue = queue
@@ -678,6 +717,8 @@ Panel {
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
         else if (text === "n" || text === "N") root.showForm("workspace")
+        else if ((text === "d" || text === "D") && root.activeTab === "agents")
+          root.dismissAgent(root.selectedItem)
       }
 
       Column {
@@ -864,12 +905,13 @@ Panel {
                 selected: index === root.selectedIndex
                 onHovered: root.selectedIndex = index
                 onActivated: root.openAgent(modelData)
+                onDismissed: root.dismissAgent(modelData)
               }
             }
             Text {
               visible: root.visibleAgents.length > 0
               width: parent.width
-              text: "Enter opens · Tab switches · R refreshes"
+              text: "Enter opens · D dismisses · Tab switches · R refreshes"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1160,10 +1202,13 @@ Panel {
     property bool selected: false
     signal hovered
     signal activated
+    signal dismissed
     readonly property string state: agent && agent.observation ? agent.observation.state : "unknown"
     readonly property bool needsAttention: root.agentNeedsAttention(agent)
     readonly property bool justCompleted: agent
       ? !!root.completedAgents[agent.id] || root.attentionReason(agent) === "completed" : false
+    readonly property bool dismissible: agent
+      ? !!root.completedAgents[agent.id] || root.attentionRevision(agent) > 0 : false
 
     height: Style.space(66)
     radius: Style.cornerRadius
@@ -1185,7 +1230,7 @@ Panel {
       anchors.left: agentGlyph.right
       anchors.leftMargin: Style.space(12)
       anchors.right: parent.right
-      anchors.rightMargin: Style.space(10)
+      anchors.rightMargin: agentRow.dismissible ? Style.space(86) : Style.space(10)
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.space(2)
       Text {
@@ -1203,7 +1248,7 @@ Panel {
           + (agentRow.needsAttention ? " · needs attention" : "")
           + (agent && !root.agentShellRetained(agent)
             ? (root.attentionRevision(agent) > 0
-              ? " · shell removed · click to acknowledge" : " · shell removed") : "")
+              ? " · shell removed · dismiss notification" : " · shell removed") : "")
           + (agent && agent.integration ? " · " + String(agent.integration) : "")
           + (agent && agent.observation && agent.observation.evidence ? " · " + String(agent.observation.evidence) : "")
         color: agentRow.needsAttention ? root.urgent : root.dim
@@ -1218,6 +1263,21 @@ Panel {
       hoverEnabled: true
       onEntered: agentRow.hovered()
       onClicked: agentRow.activated()
+    }
+    Button {
+      visible: agentRow.dismissible
+      z: 1
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(8)
+      anchors.verticalCenter: parent.verticalCenter
+      text: "Dismiss"
+      tooltipText: "Dismiss Agent notification"
+      bordered: true
+      foreground: root.foreground
+      fontSize: Style.font.caption
+      horizontalPadding: Style.space(6)
+      verticalPadding: Style.space(2)
+      onClicked: agentRow.dismissed()
     }
   }
 
