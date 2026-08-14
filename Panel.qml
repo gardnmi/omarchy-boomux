@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -15,6 +16,7 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property string home: Quickshell.env("HOME") || ""
 
   property var workspaces: []
   property var shells: []
@@ -29,7 +31,12 @@ Panel {
   property bool agentBaselineReady: false
   property var previousAgentStates: ({})
   property var completedAgents: ({})
-  property var dismissedAttention: ({})
+  property var acknowledgeQueue: []
+  property var activeAcknowledgement: null
+  property var pendingOpenAgent: null
+  property var workspaceToOpen: null
+  property string inspectRequestedId: ""
+  property string inspectActiveId: ""
   property string error: ""
   property string actionMessage: ""
   property string formMode: ""
@@ -40,7 +47,7 @@ Panel {
 
   readonly property var visibleAgents: agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
-    return state !== "inactive" && state !== "done"
+    return (state !== "inactive" && state !== "done") || attentionRevision(agent) > 0
   })
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
@@ -59,7 +66,7 @@ Panel {
   readonly property int workingCount: visibleAgents.filter(function(agent) {
     return agent.observation && agent.observation.state === "working"
   }).length
-  readonly property int completedCount: Object.keys(completedAgents).length
+  readonly property int completedCount: countCompletedAgents()
   readonly property bool editing: formMode !== ""
 
   visible: true
@@ -67,6 +74,11 @@ Panel {
   implicitHeight: button.implicitHeight
 
   function refresh() {
+    if (daemonStatusProcess.running) return
+    daemonStatusProcess.running = true
+  }
+
+  function refreshData() {
     if (workspaceListProcess.running || listProcess.running || agentProcess.running) return
     refreshing = true
     refreshPending = 3
@@ -74,6 +86,34 @@ Panel {
     workspaceListProcess.running = true
     listProcess.running = true
     agentProcess.running = true
+  }
+
+  function setOffline(message) {
+    online = false
+    refreshing = false
+    workspaces = []
+    shells = []
+    agents = []
+    workspaceDetail = null
+    selectedWorkspaceId = ""
+    workspaceToOpen = null
+    previousAgentStates = ({})
+    completedAgents = ({})
+    agentBaselineReady = false
+    error = message
+  }
+
+  function parseDaemonStatus(raw) {
+    try {
+      var data = parseEnvelope(raw, "daemon.status")
+      if (data.status !== "running") {
+        setOffline("Boomux daemon is stopped")
+        return
+      }
+      refreshData()
+    } catch (exception) {
+      setOffline("Boomux daemon is stopped")
+    }
   }
 
   function parseEnvelope(raw, command) {
@@ -101,6 +141,7 @@ Panel {
       }
       if (!selectedWorkspace || selectedWorkspaceId === "")
         selectedWorkspaceId = workspaces.length > 0 ? workspaces[0].id : ""
+      syncWorkspaceIndex()
       if (selectedWorkspaceId !== "") inspectWorkspace(selectedWorkspaceId)
       else workspaceDetail = null
       clampSelection()
@@ -132,15 +173,14 @@ Panel {
       var nextAgents = data.agents
       var nextStates = ({})
       var nextCompleted = ({})
-      for (var completedId in completedAgents) nextCompleted[completedId] = true
 
       for (var i = 0; i < nextAgents.length; i++) {
         var agent = nextAgents[i]
         var state = agent.observation ? agent.observation.state : "unknown"
         nextStates[agent.id] = state
+        if (completedAgents[agent.id] && state === "idle") nextCompleted[agent.id] = true
         if (agentBaselineReady && previousAgentStates[agent.id] === "working" && state === "idle")
           nextCompleted[agent.id] = true
-        if (state === "working" || state === "blocked") delete nextCompleted[agent.id]
       }
 
       previousAgentStates = nextStates
@@ -155,8 +195,10 @@ Panel {
   }
 
   function inspectWorkspace(workspaceId) {
-    if (!workspaceId || workspaceInspectProcess.running) return
-    workspaceInspectProcess.command = ["boomux", "workspace", "inspect", String(workspaceId), "--json"]
+    inspectRequestedId = String(workspaceId || "")
+    if (inspectRequestedId === "" || workspaceInspectProcess.running) return
+    inspectActiveId = inspectRequestedId
+    workspaceInspectProcess.command = ["boomux", "workspace", "inspect", inspectActiveId, "--json"]
     workspaceInspectProcess.running = true
   }
 
@@ -189,7 +231,8 @@ Panel {
   function selectTab(tab) {
     if (activeTab === tab) return
     activeTab = tab
-    selectedIndex = 0
+    if (tab === "workspaces") syncWorkspaceIndex()
+    else selectedIndex = 0
     cancelForm()
   }
 
@@ -211,8 +254,26 @@ Panel {
 
   function selectWorkspace(workspaceId) {
     selectedWorkspaceId = String(workspaceId)
+    syncWorkspaceIndex()
     workspaceDetail = null
     inspectWorkspace(selectedWorkspaceId)
+  }
+
+  function syncWorkspaceIndex() {
+    if (activeTab !== "workspaces") return
+    for (var i = 0; i < workspaces.length; i++) {
+      if (workspaces[i].id === selectedWorkspaceId) {
+        selectedIndex = i
+        return
+      }
+    }
+    clampSelection()
+  }
+
+  function compactPath(path) {
+    var value = String(path || "")
+    if (home !== "" && value === home) return "~"
+    return home !== "" && value.indexOf(home + "/") === 0 ? "~" + value.substring(home.length) : value
   }
 
   function currentAgentForShell(shell) {
@@ -261,24 +322,47 @@ Panel {
 
   function openWorkspace(workspace) {
     if (!workspace || actionProcess.running) return
+    openWorkspaceDialog.selectedIndex = 1
+    workspaceToOpen = workspace
+  }
+
+  function confirmOpenWorkspace() {
+    var workspace = workspaceToOpen
+    workspaceToOpen = null
+    if (!workspace || actionProcess.running) return
     pendingAction = "open-workspace"
     actionMessage = "Opening " + String(workspace.name) + "..."
     actionProcess.command = ["boomux", "workspace", "open", String(workspace.id)]
     actionProcess.running = true
   }
 
-  function openShell(shell) {
+  function openShell(shell, agent) {
     if (!shell || !shell.id || openProcess.running) return
+    pendingOpenAgent = agent || null
+    actionMessage = "Opening terminal..."
     openProcess.command = ["boomux", "open", String(shell.id)]
     openProcess.running = true
-    close()
   }
 
   function openAgent(agent) {
     if (!agent) return
-    clearCompletedAgent(agent.id)
-    acknowledgeAgent(agent)
-    openShell({ id: agent.shell_id })
+    if (!agentShellRetained(agent)) {
+      if (attentionRevision(agent) > 0) {
+        actionMessage = "Acknowledging attention for removed shell..."
+        acknowledgeAgent(agent)
+      } else {
+        actionMessage = "This Agent's shell was removed"
+      }
+      return
+    }
+    openShell({ id: agent.shell_id }, agent)
+  }
+
+  function agentShellRetained(agent) {
+    if (!agent || !agent.shell_id) return false
+    for (var i = 0; i < shells.length; i++)
+      if (shells[i].id === agent.shell_id) return true
+    return false
   }
 
   function openWorkspaceItem(item) {
@@ -291,11 +375,7 @@ Panel {
       actionProcess.running = true
       return
     }
-    if (item.agent) {
-      clearCompletedAgent(item.agent.id)
-      acknowledgeAgent(item.agent)
-    }
-    openShell(item.shell)
+    openShell(item.shell, item.agent)
   }
 
   function openDashboard() {
@@ -316,24 +396,41 @@ Panel {
       ? Number(agent.attention.observation.revision) : 0
   }
 
+  function attentionReason(agent) {
+    return agent && agent.attention && agent.attention.reason ? String(agent.attention.reason) : ""
+  }
+
   function agentNeedsAttention(agent) {
-    if (!agent || !agent.observation || agent.observation.state !== "blocked") return false
-    var revision = attentionRevision(agent)
-    return revision > 0 && Number(dismissedAttention[agent.id] || 0) !== revision
+    return attentionRevision(agent) > 0 && attentionReason(agent) === "blocked"
   }
 
   function acknowledgeAgent(agent) {
     var revision = attentionRevision(agent)
     if (revision <= 0) return
-    var nextDismissed = ({})
-    for (var id in dismissedAttention) nextDismissed[id] = dismissedAttention[id]
-    nextDismissed[agent.id] = revision
-    dismissedAttention = nextDismissed
-    if (!acknowledgeProcess.running) {
-      acknowledgeProcess.command = ["boomux", "attention", "acknowledge", String(agent.id),
-        "--observation-revision", String(revision), "--json"]
-      acknowledgeProcess.running = true
-    }
+    var queue = acknowledgeQueue.slice()
+    for (var i = 0; i < queue.length; i++)
+      if (queue[i].agentId === String(agent.id) && queue[i].revision === revision) return
+    queue.push({ agentId: String(agent.id), revision: revision })
+    acknowledgeQueue = queue
+    startNextAcknowledgement()
+  }
+
+  function startNextAcknowledgement() {
+    if (acknowledgeProcess.running || acknowledgeQueue.length === 0) return
+    activeAcknowledgement = acknowledgeQueue[0]
+    acknowledgeProcess.command = ["boomux", "attention", "acknowledge",
+      activeAcknowledgement.agentId, "--observation-revision",
+      String(activeAcknowledgement.revision), "--json"]
+    acknowledgeProcess.running = true
+  }
+
+  function countCompletedAgents() {
+    var completed = ({})
+    for (var id in completedAgents) completed[id] = true
+    for (var i = 0; i < agents.length; i++)
+      if (attentionReason(agents[i]) === "completed" && attentionRevision(agents[i]) > 0)
+        completed[agents[i].id] = true
+    return Object.keys(completed).length
   }
 
   function clearCompletedAgent(agentId) {
@@ -348,7 +445,7 @@ Panel {
     formMode = mode
     actionMessage = ""
     nameField.text = ""
-    cwdField.text = workspaceDetail && workspaceDetail.default_cwd
+    cwdField.text = mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd
       ? String(workspaceDetail.default_cwd) : ""
     Qt.callLater(function() { nameField.forceActiveFocus() })
   }
@@ -406,7 +503,17 @@ Panel {
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   } else {
+    workspaceToOpen = null
     cancelForm()
+  }
+
+  Process {
+    id: daemonStatusProcess
+    command: ["boomux", "daemon", "status", "--json"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseDaemonStatus(text) }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.setOffline("Boomux daemon is stopped")
+    }
   }
 
   Process {
@@ -440,6 +547,10 @@ Panel {
   Process {
     id: workspaceInspectProcess
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseWorkspaceDetail(text) }
+    onExited: function(exitCode) {
+      if (root.inspectRequestedId !== "" && root.inspectRequestedId !== root.inspectActiveId)
+        root.inspectWorkspace(root.inspectRequestedId)
+    }
   }
 
   Process {
@@ -455,7 +566,7 @@ Panel {
         root.actionMessage = root.processError(actionStderr.text || actionStdout.text, "Boomux action failed")
         return
       }
-      root.formMode = ""
+      root.cancelForm()
       if (action === "create-workspace") root.actionMessage = "Workspace created"
       else if (action === "create-shell") root.actionMessage = "Shell added"
       else if (action === "create-agent") root.actionMessage = "Starting " + root.agentHost + "..."
@@ -468,15 +579,32 @@ Panel {
   Process {
     id: openProcess
     onExited: function(exitCode) {
-      if (exitCode !== 0) console.warn("io.github.gardnmi.boomux: failed to open terminal")
+      var agent = root.pendingOpenAgent
+      root.pendingOpenAgent = null
+      if (exitCode !== 0) {
+        root.actionMessage = "Could not open terminal"
+        return
+      }
+      if (agent) {
+        root.clearCompletedAgent(agent.id)
+        root.acknowledgeAgent(agent)
+      }
+      root.actionMessage = ""
+      root.close()
     }
   }
 
   Process {
     id: acknowledgeProcess
     onExited: function(exitCode) {
-      if (exitCode !== 0) console.warn("io.github.gardnmi.boomux: failed to acknowledge attention")
+      if (exitCode !== 0) root.actionMessage = "Could not acknowledge Agent attention"
+      else if (root.opened) root.actionMessage = "Agent attention acknowledged"
+      var queue = root.acknowledgeQueue.slice()
+      if (queue.length > 0) queue.shift()
+      root.acknowledgeQueue = queue
+      root.activeAcknowledgement = null
       root.refresh()
+      root.startNextAcknowledgement()
     }
   }
 
@@ -537,13 +665,29 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.editing
-      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveSelection(dy) }
-      onActivateRequested: root.activateSelected()
-      onCloseRequested: root.close()
+      onMoveRequested: function(dx, dy) {
+        if (root.workspaceToOpen && (dx !== 0 || dy !== 0))
+          openWorkspaceDialog.selectedIndex = openWorkspaceDialog.selectedIndex === 0 ? 1 : 0
+        else if (dy !== 0) root.moveSelection(dy)
+      }
+      onActivateRequested: {
+        if (root.workspaceToOpen) {
+          if (openWorkspaceDialog.selectedIndex === 0) root.workspaceToOpen = null
+          else root.confirmOpenWorkspace()
+        }
+        else root.activateSelected()
+      }
+      onCloseRequested: {
+        if (root.workspaceToOpen) root.workspaceToOpen = null
+        else root.close()
+      }
       onTabRequested: function(direction) {
-        root.selectTab(root.activeTab === "agents" ? "workspaces" : "agents")
+        if (root.workspaceToOpen)
+          openWorkspaceDialog.selectedIndex = openWorkspaceDialog.selectedIndex === 0 ? 1 : 0
+        else root.selectTab(root.activeTab === "agents" ? "workspaces" : "agents")
       }
       onTextKey: function(text) {
+        if (root.workspaceToOpen) return
         if (text === "r" || text === "R") root.refresh()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
@@ -831,7 +975,8 @@ Panel {
                   }
                   Text {
                     width: parent.width
-                    text: modelData.shell_count + " items · " + modelData.agent_count + " agents"
+                    text: (modelData.shell_count + modelData.launcher_count) + " items · "
+                      + modelData.agent_count + " agents"
                     color: modelData.attention_count > 0 ? root.urgent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -877,7 +1022,7 @@ Panel {
                 Text {
                   width: parent.width
                   text: root.workspaceDetail && root.workspaceDetail.default_cwd
-                    ? String(root.workspaceDetail.default_cwd) : "No default directory"
+                    ? root.compactPath(root.workspaceDetail.default_cwd) : "No default directory"
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -941,11 +1086,18 @@ Panel {
                   bottomPadding: Style.space(10)
                 }
 
-                Repeater {
+                ListView {
+                  id: itemList
+                  width: parent.width
+                  implicitHeight: Math.min(contentHeight, Style.space(220))
                   model: root.workspaceItems
+                  spacing: Style.space(3)
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                   delegate: Rectangle {
                     required property var modelData
-                    width: detailColumn.width
+                    width: ListView.view.width
                     height: Style.space(54)
                     radius: Style.cornerRadius
                     color: itemMouse.containsMouse
@@ -980,7 +1132,9 @@ Panel {
                       }
                       Text {
                         width: parent.width
-                        text: String(modelData.status) + (modelData.detail ? " · " + String(modelData.detail) : "")
+                        text: String(modelData.status) + (modelData.detail
+                          ? " · " + (modelData.kind === "shell"
+                            ? root.compactPath(modelData.detail) : String(modelData.detail)) : "")
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -1011,6 +1165,20 @@ Panel {
           wrapMode: Text.Wrap
         }
       }
+
+      ConfirmDialog {
+        id: openWorkspaceDialog
+        anchors.fill: parent
+        z: 10
+        opened: root.workspaceToOpen !== null
+        message: root.workspaceToOpen
+          ? "Open " + String(root.workspaceToOpen.name)
+            + "? This runs its launchers, takes over active terminal controllers, and restarts exited shells. Some items may still open if another fails."
+          : ""
+        confirmText: "Open"
+        onCanceled: root.workspaceToOpen = null
+        onConfirmed: root.confirmOpenWorkspace()
+      }
     }
   }
 
@@ -1022,7 +1190,8 @@ Panel {
     signal activated
     readonly property string state: agent && agent.observation ? agent.observation.state : "unknown"
     readonly property bool needsAttention: root.agentNeedsAttention(agent)
-    readonly property bool justCompleted: agent ? !!root.completedAgents[agent.id] : false
+    readonly property bool justCompleted: agent
+      ? !!root.completedAgents[agent.id] || root.attentionReason(agent) === "completed" : false
 
     height: Style.space(66)
     radius: Style.cornerRadius
@@ -1060,6 +1229,9 @@ Panel {
         width: parent.width
         text: (agentRow.justCompleted ? "finished" : agentRow.state)
           + (agentRow.needsAttention ? " · needs attention" : "")
+          + (agent && !root.agentShellRetained(agent)
+            ? (root.attentionRevision(agent) > 0
+              ? " · shell removed · click to acknowledge" : " · shell removed") : "")
           + (agent && agent.integration ? " · " + String(agent.integration) : "")
           + (agent && agent.observation && agent.observation.evidence ? " · " + String(agent.observation.evidence) : "")
         color: agentRow.needsAttention ? root.urgent : root.dim
