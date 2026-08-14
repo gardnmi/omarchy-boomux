@@ -33,6 +33,7 @@ Panel {
   property var completedAgents: ({})
   property var acknowledgeQueue: []
   property var activeAcknowledgement: null
+  property var automaticAttentionRevisions: ({})
   property var pendingOpenAgent: null
   property string inspectRequestedId: ""
   property string inspectActiveId: ""
@@ -98,6 +99,7 @@ Panel {
     selectedWorkspaceId = ""
     previousAgentStates = ({})
     completedAgents = ({})
+    automaticAttentionRevisions = ({})
     agentBaselineReady = false
     error = message
   }
@@ -172,18 +174,26 @@ Panel {
       var nextAgents = data.agents
       var nextStates = ({})
       var nextCompleted = ({})
+      var nextAutomaticAttentionRevisions = ({})
 
       for (var i = 0; i < nextAgents.length; i++) {
         var agent = nextAgents[i]
         var state = agent.observation ? agent.observation.state : "unknown"
+        var attentionRevision = root.attentionRevision(agent)
         nextStates[agent.id] = state
         if (completedAgents[agent.id] && state === "idle") nextCompleted[agent.id] = true
         if (agentBaselineReady && previousAgentStates[agent.id] === "working" && state === "idle")
           nextCompleted[agent.id] = true
+        if (state === "working" && attentionRevision > 0 && attentionReason(agent) === "blocked") {
+          nextAutomaticAttentionRevisions[agent.id] = attentionRevision
+          if (automaticAttentionRevisions[agent.id] !== attentionRevision)
+            acknowledgeAgent(agent, false, true)
+        }
       }
 
       previousAgentStates = nextStates
       completedAgents = nextCompleted
+      automaticAttentionRevisions = nextAutomaticAttentionRevisions
       agentBaselineReady = true
       agents = nextAgents
       clampSelection()
@@ -425,13 +435,25 @@ Panel {
     return attentionRevision(agent) > 0 && attentionReason(agent) === "blocked"
   }
 
-  function acknowledgeAgent(agent, dismissed) {
+  function acknowledgeAgent(agent, dismissed, automatic) {
     var revision = attentionRevision(agent)
     if (revision <= 0) return
     var queue = acknowledgeQueue.slice()
-    for (var i = 0; i < queue.length; i++)
-      if (queue[i].agentId === String(agent.id) && queue[i].revision === revision) return
-    queue.push({ agentId: String(agent.id), revision: revision, dismissed: !!dismissed })
+    for (var i = 0; i < queue.length; i++) {
+      if (queue[i].agentId !== String(agent.id) || queue[i].revision !== revision) continue
+      if (dismissed) {
+        queue[i].dismissed = true
+        queue[i].automatic = false
+        acknowledgeQueue = queue
+      }
+      return
+    }
+    queue.push({
+      agentId: String(agent.id),
+      revision: revision,
+      dismissed: !!dismissed,
+      automatic: !!automatic
+    })
     acknowledgeQueue = queue
     startNextAcknowledgement()
   }
@@ -633,10 +655,12 @@ Panel {
     stderr: StdioCollector { id: acknowledgeStderr; waitForEnd: true }
     onExited: function(exitCode) {
       var dismissed = root.activeAcknowledgement && root.activeAcknowledgement.dismissed
+      var automatic = root.activeAcknowledgement && root.activeAcknowledgement.automatic
       if (exitCode !== 0)
         root.actionMessage = root.processError(acknowledgeStderr.text || acknowledgeStdout.text,
-          dismissed ? "Could not dismiss Agent notification" : "Could not acknowledge Agent attention")
-      else if (root.opened)
+          dismissed ? "Could not dismiss Agent notification"
+            : (automatic ? "Could not clear resumed Agent attention" : "Could not acknowledge Agent attention"))
+      else if (root.opened && !automatic)
         root.actionMessage = dismissed ? "Agent notification dismissed" : "Agent attention acknowledged"
       var queue = root.acknowledgeQueue.slice()
       if (queue.length > 0) queue.shift()
