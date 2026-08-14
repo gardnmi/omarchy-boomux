@@ -82,11 +82,10 @@ directory, items, and scoped **Open**, **Shell**, and **Agent** actions below th
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command.
 
-Opening a complete workspace requires confirmation because Boomux invokes its
-launchers, takes over active terminal controllers, and restarts exited shells.
-Workspace restore is non-transactional, so some items can open even if another
-item fails. Opening an individual exited shell or command restarts its stored
-process.
+Opening a complete workspace starts immediately. Boomux invokes its launchers,
+takes over active terminal controllers, and restarts exited shells. Workspace
+restore is non-transactional, so some items can open even if another item fails.
+Opening an individual exited shell or command restarts its stored process.
 
 Agent creation records and opens a command-backed shell whose exact command is
 `opencode` or `pi`. The installed lifecycle integration creates the authoritative
