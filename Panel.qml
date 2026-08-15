@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
+import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -23,6 +24,7 @@ Panel {
   property var agents: []
   property var schedules: []
   property var executions: []
+  property var projects: []
   property var workspaceDetail: null
   property string selectedWorkspaceId: ""
   property string selectedScheduleId: ""
@@ -33,6 +35,8 @@ Panel {
   property int refreshPending: 0
   property bool capabilitiesReady: false
   property bool scheduleCommandsSupported: false
+  property bool projectListSupported: false
+  property bool projectRootsConfigured: false
   property int daemonProtocolVersion: 0
   property string schedulerState: "offline"
   property int schedulerActiveExecutions: 0
@@ -52,6 +56,14 @@ Panel {
   property string executionError: ""
   property string actionMessage: ""
   property string formMode: ""
+  property string workspaceCreationMode: "custom"
+  property string projectQuery: ""
+  property int selectedProjectIndex: 0
+  property string projectError: ""
+  property bool cwdIsExact: false
+  property bool directoryPickerOpen: false
+  property string directoryPickerPath: ""
+  property int directoryPickerIndex: 0
   property string agentHost: "opencode"
   property string pendingAction: ""
   property string pendingWorkspaceName: ""
@@ -78,6 +90,9 @@ Panel {
     return execution.schedule_id === selectedScheduleId
   })
   readonly property var latestExecution: selectedExecutions.length > 0 ? selectedExecutions[0] : null
+  readonly property var visibleProjects: filterProjects()
+  readonly property var selectedProject: selectedProjectIndex >= 0
+    && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
   readonly property var workspaceItems: buildWorkspaceItems()
   readonly property int itemCount: activeTab === "agents" ? visibleAgents.length
     : (activeTab === "workspaces" ? workspaces.length : schedules.length)
@@ -94,6 +109,11 @@ Panel {
   }).length
   readonly property int completedCount: countCompletedAgents()
   readonly property bool editing: formMode !== ""
+
+  onProjectQueryChanged: {
+    selectedProjectIndex = 0
+    clampProjectSelection()
+  }
 
   visible: true
   implicitWidth: button.implicitWidth
@@ -183,8 +203,10 @@ Panel {
       scheduleCommandsSupported = required.every(function(command) {
         return data.json_commands.indexOf(command) >= 0
       })
+      projectListSupported = data.json_commands.indexOf("project.list") >= 0
     } catch (exception) {
       scheduleCommandsSupported = false
+      projectListSupported = false
       console.warn("io.github.gardnmi.boomux:", exception)
     }
     capabilitiesReady = true
@@ -299,6 +321,64 @@ Panel {
       executionError = "Could not read the last Schedule run"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
+  }
+
+  function parseProjects(raw) {
+    try {
+      var data = parseEnvelope(raw, "project.list")
+      if (typeof data.roots_configured !== "boolean" || !Array.isArray(data.projects)
+          || !Array.isArray(data.warnings)) throw new Error("missing project discovery fields")
+      var nextProjects = []
+      for (var i = 0; i < data.projects.length; i++) {
+        var project = data.projects[i]
+        if (!project || typeof project.name !== "string" || typeof project.path !== "string"
+            || project.path.indexOf("/") !== 0 || typeof project.group !== "string"
+            || !Number.isFinite(Number(project.group_order)))
+          throw new Error("invalid discovered project")
+        nextProjects.push(project)
+      }
+      projects = nextProjects
+      projectRootsConfigured = data.roots_configured
+      projectError = data.warnings.length > 0 ? data.warnings.join(" · ") : ""
+      clampProjectSelection()
+      if (formMode === "workspace" && workspaceCreationMode === "project"
+          && !projectRootsConfigured) selectWorkspaceCreationMode("custom")
+    } catch (exception) {
+      projects = []
+      projectRootsConfigured = false
+      projectError = "Could not discover configured projects"
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
+  }
+
+  function loadProjects() {
+    if (!projectListSupported || projectListProcess.running) return
+    projects = []
+    projectRootsConfigured = false
+    selectedProjectIndex = 0
+    projectError = ""
+    projectListProcess.running = true
+  }
+
+  function filterProjects() {
+    var query = projectQuery.trim().toLowerCase()
+    if (query === "") return projects
+    return projects.filter(function(project) {
+      return String(project.name).toLowerCase().indexOf(query) >= 0
+        || String(project.path).toLowerCase().indexOf(query) >= 0
+        || String(project.group).toLowerCase().indexOf(query) >= 0
+    })
+  }
+
+  function clampProjectSelection() {
+    if (visibleProjects.length === 0) selectedProjectIndex = 0
+    else selectedProjectIndex = Math.max(0, Math.min(selectedProjectIndex, visibleProjects.length - 1))
+  }
+
+  function moveProjectSelection(delta) {
+    if (visibleProjects.length === 0) return
+    selectedProjectIndex = Math.max(0, Math.min(selectedProjectIndex + delta, visibleProjects.length - 1))
+    projectList.positionViewAtIndex(selectedProjectIndex, ListView.Contain)
   }
 
   function inspectWorkspace(workspaceId) {
@@ -736,20 +816,100 @@ Panel {
     formMode = mode
     actionMessage = ""
     nameField.text = ""
+    cwdIsExact = !!(mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd)
     cwdField.text = mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd
       ? String(workspaceDetail.default_cwd) : ""
-    Qt.callLater(function() { nameField.forceActiveFocus() })
+    if (mode === "workspace") {
+      projectSearchField.text = ""
+      projectQuery = ""
+      selectedProjectIndex = 0
+      workspaceCreationMode = projectListSupported ? "project" : "custom"
+      if (projectListSupported) loadProjects()
+    }
+    Qt.callLater(function() {
+      if (mode === "workspace" && workspaceCreationMode === "project") projectSearchField.forceActiveFocus()
+      else nameField.forceActiveFocus()
+    })
   }
 
   function cancelForm() {
+    directoryPickerOpen = false
     formMode = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function selectWorkspaceCreationMode(mode) {
+    workspaceCreationMode = mode
+    actionMessage = ""
+    Qt.callLater(function() {
+      if (mode === "project") projectSearchField.forceActiveFocus()
+      else nameField.forceActiveFocus()
+    })
+  }
+
+  function openDirectoryPicker() {
+    var cwd = cwdIsExact ? cwdField.text : cwdField.text.trim()
+    directoryPickerPath = cwd.indexOf("/") === 0 ? cwd : home
+    directoryPickerIndex = 0
+    directoryPickerOpen = true
+    Qt.callLater(function() { directoryPickerKeyHandler.forceActiveFocus() })
+  }
+
+  function closeDirectoryPicker() {
+    directoryPickerOpen = false
+    Qt.callLater(function() { browseButton.forceActiveFocus() })
+  }
+
+  function parentDirectory(path) {
+    var value = String(path || "/").replace(/\/+$/, "")
+    if (value === "") return "/"
+    var separator = value.lastIndexOf("/")
+    return separator <= 0 ? "/" : value.substring(0, separator)
+  }
+
+  function enterDirectory(path) {
+    if (String(path || "").indexOf("/") !== 0) return
+    directoryPickerPath = String(path)
+    directoryPickerIndex = 0
+  }
+
+  function moveDirectorySelection(delta) {
+    if (directoryModel.count === 0) return
+    directoryPickerIndex = Math.max(0,
+      Math.min(directoryPickerIndex + delta, directoryModel.count - 1))
+    directoryList.positionViewAtIndex(directoryPickerIndex, ListView.Contain)
+  }
+
+  function enterSelectedDirectory() {
+    if (directoryModel.count === 0) return
+    enterDirectory(directoryModel.get(directoryPickerIndex, "filePath"))
+  }
+
+  function chooseDirectory() {
+    var path = directoryPickerPath
+    cwdField.text = path
+    cwdIsExact = true
+    if (formMode === "workspace" && workspaceCreationMode === "custom"
+        && nameField.text.trim() === "") {
+      var parts = path.replace(/\/+$/, "").split("/")
+      nameField.text = parts.length > 0 ? parts[parts.length - 1] : ""
+    }
+    directoryPickerOpen = false
+    Qt.callLater(function() { cwdField.forceActiveFocus() })
   }
 
   function submitForm() {
     if (actionProcess.running) return
     var name = nameField.text.trim()
-    var cwd = cwdField.text.trim()
+    var cwd = cwdIsExact ? cwdField.text : cwdField.text.trim()
+    if (formMode === "workspace" && workspaceCreationMode === "project") {
+      if (!selectedProject) {
+        actionMessage = "Select a discovered project"
+        return
+      }
+      name = String(selectedProject.name)
+      cwd = String(selectedProject.path)
+    }
     if (name === "") {
       actionMessage = "A name is required"
       return
@@ -807,8 +967,24 @@ Panel {
       else {
         root.capabilitiesReady = true
         root.scheduleCommandsSupported = false
+        root.projectListSupported = false
       }
       if (root.opened && root.activeTab === "schedules") root.refresh()
+    }
+  }
+
+  Process {
+    id: projectListProcess
+    command: ["boomux", "project", "list", "--json"]
+    stdout: StdioCollector { id: projectListStdout; waitForEnd: true }
+    stderr: StdioCollector { id: projectListStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.parseProjects(projectListStdout.text)
+      else {
+        root.projects = []
+        root.projectError = root.processError(projectListStderr.text || projectListStdout.text,
+          "Could not discover configured projects")
+      }
     }
   }
 
@@ -992,6 +1168,21 @@ Panel {
     }
   }
 
+  FolderListModel {
+    id: directoryModel
+    folder: root.directoryPickerOpen ? Util.fileUrl(root.directoryPickerPath || root.home) : ""
+    showDirs: true
+    showFiles: false
+    showDotAndDotDot: false
+    showHidden: false
+    showOnlyReadable: true
+    sortField: FolderListModel.Name
+    sortReversed: false
+    caseSensitive: false
+    onCountChanged: root.directoryPickerIndex = Math.max(0,
+      Math.min(root.directoryPickerIndex, count - 1))
+  }
+
   Timer {
     interval: 1000
     running: true
@@ -1164,29 +1355,334 @@ Panel {
             spacing: Style.space(6)
             PanelSectionHeader {
               width: parent.width
-              text: root.formMode === "workspace" ? "NEW WORKSPACE"
-                : (root.formMode === "shell" ? "ADD SHELL" : "START AGENT")
+              text: root.directoryPickerOpen ? "CHOOSE DIRECTORY"
+                : (root.formMode === "workspace" ? "NEW WORKSPACE"
+                  : (root.formMode === "shell" ? "ADD SHELL" : "START AGENT"))
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
+
+            Column {
+              visible: root.directoryPickerOpen
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                id: directoryPickerKeyHandler
+                width: 1
+                height: 1
+                focus: root.directoryPickerOpen
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Down || event.key === Qt.Key_J) {
+                    root.moveDirectorySelection(1)
+                  } else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) {
+                    root.moveDirectorySelection(-1)
+                  } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                      || event.key === Qt.Key_Right) {
+                    root.enterSelectedDirectory()
+                  } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Backspace) {
+                    root.enterDirectory(root.parentDirectory(root.directoryPickerPath))
+                  } else if (event.key === Qt.Key_Space) {
+                    root.chooseDirectory()
+                  } else if (event.key === Qt.Key_Escape) {
+                    root.closeDirectoryPicker()
+                  } else if (event.key === Qt.Key_Tab) {
+                    directoryChooseButton.forceActiveFocus()
+                  } else if (event.key === Qt.Key_Backtab) {
+                    directoryCancelButton.forceActiveFocus()
+                  } else {
+                    return
+                  }
+                  event.accepted = true
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: root.compactPath(root.directoryPickerPath)
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideMiddle
+              }
+
+              Text {
+                width: parent.width
+                text: "Enter opens · Left goes up · Space chooses this directory"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+
+              Item {
+                width: parent.width
+                height: Style.space(190)
+
+                Text {
+                  visible: directoryModel.count === 0
+                  anchors.centerIn: parent
+                  text: "No readable subdirectories"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                ListView {
+                  id: directoryList
+                  anchors.fill: parent
+                  model: directoryModel
+                  spacing: Style.space(3)
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                  delegate: Rectangle {
+                    required property string fileName
+                    required property string filePath
+                    required property int index
+                    width: ListView.view.width
+                    height: Style.space(40)
+                    radius: Style.cornerRadius
+                    color: index === root.directoryPickerIndex
+                      ? Style.selectedFillFor(root.foreground, Color.accent)
+                      : (directoryMouse.containsMouse
+                        ? Util.alpha(root.foreground, 0.06) : "transparent")
+                    Text {
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.margins: Style.space(9)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "▸  " + fileName
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      elide: Text.ElideRight
+                    }
+                    MouseArea {
+                      id: directoryMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      onEntered: root.directoryPickerIndex = index
+                      onClicked: root.directoryPickerIndex = index
+                      onDoubleClicked: root.enterDirectory(filePath)
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Button {
+                  width: (parent.width - parent.spacing * 2) / 3
+                  text: "Up"
+                  focusable: true
+                  bordered: true
+                  foreground: root.foreground
+                  onClicked: root.enterDirectory(root.parentDirectory(root.directoryPickerPath))
+                }
+                Button {
+                  id: directoryCancelButton
+                  width: (parent.width - parent.spacing * 2) / 3
+                  text: "Cancel"
+                  focusable: true
+                  bordered: true
+                  foreground: root.foreground
+                  onClicked: root.closeDirectoryPicker()
+                }
+                Button {
+                  id: directoryChooseButton
+                  width: (parent.width - parent.spacing * 2) / 3
+                  text: "Choose Here"
+                  focusable: true
+                  bordered: true
+                  active: true
+                  foreground: root.foreground
+                  onClicked: root.chooseDirectory()
+                }
+              }
+            }
+
+            Row {
+              visible: !root.directoryPickerOpen && root.formMode === "workspace"
+                && root.projectListSupported
+              width: parent.width
+              spacing: Style.space(6)
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: "Projects"
+                selected: root.workspaceCreationMode === "project"
+                focusable: true
+                bordered: true
+                foreground: root.foreground
+                onClicked: root.selectWorkspaceCreationMode("project")
+              }
+              Button {
+                id: customModeButton
+                width: (parent.width - parent.spacing) / 2
+                text: "Custom"
+                selected: root.workspaceCreationMode === "custom"
+                focusable: true
+                bordered: true
+                foreground: root.foreground
+                onClicked: root.selectWorkspaceCreationMode("custom")
+              }
+            }
+
+            Column {
+              visible: !root.directoryPickerOpen && root.formMode === "workspace"
+                && root.workspaceCreationMode === "project"
+              width: parent.width
+              spacing: Style.space(6)
+
+              TextField {
+                id: projectSearchField
+                width: parent.width
+                placeholderText: "Search configured projects"
+                foreground: root.foreground
+                onTextChanged: root.projectQuery = text
+                onAccepted: root.submitForm()
+                Keys.onDownPressed: function(event) {
+                  root.moveProjectSelection(1)
+                  event.accepted = true
+                }
+                Keys.onUpPressed: function(event) {
+                  root.moveProjectSelection(-1)
+                  event.accepted = true
+                }
+                Keys.onTabPressed: function(event) {
+                  customModeButton.forceActiveFocus()
+                  event.accepted = true
+                }
+                Keys.onEscapePressed: root.cancelForm()
+              }
+
+              Text {
+                visible: root.visibleProjects.length === 0
+                width: parent.width
+                text: projectListProcess.running ? "Discovering projects..."
+                  : (root.projectError !== "" ? root.projectError
+                    : (root.projectRootsConfigured ? "No projects match"
+                      : "No project roots configured · use Custom"))
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                maximumLineCount: 4
+                elide: Text.ElideRight
+                topPadding: Style.space(14)
+                bottomPadding: Style.space(14)
+              }
+
+              ListView {
+                id: projectList
+                visible: root.visibleProjects.length > 0
+                width: parent.width
+                implicitHeight: Math.min(contentHeight, Style.space(180))
+                model: root.visibleProjects
+                spacing: Style.space(3)
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: Rectangle {
+                  required property var modelData
+                  required property int index
+                  width: ListView.view.width
+                  height: Style.space(56)
+                  radius: Style.cornerRadius
+                  color: index === root.selectedProjectIndex
+                    ? Style.selectedFillFor(root.foreground, Color.accent)
+                    : (projectMouse.containsMouse
+                      ? Util.alpha(root.foreground, 0.06) : "transparent")
+                  Column {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.margins: Style.space(9)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(1)
+                    Text {
+                      width: parent.width
+                      text: String(modelData.name)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: index === root.selectedProjectIndex
+                      elide: Text.ElideRight
+                    }
+                    Text {
+                      width: parent.width
+                      text: String(modelData.group) + " · " + root.compactPath(modelData.path)
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideMiddle
+                    }
+                  }
+                  MouseArea {
+                    id: projectMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onEntered: root.selectedProjectIndex = index
+                    onClicked: root.selectedProjectIndex = index
+                    onDoubleClicked: {
+                      root.selectedProjectIndex = index
+                      root.submitForm()
+                    }
+                  }
+                }
+              }
+
+              Text {
+                visible: root.visibleProjects.length > 0 && root.projectError !== ""
+                width: parent.width
+                text: root.projectError
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.Wrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+              }
+            }
+
             TextField {
               id: nameField
+              visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
+                || root.workspaceCreationMode === "custom")
               width: parent.width
               placeholderText: root.formMode === "workspace" ? "Workspace name" : "Shell name"
               foreground: root.foreground
               onAccepted: cwdField.forceActiveFocus()
               Keys.onEscapePressed: root.cancelForm()
             }
-            TextField {
-              id: cwdField
+            Row {
+              visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
+                || root.workspaceCreationMode === "custom")
               width: parent.width
-              placeholderText: root.formMode === "workspace" ? "Default directory (optional)" : "Directory (optional)"
-              foreground: root.foreground
-              onAccepted: root.submitForm()
-              Keys.onEscapePressed: root.cancelForm()
+              spacing: Style.space(6)
+              TextField {
+                id: cwdField
+                width: parent.width - browseButton.width - parent.spacing
+                placeholderText: root.formMode === "workspace" ? "Default directory (optional)" : "Directory (optional)"
+                foreground: root.foreground
+                onTextEdited: root.cwdIsExact = false
+                onAccepted: root.submitForm()
+                Keys.onEscapePressed: root.cancelForm()
+              }
+              Button {
+                id: browseButton
+                width: Style.space(88)
+                text: "Browse"
+                tooltipText: "Choose a directory"
+                focusable: true
+                bordered: true
+                foreground: root.foreground
+                onClicked: root.openDirectoryPicker()
+              }
             }
             Row {
-              visible: root.formMode === "agent"
+              visible: !root.directoryPickerOpen && root.formMode === "agent"
               width: parent.width
               spacing: Style.space(6)
               Button {
@@ -1207,21 +1703,28 @@ Panel {
               }
             }
             Row {
+              visible: !root.directoryPickerOpen
               width: parent.width
               spacing: Style.space(6)
               Button {
                 width: (parent.width - parent.spacing) / 2
                 text: "Cancel"
+                focusable: true
                 bordered: true
                 foreground: root.foreground
                 onClicked: root.cancelForm()
               }
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: root.formMode === "agent" ? "Create & Open" : "Create"
+                text: root.formMode === "agent" ? "Create & Open"
+                  : (root.formMode === "workspace" && root.workspaceCreationMode === "project"
+                    ? "Create from Project" : "Create")
                 bordered: true
+                focusable: true
                 active: true
-                enabled: nameField.text.trim() !== "" && !actionProcess.running
+                enabled: !actionProcess.running && (root.formMode === "workspace"
+                  && root.workspaceCreationMode === "project"
+                    ? root.selectedProject !== null : nameField.text.trim() !== "")
                 foreground: root.foreground
                 onClicked: root.submitForm()
               }
