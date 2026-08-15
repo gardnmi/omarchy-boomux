@@ -14,6 +14,7 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 - Keeps finished markers visible until you open the corresponding Agent
 - Lists workspaces and their Agent, shell, command, and launcher items
 - Opens complete workspaces or individual managed items
+- Removes individual workspace items after confirming their specific impact
 - Creates workspaces and pending login shells
 - Starts new OpenCode or Pi command shells and lets their lifecycle integration
   register the Agent
@@ -90,6 +91,13 @@ clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
 terminal size and input stream.
 
+Each workspace item has a **Remove** button. Removing a shell, command, or Agent
+item closes its exact backing shell, terminates it if running, and deletes its
+shell definition and retained terminal state. Durable Agent history may remain
+available for acknowledgement. Removing a launcher deletes only that launcher
+definition; applications it already launched keep running. Both operations ask
+for confirmation before changing the workspace.
+
 Opening a complete workspace starts immediately. Boomux invokes its launchers,
 takes over active terminal controllers, and restarts exited shells. Workspace
 restore is non-transactional, so some items can open even if another item fails.
@@ -154,10 +162,12 @@ and data.
   for an Agent whose shell was removed can also be dismissed directly from its
   row.
 - Opening the dashboard or a managed shell launches a native terminal process.
-- Workspace actions can create or open workspaces, create shells, and invoke
-  existing launchers. Workspace restore can run commands, open native
-  terminals, disconnect existing writable terminal controllers, and restart
-  exited shells.
+- Workspace actions can create or open workspaces, create or remove shells, and
+  invoke or remove existing launchers. Shell removal can terminate a running
+  process and deletes retained terminal state. Launcher removal does not stop
+  applications already launched. Workspace restore can run commands, open
+  native terminals, disconnect existing writable terminal controllers, and
+  restart exited shells.
 - Schedule actions can start Agent processes and pause or resume future timed
   dispatch. Opening the latest run can attach its exact active run or launch its
   harness to resume the exact linked session. Schedule actions do not edit
