@@ -44,6 +44,7 @@ Panel {
   property var activeAcknowledgement: null
   property var automaticAttentionRevisions: ({})
   property var pendingOpenAgent: null
+  property var itemToRemove: null
   property string inspectRequestedId: ""
   property string inspectActiveId: ""
   property string error: ""
@@ -134,6 +135,7 @@ Panel {
     workspaceDetail = null
     selectedWorkspaceId = ""
     selectedScheduleId = ""
+    itemToRemove = null
     daemonProtocolVersion = 0
     schedulerState = "offline"
     schedulerActiveExecutions = 0
@@ -543,6 +545,37 @@ Panel {
     openShell(item.shell, item.agent)
   }
 
+  function requestRemoveItem(item) {
+    if (!item || actionProcess.running || openProcess.running || executionOpenProcess.running) return
+    removeItemDialog.selectedIndex = 0
+    itemToRemove = item
+  }
+
+  function cancelRemoveItem() {
+    itemToRemove = null
+  }
+
+  function removeItemMessage(item) {
+    if (!item) return ""
+    if (item.kind === "launcher")
+      return "Remove launcher " + String(item.name)
+        + "? This deletes its workspace definition. Applications it already launched keep running."
+    return "Remove " + String(item.kind) + " " + String(item.name)
+      + "? This terminates it if running and deletes its shell definition and retained terminal state. Durable Agent history may remain."
+  }
+
+  function confirmRemoveItem() {
+    var item = itemToRemove
+    itemToRemove = null
+    if (!item || !workspaceDetail || actionProcess.running) return
+    pendingAction = item.kind === "launcher" ? "remove-launcher" : "remove-shell"
+    actionMessage = "Removing " + String(item.name) + "..."
+    actionProcess.command = item.kind === "launcher"
+      ? ["boomux", "launcher", "remove", String(item.id), "--workspace", String(workspaceDetail.id)]
+      : ["boomux", "shell", "close", String(item.shell.id), "--workspace", String(workspaceDetail.id)]
+    actionProcess.running = true
+  }
+
   function openDashboard() {
     if (!bar) return
     bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux boomux")
@@ -761,6 +794,7 @@ Panel {
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   } else {
+    itemToRemove = null
     cancelForm()
   }
 
@@ -893,6 +927,8 @@ Panel {
       else if (action === "create-shell") root.actionMessage = "Shell added"
       else if (action === "create-agent") root.actionMessage = "Starting " + root.agentHost + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
+      else if (action === "remove-launcher") root.actionMessage = "Launcher removed"
+      else if (action === "remove-shell") root.actionMessage = "Workspace item removed"
       else if (action === "run-schedule") root.actionMessage = "Schedule execution started"
       else if (action === "pause-schedule") root.actionMessage = "Schedule paused"
       else if (action === "resume-schedule") root.actionMessage = "Schedule resumed"
@@ -1014,14 +1050,27 @@ Panel {
       anchors.fill: parent
       blocked: root.editing
       onMoveRequested: function(dx, dy) {
-        if (dy !== 0) root.moveSelection(dy)
+        if (root.itemToRemove && (dx !== 0 || dy !== 0))
+          removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
+        else if (dy !== 0) root.moveSelection(dy)
       }
-      onActivateRequested: root.activateSelected()
-      onCloseRequested: root.close()
+      onActivateRequested: {
+        if (root.itemToRemove) {
+          if (removeItemDialog.selectedIndex === 0) root.cancelRemoveItem()
+          else root.confirmRemoveItem()
+        } else root.activateSelected()
+      }
+      onCloseRequested: {
+        if (root.itemToRemove) root.cancelRemoveItem()
+        else root.close()
+      }
       onTabRequested: function(direction) {
-        root.cycleTab(direction)
+        if (root.itemToRemove)
+          removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
+        else root.cycleTab(direction)
       }
       onTextKey: function(text) {
+        if (root.itemToRemove) return
         if (text === "r" || text === "R") root.refresh()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
@@ -1468,8 +1517,8 @@ Panel {
                     Column {
                       anchors.left: kindGlyph.right
                       anchors.leftMargin: Style.space(10)
-                      anchors.right: parent.right
-                      anchors.rightMargin: Style.space(9)
+                      anchors.right: removeItemButton.left
+                      anchors.rightMargin: Style.space(8)
                       anchors.verticalCenter: parent.verticalCenter
                       spacing: Style.space(1)
                       Text {
@@ -1496,6 +1545,24 @@ Panel {
                       anchors.fill: parent
                       hoverEnabled: true
                       onClicked: root.openWorkspaceItem(modelData)
+                    }
+                    Button {
+                      id: removeItemButton
+                      z: 1
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(8)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "Remove"
+                      tooltipText: modelData.kind === "launcher"
+                        ? "Remove launcher definition"
+                        : "Close and remove backing shell"
+                      bordered: true
+                      enabled: !actionProcess.running && !openProcess.running && !executionOpenProcess.running
+                      foreground: root.urgent
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.space(6)
+                      verticalPadding: Style.space(2)
+                      onClicked: root.requestRemoveItem(modelData)
                     }
                   }
                 }
@@ -1826,6 +1893,24 @@ Panel {
           horizontalAlignment: Text.AlignHCenter
           wrapMode: Text.Wrap
         }
+      }
+
+      ConfirmDialog {
+        id: removeItemDialog
+        anchors.fill: parent
+        opened: root.itemToRemove !== null
+        z: 10
+        message: root.removeItemMessage(root.itemToRemove)
+        confirmText: "Remove"
+        background: Color.background
+        foreground: root.foreground
+        scrim: Util.alpha(Color.background, 0.72)
+        selectedBackground: Util.alpha(root.foreground, 0.08)
+        selectedText: Color.accent
+        fontFamily: root.fontFamily
+        cornerRadius: Style.cornerRadius
+        onCanceled: root.cancelRemoveItem()
+        onConfirmed: root.confirmRemoveItem()
       }
     }
   }
