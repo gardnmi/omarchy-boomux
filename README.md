@@ -17,6 +17,7 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 - Removes individual workspace items after confirming their specific impact
 - Creates workspaces from configured project suggestions or a custom directory
 - Opens an in-panel directory picker for workspace, shell, and Agent directories
+- Prefills editable shell and Agent names from Boomux suggestions
 - Starts new OpenCode or Pi command shells and lets their lifecycle integration
   register the Agent
 - Acknowledges current durable attention when you open its Agent
@@ -33,7 +34,7 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.17.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.18.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
@@ -124,6 +125,11 @@ Agent creation records and opens a command-backed shell whose exact command is
 `opencode` or `pi`. The installed lifecycle integration creates the authoritative
 Agent record after the coding-agent host starts; the plugin does not fabricate
 Agent lifecycle state.
+
+Shell and Agent forms request an unreserved generated name from Boomux for the
+exact selected workspace. The field remains editable, and typing is never
+overwritten by a delayed suggestion. Another client can claim the suggested
+name before creation; Boomux remains authoritative and reports that collision.
 
 The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert
