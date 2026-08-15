@@ -47,8 +47,9 @@ Panel {
 
   readonly property var visibleAgents: agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
-    return (agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
-      || attentionRevision(agent) > 0
+    return !agentIsScheduleOwned(agent)
+      && ((agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
+        || attentionRevision(agent) > 0)
   })
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
@@ -178,6 +179,7 @@ Panel {
 
       for (var i = 0; i < nextAgents.length; i++) {
         var agent = nextAgents[i]
+        if (agentIsScheduleOwned(agent)) continue
         var state = agent.observation ? agent.observation.state : "unknown"
         var attentionRevision = root.attentionRevision(agent)
         nextStates[agent.id] = state
@@ -376,6 +378,13 @@ Panel {
     return false
   }
 
+  function agentIsScheduleOwned(agent) {
+    if (!agent || !agent.shell_id) return false
+    for (var i = 0; i < shells.length; i++)
+      if (shells[i].id === agent.shell_id) return shells[i].owner === "schedule"
+    return false
+  }
+
   function agentIsProjectedCurrent(agent) {
     if (!agentIsCurrent(agent)) return false
     var observedAt = agent.observation ? Number(agent.observation.observed_at_ms || 0) : 0
@@ -481,6 +490,7 @@ Panel {
   function countCompletedAgents() {
     var completed = ({})
     for (var i = 0; i < agents.length; i++) {
+      if (agentIsScheduleOwned(agents[i])) continue
       if (completedAgents[agents[i].id] && agentIsProjectedCurrent(agents[i]))
         completed[agents[i].id] = true
       if (attentionReason(agents[i]) === "completed" && attentionRevision(agents[i]) > 0)
