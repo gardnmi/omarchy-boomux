@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "author": "Mike Gardner",
   "license": "MIT AND CC-BY-4.0",
-  "description": "Monitor Agents and manage Boomux workspaces from the Omarchy bar.",
+  "description": "Monitor Agents and manage Boomux workspaces and Schedules from the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,9 +13,9 @@
   },
   "barWidget": {
     "displayName": "Boomux",
-    "description": "Monitor Agents and manage Boomux workspaces.",
+    "description": "Monitor Agents and manage Boomux workspaces and Schedules.",
     "category": "Development",
-    "aliases": ["boomux", "agent", "agents", "terminal", "workspace"],
+    "aliases": ["boomux", "agent", "agents", "terminal", "workspace", "schedule"],
     "allowMultiple": false,
     "defaultSection": "right"
   }

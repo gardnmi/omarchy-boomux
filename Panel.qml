@@ -21,13 +21,22 @@ Panel {
   property var workspaces: []
   property var shells: []
   property var agents: []
+  property var schedules: []
+  property var executions: []
   property var workspaceDetail: null
   property string selectedWorkspaceId: ""
+  property string selectedScheduleId: ""
   property string activeTab: "agents"
   property int selectedIndex: 0
   property bool online: false
   property bool refreshing: false
   property int refreshPending: 0
+  property bool capabilitiesReady: false
+  property bool scheduleCommandsSupported: false
+  property int daemonProtocolVersion: 0
+  property string schedulerState: "offline"
+  property int schedulerActiveExecutions: 0
+  property int schedulerMaxConcurrent: 0
   property bool agentBaselineReady: false
   property var previousAgentStates: ({})
   property var completedAgents: ({})
@@ -38,6 +47,8 @@ Panel {
   property string inspectRequestedId: ""
   property string inspectActiveId: ""
   property string error: ""
+  property string scheduleError: ""
+  property string executionError: ""
   property string actionMessage: ""
   property string formMode: ""
   property string agentHost: "opencode"
@@ -56,10 +67,22 @@ Panel {
       if (workspaces[i].id === selectedWorkspaceId) return workspaces[i]
     return null
   }
+  readonly property bool scheduleAvailable: scheduleCommandsSupported && daemonProtocolVersion >= 25
+  readonly property var selectedSchedule: {
+    for (var i = 0; i < schedules.length; i++)
+      if (schedules[i].id === selectedScheduleId) return schedules[i]
+    return null
+  }
+  readonly property var selectedExecutions: executions.filter(function(execution) {
+    return execution.schedule_id === selectedScheduleId
+  })
+  readonly property var latestExecution: selectedExecutions.length > 0 ? selectedExecutions[0] : null
   readonly property var workspaceItems: buildWorkspaceItems()
-  readonly property int itemCount: activeTab === "agents" ? visibleAgents.length : workspaces.length
+  readonly property int itemCount: activeTab === "agents" ? visibleAgents.length
+    : (activeTab === "workspaces" ? workspaces.length : schedules.length)
   readonly property var selectedItem: {
-    var model = activeTab === "agents" ? visibleAgents : workspaces
+    var model = activeTab === "agents" ? visibleAgents
+      : (activeTab === "workspaces" ? workspaces : schedules)
     return selectedIndex >= 0 && selectedIndex < model.length ? model[selectedIndex] : null
   }
   readonly property int blockedCount: visibleAgents.filter(function(agent) {
@@ -75,19 +98,29 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  Component.onCompleted: capabilityProcess.running = true
+
   function refresh() {
     if (daemonStatusProcess.running) return
     daemonStatusProcess.running = true
   }
 
   function refreshData() {
-    if (workspaceListProcess.running || listProcess.running || agentProcess.running) return
+    if (workspaceListProcess.running || listProcess.running || agentProcess.running
+        || scheduleListProcess.running || executionListProcess.running) return
+    var loadSchedules = opened && activeTab === "schedules" && scheduleAvailable
     refreshing = true
-    refreshPending = 3
+    refreshPending = loadSchedules ? 5 : 3
     error = ""
+    if (loadSchedules) {
+      scheduleError = ""
+      executionError = ""
+    }
     workspaceListProcess.running = true
     listProcess.running = true
-    agentProcess.running = true
+    if (loadSchedules) {
+      scheduleListProcess.running = true
+    }
   }
 
   function setOffline(message) {
@@ -96,8 +129,15 @@ Panel {
     workspaces = []
     shells = []
     agents = []
+    schedules = []
+    executions = []
     workspaceDetail = null
     selectedWorkspaceId = ""
+    selectedScheduleId = ""
+    daemonProtocolVersion = 0
+    schedulerState = "offline"
+    schedulerActiveExecutions = 0
+    schedulerMaxConcurrent = 0
     previousAgentStates = ({})
     completedAgents = ({})
     automaticAttentionRevisions = ({})
@@ -112,6 +152,13 @@ Panel {
         setOffline("Boomux daemon is stopped")
         return
       }
+      daemonProtocolVersion = Number(data.protocol_version || 0)
+      schedulerState = data.scheduler && data.scheduler.state
+        ? String(data.scheduler.state) : "offline"
+      schedulerActiveExecutions = data.scheduler
+        ? Number(data.scheduler.active_executions || 0) : 0
+      schedulerMaxConcurrent = data.scheduler
+        ? Number(data.scheduler.max_concurrent || 0) : 0
       refreshData()
     } catch (exception) {
       setOffline("Boomux daemon is stopped")
@@ -123,6 +170,22 @@ Panel {
     if (response.schema !== "boomux.cli/v1" || response.command !== command || !response.data)
       throw new Error("unexpected Boomux response")
     return response.data
+  }
+
+  function parseCapabilities(raw) {
+    try {
+      var data = parseEnvelope(raw, "capabilities")
+      if (!Array.isArray(data.json_commands)) throw new Error("missing JSON commands")
+      var required = ["schedule.list", "schedule.pause", "schedule.resume",
+        "schedule.run", "execution.list", "execution.open"]
+      scheduleCommandsSupported = required.every(function(command) {
+        return data.json_commands.indexOf(command) >= 0
+      })
+    } catch (exception) {
+      scheduleCommandsSupported = false
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
+    capabilitiesReady = true
   }
 
   function parseWorkspaces(raw) {
@@ -205,6 +268,37 @@ Panel {
     }
   }
 
+  function parseSchedules(raw) {
+    try {
+      var data = parseEnvelope(raw, "schedule.list")
+      if (!Array.isArray(data.schedules)) throw new Error("missing schedules")
+      schedules = data.schedules
+      if (!selectedSchedule || selectedScheduleId === "")
+        selectedScheduleId = schedules.length > 0 ? String(schedules[0].id) : ""
+      syncScheduleIndex()
+      clampSelection()
+    } catch (exception) {
+      schedules = []
+      executions = []
+      selectedScheduleId = ""
+      scheduleError = "Could not read Boomux Schedules"
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
+  }
+
+  function parseExecutions(raw) {
+    try {
+      var data = parseEnvelope(raw, "execution.list")
+      if (!Array.isArray(data.executions)) throw new Error("missing executions")
+      executions = data.executions
+      executionError = ""
+    } catch (exception) {
+      executions = []
+      executionError = "Could not read the last Schedule run"
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
+  }
+
   function inspectWorkspace(workspaceId) {
     inspectRequestedId = String(workspaceId || "")
     if (inspectRequestedId === "" || workspaceInspectProcess.running) return
@@ -243,8 +337,18 @@ Panel {
     if (activeTab === tab) return
     activeTab = tab
     if (tab === "workspaces") syncWorkspaceIndex()
-    else selectedIndex = 0
+    else if (tab === "schedules") {
+      syncScheduleIndex()
+      refresh()
+    } else selectedIndex = 0
     cancelForm()
+  }
+
+  function cycleTab(direction) {
+    var tabs = ["agents", "workspaces", "schedules"]
+    var index = tabs.indexOf(activeTab)
+    var step = direction < 0 ? -1 : 1
+    selectTab(tabs[(index + step + tabs.length) % tabs.length])
   }
 
   function clampSelection() {
@@ -255,12 +359,14 @@ Panel {
     if (editing || itemCount === 0) return
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
     if (activeTab === "agents") agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
-    else workspaceList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    else if (activeTab === "workspaces") workspaceList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    else scheduleList.positionViewAtIndex(selectedIndex, ListView.Contain)
   }
 
   function activateSelected() {
     if (activeTab === "agents") openAgent(selectedItem)
-    else if (selectedItem) selectWorkspace(selectedItem.id)
+    else if (activeTab === "workspaces" && selectedItem) selectWorkspace(selectedItem.id)
+    else if (selectedItem) selectSchedule(selectedItem.id)
   }
 
   function selectWorkspace(workspaceId) {
@@ -274,6 +380,24 @@ Panel {
     if (activeTab !== "workspaces") return
     for (var i = 0; i < workspaces.length; i++) {
       if (workspaces[i].id === selectedWorkspaceId) {
+        selectedIndex = i
+        return
+      }
+    }
+    clampSelection()
+  }
+
+  function selectSchedule(scheduleId) {
+    selectedScheduleId = String(scheduleId)
+    executionError = ""
+    syncScheduleIndex()
+    refresh()
+  }
+
+  function syncScheduleIndex() {
+    if (activeTab !== "schedules") return
+    for (var i = 0; i < schedules.length; i++) {
+      if (schedules[i].id === selectedScheduleId) {
         selectedIndex = i
         return
       }
@@ -304,6 +428,7 @@ Panel {
     var detailShells = workspaceDetail.shells || []
     for (var i = 0; i < detailShells.length; i++) {
       var shell = detailShells[i]
+      if (shell.owner === "schedule") continue
       var agent = currentAgentForShell(shell)
       items.push({
         kind: agent ? "agent" : (shell.command && shell.command.length > 0 ? "command" : "shell"),
@@ -422,6 +547,73 @@ Panel {
     if (!bar) return
     bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux boomux")
     close()
+  }
+
+  function openExecution(execution) {
+    if (!execution || executionOpenProcess.running || actionProcess.running) return
+    actionMessage = "Opening last Schedule run..."
+    executionOpenProcess.command = ["boomux", "execution", "open", String(execution.id), "--json"]
+    executionOpenProcess.running = true
+  }
+
+  function executionCanOpen(execution) {
+    if (!execution) return false
+    return !!execution.agent_id
+      || ((execution.state === "starting" || execution.state === "active")
+        && daemonProtocolVersion >= 26 && !!execution.shell_id && !!execution.run_id)
+  }
+
+  function runSchedule(schedule) {
+    if (!schedule || actionProcess.running || executionOpenProcess.running) return
+    pendingAction = "run-schedule"
+    actionMessage = "Starting " + String(schedule.name) + "..."
+    actionProcess.command = ["boomux", "schedule", "run", String(schedule.id), "--json"]
+    actionProcess.running = true
+  }
+
+  function setSchedulePaused(schedule, paused) {
+    if (!schedule || actionProcess.running || executionOpenProcess.running) return
+    pendingAction = paused ? "pause-schedule" : "resume-schedule"
+    actionMessage = (paused ? "Pausing " : "Resuming ") + String(schedule.name) + "..."
+    actionProcess.command = ["boomux", "schedule", paused ? "pause" : "resume",
+      String(schedule.id), "--json"]
+    actionProcess.running = true
+  }
+
+  function formatTimestamp(timestamp) {
+    var value = Number(timestamp || 0)
+    return value > 0 ? Qt.formatDateTime(new Date(value), "MMM d, HH:mm") : "unknown"
+  }
+
+  function scheduleTiming(schedule) {
+    if (!schedule) return ""
+    if (schedule.state === "paused") return "no future dispatch"
+    if (schedule.next_occurrence && schedule.next_occurrence.scheduled_at_ms)
+      return "next " + formatTimestamp(schedule.next_occurrence.scheduled_at_ms)
+    return schedulerState === "active" ? "next occurrence unavailable" : "scheduler " + schedulerState
+  }
+
+  function executionDetail(execution) {
+    if (!execution) return ""
+    if (execution.reason) return String(execution.reason).split("_").join(" ")
+    if (execution.outcome) {
+      if (execution.outcome.kind === "exit_code") return "exit " + String(execution.outcome.code)
+      if (execution.outcome.kind === "signal") return "signal " + String(execution.outcome.signal)
+    }
+    return execution.dispatch_kind ? String(execution.dispatch_kind) : ""
+  }
+
+  function workspaceItemCount(workspaceId) {
+    var count = 0
+    for (var i = 0; i < shells.length; i++)
+      if (shells[i].workspace_id === workspaceId && shells[i].owner !== "schedule") count++
+    for (var j = 0; j < workspaces.length; j++)
+      if (workspaces[j].id === workspaceId) return count + Number(workspaces[j].launcher_count || 0)
+    return count
+  }
+
+  function workspaceActiveAgentCount(workspaceId) {
+    return visibleAgents.filter(function(agent) { return agent.workspace_id === workspaceId }).length
   }
 
   function agentDisplayName(agent) {
@@ -573,6 +765,20 @@ Panel {
   }
 
   Process {
+    id: capabilityProcess
+    command: ["boomux", "capabilities", "--json"]
+    stdout: StdioCollector { id: capabilityStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.parseCapabilities(capabilityStdout.text)
+      else {
+        root.capabilitiesReady = true
+        root.scheduleCommandsSupported = false
+      }
+      if (root.opened && root.activeTab === "schedules") root.refresh()
+    }
+  }
+
+  Process {
     id: daemonStatusProcess
     command: ["boomux", "daemon", "status", "--json"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseDaemonStatus(text) }
@@ -599,7 +805,14 @@ Panel {
     id: listProcess
     command: ["boomux", "list", "--json"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseShells(text) }
-    onExited: function(exitCode) { root.finishRefresh() }
+    onExited: function(exitCode) {
+      root.finishRefresh()
+      if (exitCode === 0 && !agentProcess.running) agentProcess.running = true
+      else if (exitCode !== 0) {
+        root.agents = []
+        root.finishRefresh()
+      }
+    }
   }
 
   Process {
@@ -607,6 +820,50 @@ Panel {
     command: ["boomux", "agent", "list", "--json"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseAgents(text) }
     onExited: function(exitCode) { root.finishRefresh() }
+  }
+
+
+  Process {
+    id: scheduleListProcess
+    command: ["boomux", "schedule", "list", "--json"]
+    stdout: StdioCollector { id: scheduleListStdout; waitForEnd: true }
+    stderr: StdioCollector { id: scheduleListStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.finishRefresh()
+      if (exitCode === 0) {
+        root.parseSchedules(scheduleListStdout.text)
+        if (root.selectedScheduleId !== "") {
+          executionListProcess.command = ["boomux", "execution", "list", "--schedule",
+            root.selectedScheduleId, "--limit", "1", "--json"]
+          executionListProcess.running = true
+        } else {
+          root.executions = []
+          root.finishRefresh()
+        }
+      } else {
+        root.schedules = []
+        root.executions = []
+        root.selectedScheduleId = ""
+        root.scheduleError = root.processError(scheduleListStderr.text || scheduleListStdout.text,
+          "Could not read Boomux Schedules")
+        root.finishRefresh()
+      }
+    }
+  }
+
+  Process {
+    id: executionListProcess
+    stdout: StdioCollector { id: executionListStdout; waitForEnd: true }
+    stderr: StdioCollector { id: executionListStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.finishRefresh()
+      if (exitCode === 0) root.parseExecutions(executionListStdout.text)
+      else {
+        root.executions = []
+        root.executionError = root.processError(executionListStderr.text || executionListStdout.text,
+          "Could not read the last Schedule run")
+      }
+    }
   }
 
   Process {
@@ -636,6 +893,9 @@ Panel {
       else if (action === "create-shell") root.actionMessage = "Shell added"
       else if (action === "create-agent") root.actionMessage = "Starting " + root.agentHost + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
+      else if (action === "run-schedule") root.actionMessage = "Schedule execution started"
+      else if (action === "pause-schedule") root.actionMessage = "Schedule paused"
+      else if (action === "resume-schedule") root.actionMessage = "Schedule resumed"
       else root.actionMessage = "Workspace opened"
       root.refresh()
     }
@@ -653,6 +913,21 @@ Panel {
       if (agent) {
         root.clearCompletedAgent(agent.id)
         root.acknowledgeAgent(agent)
+      }
+      root.actionMessage = ""
+      root.close()
+    }
+  }
+
+  Process {
+    id: executionOpenProcess
+    stdout: StdioCollector { id: executionOpenStdout; waitForEnd: true }
+    stderr: StdioCollector { id: executionOpenStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.actionMessage = root.processError(executionOpenStderr.text || executionOpenStdout.text,
+          "Could not open the last Schedule run")
+        return
       }
       root.actionMessage = ""
       root.close()
@@ -744,12 +1019,13 @@ Panel {
       onActivateRequested: root.activateSelected()
       onCloseRequested: root.close()
       onTabRequested: function(direction) {
-        root.selectTab(root.activeTab === "agents" ? "workspaces" : "agents")
+        root.cycleTab(direction)
       }
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refresh()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
+        else if (text === "3") root.selectTab("schedules")
         else if (text === "n" || text === "N") root.showForm("workspace")
         else if ((text === "d" || text === "D") && root.activeTab === "agents")
           root.dismissAgent(root.selectedItem)
@@ -795,7 +1071,7 @@ Panel {
           width: parent.width
           spacing: Style.space(6)
           Button {
-            width: (parent.width - parent.spacing) / 2
+            width: (parent.width - parent.spacing * 2) / 3
             text: "Agents"
             iconText: ""
             selected: root.activeTab === "agents"
@@ -805,7 +1081,7 @@ Panel {
             onClicked: root.selectTab("agents")
           }
           Button {
-            width: (parent.width - parent.spacing) / 2
+            width: (parent.width - parent.spacing * 2) / 3
             text: "Workspaces"
             iconText: ""
             selected: root.activeTab === "workspaces"
@@ -813,6 +1089,16 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: root.selectTab("workspaces")
+          }
+          Button {
+            width: (parent.width - parent.spacing * 2) / 3
+            text: "Schedules"
+            iconText: ""
+            selected: root.activeTab === "schedules"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.selectTab("schedules")
           }
         }
 
@@ -1037,11 +1323,13 @@ Panel {
                   }
                   Text {
                     width: parent.width
-                    text: (modelData.shell_count + modelData.launcher_count) + " items · "
-                      + modelData.agent_count + " agents"
+                    text: root.workspaceItemCount(modelData.id) + " items · "
+                      + Number(modelData.schedule_count || 0) + " schedules · "
+                      + root.workspaceActiveAgentCount(modelData.id) + " active agents"
                     color: modelData.attention_count > 0 ? root.urgent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
                   }
                 }
                 MouseArea {
@@ -1212,6 +1500,318 @@ Panel {
                   }
                 }
               }
+            }
+          }
+        }
+
+        Item {
+          visible: root.activeTab === "schedules" && !root.editing
+          width: parent.width
+          implicitHeight: scheduleColumn.implicitHeight
+
+          Column {
+            id: scheduleColumn
+            width: parent.width
+            spacing: Style.space(6)
+
+            Row {
+              width: parent.width
+              PanelSectionHeader {
+                width: parent.width - schedulerStatus.width
+                anchors.verticalCenter: parent.verticalCenter
+                text: "SCHEDULES"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+              Text {
+                id: schedulerStatus
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.schedulerState === "active"
+                  ? root.schedulerActiveExecutions + "/" + root.schedulerMaxConcurrent + " active"
+                  : root.schedulerState
+                color: root.schedulerState === "active" ? Color.accent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Text {
+              visible: !root.capabilitiesReady || !root.scheduleAvailable || !root.online
+              width: parent.width
+              text: !root.capabilitiesReady ? "Checking Boomux Schedule support..."
+                : (!root.scheduleCommandsSupported ? "Upgrade Boomux to a Schedule-capable release"
+                  : (root.daemonProtocolVersion < 25 ? "Restart Boomux with daemon protocol 25 or newer"
+                    : (root.error !== "" ? root.error : "Boomux daemon is stopped")))
+              color: root.daemonProtocolVersion > 0 && root.daemonProtocolVersion < 25 ? root.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              topPadding: Style.space(24)
+              bottomPadding: Style.space(24)
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              visible: root.scheduleAvailable && root.online && root.schedules.length === 0
+              width: parent.width
+              text: root.scheduleError !== "" ? root.scheduleError : "No Boomux Schedules"
+              color: root.scheduleError !== "" ? root.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              topPadding: Style.space(20)
+              bottomPadding: Style.space(20)
+              wrapMode: Text.Wrap
+            }
+
+            ListView {
+              id: scheduleList
+              visible: root.scheduleAvailable && root.online && root.schedules.length > 0
+              width: parent.width
+              implicitHeight: Math.min(contentHeight, Style.space(190))
+              model: root.schedules
+              spacing: Style.space(3)
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              currentIndex: root.activeTab === "schedules" ? root.selectedIndex : -1
+              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+              delegate: Rectangle {
+                required property var modelData
+                required property int index
+                width: ListView.view.width
+                height: Style.space(58)
+                radius: Style.cornerRadius
+                color: modelData.id === root.selectedScheduleId
+                  ? Style.selectedFillFor(root.foreground, Color.accent)
+                  : (scheduleMouse.containsMouse
+                    ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                    : "transparent")
+                Text {
+                  id: scheduleGlyph
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData.state === "enabled" ? "●" : "○"
+                  color: modelData.state === "enabled" ? Color.accent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+                Column {
+                  anchors.left: scheduleGlyph.right
+                  anchors.leftMargin: Style.space(10)
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(2)
+                  Text {
+                    width: parent.width
+                    text: String(modelData.workspace_name) + " / " + String(modelData.name)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: modelData.id === root.selectedScheduleId
+                    elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width
+                    text: String(modelData.state) + " · " + root.scheduleTiming(modelData)
+                    color: modelData.state === "enabled" ? Color.accent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+                MouseArea {
+                  id: scheduleMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onEntered: root.selectedIndex = index
+                  onClicked: root.selectSchedule(modelData.id)
+                }
+              }
+            }
+
+            BorderSurface {
+              visible: root.selectedSchedule !== null && root.scheduleAvailable && root.online
+              width: parent.width
+              implicitHeight: scheduleDetailColumn.implicitHeight + Style.space(18)
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.025)
+              borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+              radius: Style.cornerRadius
+
+              Column {
+                id: scheduleDetailColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(9)
+                spacing: Style.space(5)
+
+                Text {
+                  width: parent.width
+                  text: root.selectedSchedule ? String(root.selectedSchedule.name) : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedSchedule
+                    ? root.compactPath(root.selectedSchedule.cwd) + " · "
+                      + String(root.selectedSchedule.integration) + " · "
+                      + String(root.selectedSchedule.session_mode)
+                    : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideMiddle
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedSchedule
+                    ? String(root.selectedSchedule.cron) + " · " + String(root.selectedSchedule.timezone)
+                    : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+                  Button {
+                    width: (parent.width - parent.spacing) / 2
+                    text: "Run Now"
+                    iconText: "▶"
+                    tooltipText: "Start one execution now"
+                    bordered: true
+                    active: true
+                    enabled: !actionProcess.running && !executionOpenProcess.running
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    iconSize: Style.font.caption
+                    onClicked: root.runSchedule(root.selectedSchedule)
+                  }
+                  Button {
+                    width: (parent.width - parent.spacing) / 2
+                    text: root.selectedSchedule && root.selectedSchedule.state === "paused" ? "Resume" : "Pause"
+                    iconText: root.selectedSchedule && root.selectedSchedule.state === "paused" ? "▶" : "Ⅱ"
+                    tooltipText: root.selectedSchedule && root.selectedSchedule.state === "paused"
+                      ? "Enable future timed dispatch" : "Pause future timed dispatch"
+                    bordered: true
+                    enabled: !actionProcess.running && !executionOpenProcess.running
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    iconSize: Style.font.caption
+                    onClicked: root.setSchedulePaused(root.selectedSchedule,
+                      root.selectedSchedule && root.selectedSchedule.state !== "paused")
+                  }
+                }
+
+                PanelSectionHeader {
+                  width: parent.width
+                  text: "LAST RUN"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+                Text {
+                  visible: root.executionError !== ""
+                  width: parent.width
+                  text: root.executionError
+                  color: root.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  horizontalAlignment: Text.AlignHCenter
+                  wrapMode: Text.Wrap
+                }
+                Text {
+                  visible: root.latestExecution === null && root.executionError === ""
+                  width: parent.width
+                  text: "No runs yet"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  horizontalAlignment: Text.AlignHCenter
+                  topPadding: Style.space(8)
+                  bottomPadding: Style.space(8)
+                }
+                Rectangle {
+                  visible: root.latestExecution !== null
+                  width: parent.width
+                  height: Style.space(54)
+                  radius: Style.cornerRadius
+                  color: lastRunMouse.containsMouse && root.executionCanOpen(root.latestExecution)
+                    ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                    : "transparent"
+                  Text {
+                    id: executionGlyph
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(7)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.latestExecution
+                      && (root.latestExecution.state === "active" || root.latestExecution.state === "starting") ? "●" : "○"
+                    color: root.latestExecution
+                      && (root.latestExecution.state === "dispatch_failed" || root.latestExecution.state === "interrupted")
+                      ? root.urgent
+                      : (root.latestExecution
+                        && (root.latestExecution.state === "active" || root.latestExecution.state === "starting")
+                        ? Color.accent : root.dim)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Column {
+                    anchors.left: executionGlyph.right
+                    anchors.leftMargin: Style.space(9)
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(7)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(1)
+                    Text {
+                      width: parent.width
+                      text: root.latestExecution ? String(root.latestExecution.state) + " · "
+                        + root.formatTimestamp(root.latestExecution.started_at_ms || root.latestExecution.requested_at_ms) : ""
+                      color: root.latestExecution
+                        && (root.latestExecution.state === "dispatch_failed" || root.latestExecution.state === "interrupted")
+                        ? root.urgent : root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+                    Text {
+                      width: parent.width
+                      text: root.latestExecution
+                        ? root.executionDetail(root.latestExecution)
+                          + (root.executionCanOpen(root.latestExecution) ? " · click to open" : " · unavailable")
+                        : ""
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+                  }
+                  MouseArea {
+                    id: lastRunMouse
+                    anchors.fill: parent
+                    enabled: root.executionCanOpen(root.latestExecution)
+                      && !executionOpenProcess.running && !actionProcess.running
+                    hoverEnabled: true
+                    onClicked: root.openExecution(root.latestExecution)
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.scheduleAvailable && root.online && root.schedules.length > 0
+              width: parent.width
+              text: "Enter selects · Tab switches · R refreshes"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
             }
           }
         }
