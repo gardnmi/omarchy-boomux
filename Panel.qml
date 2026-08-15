@@ -36,6 +36,7 @@ Panel {
   property bool capabilitiesReady: false
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
+  property bool shellNameSuggestionSupported: false
   property bool projectRootsConfigured: false
   property int daemonProtocolVersion: 0
   property string schedulerState: "offline"
@@ -61,6 +62,9 @@ Panel {
   property int selectedProjectIndex: 0
   property string projectError: ""
   property bool cwdIsExact: false
+  property bool nameFieldEdited: false
+  property string suggestedNameRequestedWorkspaceId: ""
+  property string suggestedNameActiveWorkspaceId: ""
   property bool directoryPickerOpen: false
   property string directoryPickerPath: ""
   property int directoryPickerIndex: 0
@@ -204,9 +208,11 @@ Panel {
         return data.json_commands.indexOf(command) >= 0
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
+      shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
     } catch (exception) {
       scheduleCommandsSupported = false
       projectListSupported = false
+      shellNameSuggestionSupported = false
       console.warn("io.github.gardnmi.boomux:", exception)
     }
     capabilitiesReady = true
@@ -379,6 +385,35 @@ Panel {
     if (visibleProjects.length === 0) return
     selectedProjectIndex = Math.max(0, Math.min(selectedProjectIndex + delta, visibleProjects.length - 1))
     projectList.positionViewAtIndex(selectedProjectIndex, ListView.Contain)
+  }
+
+  function requestShellNameSuggestion() {
+    if (!shellNameSuggestionSupported || !workspaceDetail
+        || (formMode !== "shell" && formMode !== "agent")) return
+    suggestedNameRequestedWorkspaceId = String(workspaceDetail.id)
+    if (!shellNameSuggestionProcess.running) startShellNameSuggestion()
+  }
+
+  function startShellNameSuggestion() {
+    if (suggestedNameRequestedWorkspaceId === "") return
+    suggestedNameActiveWorkspaceId = suggestedNameRequestedWorkspaceId
+    shellNameSuggestionProcess.command = ["boomux", "shell", "suggest-name",
+      suggestedNameActiveWorkspaceId, "--json"]
+    shellNameSuggestionProcess.running = true
+  }
+
+  function parseShellNameSuggestion(raw) {
+    try {
+      var data = parseEnvelope(raw, "shell.suggest-name")
+      if (typeof data.workspace_id !== "string" || data.workspace_id !== suggestedNameActiveWorkspaceId
+          || typeof data.name !== "string" || data.name.trim() === "")
+        throw new Error("invalid shell name suggestion")
+      if ((formMode === "shell" || formMode === "agent") && workspaceDetail
+          && workspaceDetail.id === data.workspace_id && !nameFieldEdited
+          && nameField.text === "") nameField.text = data.name
+    } catch (exception) {
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
   }
 
   function inspectWorkspace(workspaceId) {
@@ -815,6 +850,7 @@ Panel {
   function showForm(mode) {
     formMode = mode
     actionMessage = ""
+    nameFieldEdited = false
     nameField.text = ""
     cwdIsExact = !!(mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd)
     cwdField.text = mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd
@@ -825,7 +861,7 @@ Panel {
       selectedProjectIndex = 0
       workspaceCreationMode = projectListSupported ? "project" : "custom"
       if (projectListSupported) loadProjects()
-    }
+    } else requestShellNameSuggestion()
     Qt.callLater(function() {
       if (mode === "workspace" && workspaceCreationMode === "project") projectSearchField.forceActiveFocus()
       else nameField.forceActiveFocus()
@@ -834,6 +870,7 @@ Panel {
 
   function cancelForm() {
     directoryPickerOpen = false
+    suggestedNameRequestedWorkspaceId = ""
     formMode = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -985,6 +1022,21 @@ Panel {
         root.projectError = root.processError(projectListStderr.text || projectListStdout.text,
           "Could not discover configured projects")
       }
+    }
+  }
+
+  Process {
+    id: shellNameSuggestionProcess
+    stdout: StdioCollector { id: shellNameSuggestionStdout; waitForEnd: true }
+    stderr: StdioCollector { id: shellNameSuggestionStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.parseShellNameSuggestion(shellNameSuggestionStdout.text)
+      else console.warn("io.github.gardnmi.boomux:", root.processError(
+        shellNameSuggestionStderr.text || shellNameSuggestionStdout.text,
+        "Could not suggest a shell name"))
+      if (root.suggestedNameRequestedWorkspaceId !== ""
+          && root.suggestedNameRequestedWorkspaceId !== root.suggestedNameActiveWorkspaceId)
+        root.startShellNameSuggestion()
     }
   }
 
@@ -1653,6 +1705,7 @@ Panel {
               width: parent.width
               placeholderText: root.formMode === "workspace" ? "Workspace name" : "Shell name"
               foreground: root.foreground
+              onTextEdited: root.nameFieldEdited = true
               onAccepted: cwdField.forceActiveFocus()
               Keys.onEscapePressed: root.cancelForm()
             }

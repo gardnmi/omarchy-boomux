@@ -22,7 +22,7 @@ publication.
 
 ## Supported Contract
 
-- Minimum Boomux version: `0.17.0`
+- Minimum Boomux version: `0.18.0`
 - Stable JSON envelope: `boomux.cli/v1`
 - Current tested daemon protocol: 27
 - Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations
@@ -35,6 +35,11 @@ never infer IDs from names, terminal output, process names, or list order.
 Project suggestions come only from advertised `project.list` JSON data. Keep
 project discovery passive and on-demand; do not parse Boomux configuration or
 reimplement its filesystem scanner in the plugin.
+
+Shell-name suggestions come only from advertised `shell.suggest-name` JSON data
+for the exact workspace ID. They are unreserved UI defaults: keep them editable,
+never overwrite user input with a delayed response, and let creation enforce
+uniqueness.
 
 Preserve exact argument arrays. Do not join stored commands and pass them
 through a shell. Do not invoke Boomux private transport commands.
