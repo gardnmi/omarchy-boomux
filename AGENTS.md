@@ -12,7 +12,7 @@ about operations that can start processes or take over terminals.
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
 - `assets/bomb-spark.svg`: fixed yellow attention spark
 - `preview.png`: root marketplace preview
-- `assets/agents.png`, `assets/workspaces.png`: README screenshots
+- `assets/agents.png`, `assets/workspaces.png`, `assets/schedules.png`: README screenshots
 - `deploy-local.sh`: development-only deployment helper
 - `THIRD_PARTY_NOTICES.md`: Font Awesome attribution
 
@@ -36,12 +36,14 @@ through a shell. Do not invoke Boomux private transport commands.
 
 ## Runtime Model
 
-The panel has two top-level views:
+The panel has three top-level views:
 
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
   durable attention; schedule-owned Agents are excluded by shell ownership
 - **Workspaces**: a flat workspace selector and a separate selected-workspace
   detail surface
+- **Schedules**: a global Schedule selector with prompt-free details, bounded
+  latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 
 Workspace items are projected as:
 
@@ -49,6 +51,10 @@ Workspace items are projected as:
 - `shell`: a login shell
 - `command`: a shell with a stored exact command vector
 - `launcher`: a detached workspace launcher
+
+Schedule-owned shells are private runner infrastructure. Exclude them from
+ordinary workspace items and exclude their Agents from the Agents view. Keep
+Schedule, execution, shell, run, and Agent IDs distinct.
 
 Agent creation means creating and opening an `opencode` or `pi` command-backed
 shell. The lifecycle integration registers the authoritative Agent later. The
@@ -73,6 +79,17 @@ plugin must never fabricate an Agent registration or lifecycle observation.
   that does not pretend the shell is retained.
 - Never overwrite user configuration or install/replace Boomux integrations
   from the widget.
+- Gate Schedule polling and actions on advertised JSON commands plus daemon
+  protocol 25 or newer. Poll only after the passive daemon-status check.
+- Treat **Run Now** as explicit authorization to start Agent and tool activity.
+  Pause affects future dispatch only and must not be presented as cancellation.
+- Do not fetch Schedule prompts. Do not infer Agent lifecycle from execution
+  state or outcome, and do not use execution failures to light the Agent spark.
+- Open only through public `boomux execution open <exact-execution-id>`, which
+  revalidates exact-run attachment or exact linked-session resume. Do not open
+  Schedule runner shells directly.
+- Do not expose execution Cancel, Schedule Remove, or Schedule Edit until their
+  public exact-ID safety and confirmation flows are implemented.
 
 ## UI Conventions
 
@@ -100,9 +117,10 @@ an actionable message in the panel. Boomux JSON errors use `error.code` for
 program logic; messages are suitable only for display.
 
 Polling currently checks daemon status once per second and fetches Agent, shell,
-and workspace snapshots only while the daemon is running. A future event-driven
-implementation should retain the passive-daemon invariant and handle cursor
-expiry by reacquiring a baseline.
+and workspace snapshots only while the daemon is running. Schedule and latest
+execution snapshots are fetched only while the Schedules tab is open. A future
+event-driven implementation should retain the passive-daemon invariant and
+handle cursor expiry by reacquiring a baseline.
 
 Workspace inspection must preserve selection by stable workspace ID. If a new
 selection arrives while an inspection is running, issue the latest requested
@@ -147,7 +165,7 @@ work here.
 - `preview.png` is the marketplace image; keep it in the repository root.
 - README image URLs should use stable files under `assets/`. Use a new filename
   if GitHub serves stale image content for an unchanged path.
-- Show both Agents and Workspaces views after meaningful UI changes.
+- Show Agents, Workspaces, and Schedules views after meaningful UI changes.
 - Do not expose personal absolute paths, secrets, private session titles, or
   terminal contents.
 - To demonstrate the yellow spark, temporarily force the **deployed test copy**

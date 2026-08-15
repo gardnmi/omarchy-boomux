@@ -1,7 +1,7 @@
 # Boomux for Omarchy
 
-Monitor interactive Boomux Agents and manage native-terminal workspaces without
-leaving the Omarchy bar.
+Monitor interactive Boomux Agents, manage native-terminal workspaces, and
+operate recurring Agent Schedules without leaving the Omarchy bar.
 
 ![Boomux Agent status in the Omarchy bar](assets/agents.png)
 
@@ -18,11 +18,15 @@ leaving the Omarchy bar.
 - Starts new OpenCode or Pi command shells and lets their lifecycle integration
   register the Agent
 - Acknowledges current durable attention when you open its Agent
+- Lists Schedules across workspaces with scheduler status and their latest run
+- Runs Schedules immediately and pauses or resumes future timed dispatch
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
 - Polls local Boomux state once per second for responsive updates
 
 ![Boomux workspace management in the Omarchy bar](assets/workspaces.png)
+
+![Boomux Schedule management in the Omarchy bar](assets/schedules.png)
 
 ## Requirements
 
@@ -70,9 +74,9 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | --- | --- |
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
-| Tab or `1` / `2` | Switch between Agents and Workspaces |
-| Up / Down | Select an Agent or workspace |
-| Enter | Open a selected Agent or load the selected workspace details |
+| Tab or `1` / `2` / `3` | Switch between Agents, Workspaces, and Schedules |
+| Up / Down | Select an Agent, workspace, or Schedule |
+| Enter | Open a selected Agent or select a workspace or Schedule |
 | `D` | Dismiss the selected Agent notification |
 | `N` | Create a workspace |
 | `R` | Refresh immediately |
@@ -104,6 +108,18 @@ Durable attention is acknowledged with the exact Agent ID and observation
 revision. Blocked attention is also acknowledged when that Agent reports it is
 working again. Failed acknowledgements remain visible for manual dismissal.
 
+The **Schedules** surface activates only when the installed CLI advertises the
+required JSON commands and the running daemon supports protocol 25 or newer.
+Schedule rows show their durable paused or enabled state and next occurrence.
+The detail surface shows prompt-free configuration and the latest retained run.
+Clicking that run asks Boomux to open its exact active shell run or resume its
+exact linked Agent Session; it never restarts the private Schedule runner shell
+or substitutes a later run. **Run Now** can start an Agent and its permitted
+tool, filesystem, and network activity even while a Schedule is paused.
+**Pause** prevents future timed dispatch but does not cancel active work;
+**Resume** plans future occurrences without catching up paused time. Execution
+failures do not change the bomb's Agent-attention spark.
+
 ## Update
 
 ```bash
@@ -126,7 +142,10 @@ and data.
 
 - The plugin checks local daemon status once per second without starting it. If
   Boomux is already running, it polls Agent, shell, and workspace state once per
-  second and inspects the selected workspace.
+  second and inspects the selected workspace. Schedule definitions and the
+  prompt-free latest run are polled only while the Schedules tab is open.
+- The passive `boomux capabilities --json` check gates Schedule support. The
+  plugin never requests or displays persisted Schedule prompts.
 - It makes no network requests and does not read or store credentials.
 - It does not modify Boomux or Omarchy configuration directly.
 - After an Agent terminal opens successfully, its notification is explicitly
@@ -139,6 +158,10 @@ and data.
   existing launchers. Workspace restore can run commands, open native
   terminals, disconnect existing writable terminal controllers, and restart
   exited shells.
+- Schedule actions can start Agent processes and pause or resume future timed
+  dispatch. Opening the latest run can attach its exact active run or launch its
+  harness to resume the exact linked session. Schedule actions do not edit
+  prompts, cancel executions, or remove Schedules.
 
 ## Troubleshooting
 
