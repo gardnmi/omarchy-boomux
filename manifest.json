@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "author": "Mike Gardner",
   "license": "MIT AND CC-BY-4.0",
   "description": "Monitor Agents and manage Boomux workspaces and Schedules from the Omarchy bar.",

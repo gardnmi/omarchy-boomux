@@ -15,7 +15,8 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 - Lists workspaces and their Agent, shell, command, and launcher items
 - Opens complete workspaces or individual managed items
 - Removes individual workspace items after confirming their specific impact
-- Creates workspaces and pending login shells
+- Creates workspaces from configured project suggestions or a custom directory
+- Opens an in-panel directory picker for workspace, shell, and Agent directories
 - Starts new OpenCode or Pi command shells and lets their lifecycle integration
   register the Agent
 - Acknowledges current durable attention when you open its Agent
@@ -32,7 +33,7 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.16.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.17.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
@@ -90,6 +91,22 @@ workspace list. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
 terminal size and input stream.
+
+**New Workspace** opens with the same projects Boomux discovers from configured
+`[projects].roots`. Search and select a project to use its canonical name and
+path, or choose **Custom** to enter an unrelated workspace name and optional
+default directory. **Browse** opens a bounded local directory browser and fills
+the exact selected path; manual path entry remains available. Choosing a project
+or directory does not create or start anything until **Create** is pressed.
+Configure the suggestions in Boomux, for example:
+
+```toml
+[projects]
+roots = ["~/Projects", "~/Work"]
+max_depth = 3
+```
+
+![Boomux configured project picker](assets/projects.png)
 
 Each workspace item has a **Remove** button. Removing a shell, command, or Agent
 item closes its exact backing shell, terminates it if running, and deletes its
@@ -153,8 +170,12 @@ and data.
   second and inspects the selected workspace. Schedule definitions and the
   prompt-free latest run are polled only while the Schedules tab is open.
 - The passive `boomux capabilities --json` check gates Schedule support. The
-  plugin never requests or displays persisted Schedule prompts.
+  plugin never requests or displays persisted Schedule prompts. When New
+  Workspace opens, the advertised passive `boomux project list --json` command
+  scans configured roots without contacting or starting the daemon.
 - It makes no network requests and does not read or store credentials.
+- The directory browser reads names of local readable subdirectories only while
+  it is open; it does not read file contents or send paths elsewhere.
 - It does not modify Boomux or Omarchy configuration directly.
 - After an Agent terminal opens successfully, its notification is explicitly
   dismissed, or a blocked Agent reports `working` again, the plugin can run the

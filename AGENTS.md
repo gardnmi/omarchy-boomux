@@ -12,7 +12,8 @@ about operations that can start processes or take over terminals.
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
 - `assets/bomb-spark.svg`: fixed yellow attention spark
 - `preview.png`: root marketplace preview
-- `assets/agents.png`, `assets/workspaces.png`, `assets/schedules.png`: README screenshots
+- `assets/agents.png`, `assets/workspaces.png`, `assets/projects.png`,
+  `assets/schedules.png`: README screenshots
 - `deploy-local.sh`: development-only deployment helper
 - `THIRD_PARTY_NOTICES.md`: Font Awesome attribution
 
@@ -21,7 +22,7 @@ publication.
 
 ## Supported Contract
 
-- Minimum Boomux version: `0.16.0`
+- Minimum Boomux version: `0.17.0`
 - Stable JSON envelope: `boomux.cli/v1`
 - Current tested daemon protocol: 27
 - Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations
@@ -30,6 +31,10 @@ Parse JSON only from commands advertised by `boomux capabilities --json`.
 Validate `schema`, `command`, and expected `data` fields. Use exact workspace,
 shell, launcher, Agent, run, and observation-revision IDs returned by Boomux;
 never infer IDs from names, terminal output, process names, or list order.
+
+Project suggestions come only from advertised `project.list` JSON data. Keep
+project discovery passive and on-demand; do not parse Boomux configuration or
+reimplement its filesystem scanner in the plugin.
 
 Preserve exact argument arrays. Do not join stored commands and pass them
 through a shell. Do not invoke Boomux private transport commands.
