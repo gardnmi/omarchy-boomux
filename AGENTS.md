@@ -21,7 +21,7 @@ publication.
 
 ## Supported Contract
 
-- Minimum Boomux version: `0.15.0`
+- Minimum Boomux version: `0.16.0`
 - Stable JSON envelope: `boomux.cli/v1`
 - Current tested daemon protocol: 27
 - Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations

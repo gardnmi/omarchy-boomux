@@ -31,7 +31,7 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.15.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.16.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
