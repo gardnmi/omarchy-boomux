@@ -21,9 +21,9 @@ publication.
 
 ## Supported Contract
 
-- Minimum Boomux version: `0.14.0`
+- Minimum Boomux version: `0.15.0`
 - Stable JSON envelope: `boomux.cli/v1`
-- Current tested daemon protocol: 21
+- Current tested daemon protocol: 27
 - Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations
 
 Parse JSON only from commands advertised by `boomux capabilities --json`.
@@ -38,7 +38,8 @@ through a shell. Do not invoke Boomux private transport commands.
 
 The panel has two top-level views:
 
-- **Agents**: active Agents plus Agents with outstanding durable attention
+- **Agents**: active user-shell Agents plus user-shell Agents with outstanding
+  durable attention; schedule-owned Agents are excluded by shell ownership
 - **Workspaces**: a flat workspace selector and a separate selected-workspace
   detail surface
 

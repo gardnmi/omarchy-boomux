@@ -1,13 +1,14 @@
 # Boomux for Omarchy
 
-Monitor every Boomux Agent and manage native-terminal workspaces without leaving
-the Omarchy bar.
+Monitor interactive Boomux Agents and manage native-terminal workspaces without
+leaving the Omarchy bar.
 
 ![Boomux Agent status in the Omarchy bar](assets/agents.png)
 
 ## Features
 
 - Keeps active Agents in a dedicated status tab
+- Excludes schedule-owned Agents handled by Boomux scheduling
 - Shows live `working`, `idle`, and `blocked` Agent states
 - Highlights finished work and blocked attention in the bar
 - Keeps finished markers visible until you open the corresponding Agent
@@ -26,7 +27,7 @@ the Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.14.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.15.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
