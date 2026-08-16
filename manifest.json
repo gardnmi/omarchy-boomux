@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "author": "Mike Gardner",
   "license": "MIT AND CC-BY-4.0",
-  "description": "Monitor Agents and manage federated Boomux Nodes, workspaces, and Schedules from the Omarchy bar.",
+  "description": "Monitor Agents and manage global Boomux Workspaces across federated Nodes from the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {

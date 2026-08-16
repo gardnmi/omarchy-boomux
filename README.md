@@ -1,7 +1,8 @@
 # Boomux for Omarchy
 
-Monitor interactive Boomux Agents, manage local and federated native-terminal
-workspaces, and operate recurring Agent Schedules without leaving the Omarchy bar.
+Monitor interactive Boomux Agents, manage coordinator-owned global Workspaces
+across federated Nodes, and operate recurring Agent Schedules without leaving the
+Omarchy bar.
 
 ![Boomux Agent status in the Omarchy bar](assets/agents.png)
 
@@ -12,7 +13,8 @@ workspaces, and operate recurring Agent Schedules without leaving the Omarchy ba
 - Shows live `working`, `idle`, and `blocked` Agent states
 - Highlights finished work and blocked attention in the bar
 - Keeps finished markers visible until you open the corresponding Agent
-- Lists workspaces and their Agent, shell, command, and launcher items
+- Groups Shells, Agents, launchers, and Schedules by global Workspace task
+- Shows resources from multiple Node placements and their placement-specific paths
 - Opens complete workspaces or individual managed items
 - Removes individual workspace items after confirming their specific impact
 - Creates workspaces from configured project suggestions or a custom directory
@@ -26,8 +28,9 @@ workspaces, and operate recurring Agent Schedules without leaving the Omarchy ba
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
 - Polls local Boomux state once per second for responsive updates
-- Combines local and registered remote resources with `Node / Workspace / Resource` labels
-- Shows every Node health state without hiding cached stale resources
+- Keeps Node ownership as secondary metadata instead of a Node filter or Node-first label
+- Shows every placement and Node health state without hiding cached stale resources
+- Keeps equal-name unlinked Node-local Workspaces as distinct external Workspaces
 - Shows scheduler health independently per Node and disables owner-dependent
   actions while its state is stale or unavailable
 - Opens interactive **Add Node** setup only in a local native terminal
@@ -43,6 +46,12 @@ workspaces, and operate recurring Agent Schedules without leaving the Omarchy ba
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
+Boomux `0.19.0` is the planned first release containing protocol 38. Until that
+release is tagged, global Workspace support is branch-validated against Boomux
+PR 207 and requires a matching protocol-38 Boomux build. The currently installed
+`0.18.0` binary provides only the protocol-37 fallback and is not live evidence
+for global Workspace behavior.
+
 Workspace management works with Boomux alone. Agent states and Agent creation
 require the corresponding coding-agent executable and Boomux lifecycle
 integration. For OpenCode or Pi, run:
@@ -56,9 +65,10 @@ boomux integration setup pi
 The plugin does not automatically start a stopped Boomux daemon. Launch Boomux
 or open a managed workspace before using the panel.
 
-Federation activates only when the local CLI advertises the protocol 37 Node
-snapshot and exact-routing capabilities and the running local daemon can
-negotiate them. Older Boomux daemons retain the existing local-only panel.
+Global Workspace grouping activates only when the local CLI advertises the
+protocol 38 global Workspace and multi-placement capabilities and the running
+local daemon can negotiate them. Protocol 33 through 37 retain qualified
+owner-local Workspace rows; older Boomux daemons retain the local-only panel.
 
 Follow the setup command's restart and verification guidance. See the
 [Boomux installation instructions](https://github.com/gardnmi/boomux#install)
@@ -96,24 +106,29 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Escape | Close the panel |
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. Every resource row starts with its owning Node, such as
-`local / boomux / agent`. **Add Node** opens local interactive `boomux node add`
+window. **Add Node** remains beside it and opens local interactive `boomux node add`
 in a native terminal, where Boomux alone handles SSH authentication, remote
-install details, and confirmation. **New Workspace** remains a local action.
-Selecting a workspace shows its
-directory, items, and scoped **Open**, **Shell**, and **Agent** actions below the
+install details, and confirmation. Selecting a Workspace shows its Node
+placements, placement-specific directories and health, items, and scoped
+**Open**, **Shell**, and **Agent** actions below the
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
 terminal size and input stream.
 
-**New Workspace** opens with the same projects Boomux discovers from configured
+**New Workspace** creates coordinator metadata and opens with the same projects Boomux discovers from configured
 `[projects].roots`. Search and select a project to use its canonical name and
 path, or choose **Custom** to enter an unrelated workspace name and optional
 default directory. **Browse** opens a bounded local directory browser and fills
 the exact selected path; manual path entry remains available. Choosing a project
 or directory does not create or start anything until **Create** is pressed.
-Remote paths are never opened in the local directory browser. Any remote project
+For a project or custom directory, the plugin calls the single atomic
+`boomux workspace create-project --json` flow, which returns the exact global
+Workspace, owner Node, owner Workspace, and first Shell identities. Boomux
+revalidates the exact sole eligible Node selected by the UI; when several are
+eligible, the form requires an explicit Node choice and passes its exact ID. The
+panel never invents a default placement. Remote paths are never opened in the
+local directory browser. Any remote project
 or path data comes from Boomux's owner-routed `project list --node` service;
 unsupported remote creation controls stay disabled.
 
@@ -134,7 +149,9 @@ available for acknowledgement. Removing a launcher deletes only that launcher
 definition; applications it already launched keep running. Both operations ask
 for confirmation before changing the workspace.
 
-Opening a complete workspace starts immediately. Boomux invokes its launchers,
+Opening a complete global Workspace is one Boomux fan-out request. Available
+placements start immediately while unavailable placements remain visible and
+Boomux reports per-Node failures. Boomux invokes its launchers,
 takes over active terminal controllers, and restarts exited shells. Workspace
 restore is non-transactional, so some items can open even if another item fails.
 Opening an individual exited shell or command restarts its stored process.
@@ -145,7 +162,7 @@ Agent record after the coding-agent host starts; the plugin does not fabricate
 Agent lifecycle state.
 
 Shell and Agent forms request an unreserved generated name from Boomux for the
-exact selected workspace. The field remains editable, and typing is never
+exact selected owner placement when one already exists. The field remains editable, and typing is never
 overwritten by a delayed suggestion. Another client can claim the suggested
 name before creation; Boomux remains authoritative and reports that collision.
 
@@ -193,10 +210,11 @@ and data.
 ## Data And Privacy
 
 - The plugin checks only the local daemon status once per second without starting
-  it. On protocol 37 it consumes local `boomux node snapshot --json`, containing
-  rich local and bounded prompt-free cached remote state. It never polls a remote
-  host itself. Older daemons use the previous local Agent, shell, and workspace
-  commands. Prompt-free exact latest-run reads occur only in the Schedules tab.
+  it. On protocol 38 it consumes local `boomux node snapshot --json`, containing
+  coordinator Workspaces plus rich local and bounded prompt-free cached remote
+  state. It never polls a remote host itself. Protocol 37 snapshots fall back to
+  owner-local grouping; older daemons use the previous local Agent, shell, and
+  workspace commands. Prompt-free exact latest-run reads occur only in the Schedules tab.
 - The passive `boomux capabilities --json` check gates Schedule support. The
   plugin never requests or displays persisted Schedule prompts. When New
   Workspace opens, the advertised passive `boomux project list --json` command
@@ -232,7 +250,7 @@ and data.
 - Remote opens and mutations include the resource's structural Node identity.
   Stale rows remain visible but cannot launch, mutate, acknowledge, inspect
   private state, or start owner-side processes; offline writes are never queued.
-- The protocol 37 CLI does not expose Node context on attention acknowledgment,
+- Protocol 37 and older CLIs do not expose Node context on attention acknowledgment,
   workspace/shell creation, or destructive workspace/shell/launcher mutations.
   Those controls remain disabled for remote owners rather than dropping Node
   identity or accidentally applying an operation locally.
@@ -304,6 +322,7 @@ omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Panel.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
+bun test tests/workspace-model.test.js
 mise tasks
 git diff --check
 boomux --version
@@ -311,10 +330,11 @@ boomux capabilities --json
 boomux daemon status --json
 ```
 
-Protocol 37 live validation additionally needs two privacy-safe Nodes to verify
-duplicate names and inner IDs, health and reconnect behavior, keyboard and mouse
-selection, exact action routing, remote PTY attachment, Schedule controls, and
-reconnect attention presentation. Do not fabricate Node screenshots or use
+Protocol 38 live validation additionally needs two privacy-safe Nodes to verify
+multi-placement grouping, equal-name external collisions, mismatched paths,
+health and reconnect behavior, explicit creation placement, exact action routing,
+global fan-out, remote PTY attachment, Schedule controls, and reconnect attention
+presentation. Do not fabricate Node screenshots or use
 private paths, titles, prompts, terminal output, or targets.
 
 ## License

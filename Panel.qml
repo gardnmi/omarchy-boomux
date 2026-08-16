@@ -6,6 +6,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "WorkspaceModel.js" as WorkspaceModel
 
 Panel {
   id: root
@@ -36,9 +37,11 @@ Panel {
   property int refreshPending: 0
   property bool capabilitiesReady: false
   property bool federationSupported: false
+  property bool globalWorkspacesSupported: false
   property var cliFeatures: []
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
+  property bool projectWorkspaceCreationSupported: false
   property bool shellNameSuggestionSupported: false
   property bool projectRootsConfigured: false
   property int daemonProtocolVersion: 0
@@ -53,6 +56,7 @@ Panel {
   property var automaticAttentionRevisions: ({})
   property var pendingOpenAgent: null
   property string pendingOpenKey: ""
+  property string pendingOpenRunKey: ""
   property string pendingExecutionOpenKey: ""
   property var itemToRemove: null
   property string inspectRequestedKey: ""
@@ -68,8 +72,8 @@ Panel {
   property string projectError: ""
   property bool cwdIsExact: false
   property bool nameFieldEdited: false
-  property string suggestedNameRequestedWorkspaceKey: ""
-  property string suggestedNameActiveWorkspaceKey: ""
+  property var suggestedNameRequestedIdentity: null
+  property var suggestedNameActiveIdentity: null
   property bool directoryPickerOpen: false
   property string directoryPickerPath: ""
   property int directoryPickerIndex: 0
@@ -77,7 +81,9 @@ Panel {
   property var pendingAction: null
   property var pendingWorkspace: null
   property var pendingShell: null
-  property string projectNodeId: ""
+  property string projectRequestedNodeId: ""
+  property string projectActiveNodeId: ""
+  property string creationNodeId: ""
   property string executionRequestedScheduleKey: ""
   property string executionActiveScheduleKey: ""
   property int pollEpoch: 0
@@ -99,6 +105,15 @@ Panel {
   }
   readonly property bool scheduleAvailable: scheduleCommandsSupported && daemonProtocolVersion >= 25
   readonly property bool federationAvailable: federationSupported && daemonProtocolVersion >= 33
+  readonly property bool globalWorkspacesAvailable: globalWorkspacesSupported
+    && daemonProtocolVersion >= 38
+  readonly property var eligibleCreationNodes: WorkspaceModel.eligibleNodes(nodes)
+  readonly property var creationNode: {
+    if (!globalWorkspacesAvailable) return selectedCreationNode()
+    if (eligibleCreationNodes.length === 1) return eligibleCreationNodes[0]
+    var selected = nodeFor(creationNodeId)
+    return selected && selected.workspace_owner_eligible ? selected : null
+  }
   readonly property var selectedSchedule: {
     for (var i = 0; i < schedules.length; i++)
       if (schedules[i].key === selectedScheduleKey) return schedules[i]
@@ -172,13 +187,27 @@ Panel {
     return nodeIsActionable(nodeId, capability) ? ["--node", nodeId] : null
   }
 
+  function resourceIsActionable(resource, capability) {
+    return WorkspaceModel.resourceActionable(resource,
+      resource && nodeIsActionable(resource.node_id, capability))
+  }
+
   function selectedCreationNode() {
+    if (globalWorkspacesAvailable) return creationNode
     for (var i = 0; i < nodes.length; i++) if (nodes[i].local) return nodes[i]
     return { node_id: "local", alias: "local", local: true, current: online, stale: false }
   }
 
   function nodeName(item) {
     return String(item && item.node_alias ? item.node_alias : "local")
+  }
+
+  function workspaceOwnershipLabel(workspace) {
+    if (!workspace) return ""
+    if (workspace.is_global) return workspace.placements.length + " placement"
+      + (workspace.placements.length === 1 ? "" : "s")
+    return "Node: " + nodeName(workspace)
+      + (workspace.is_external ? " · external Workspace" : "")
   }
 
   function nodeHealthLabel(node) {
@@ -273,10 +302,7 @@ Panel {
   }
 
   function parseEnvelope(raw, command) {
-    var response = JSON.parse(String(raw || ""))
-    if (response.schema !== "boomux.cli/v1" || response.command !== command || !response.data)
-      throw new Error("unexpected Boomux response")
-    return response.data
+    return WorkspaceModel.parseEnvelope(String(raw || ""), command)
   }
 
   function parseCapabilities(raw) {
@@ -290,16 +316,22 @@ Panel {
         return data.json_commands.indexOf(command) >= 0
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
+      projectWorkspaceCreationSupported = data.json_commands.indexOf("workspace.create-project") >= 0
       shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
       federationSupported = data.json_commands.indexOf("node.snapshot") >= 0
         && cliFeatures.indexOf("combined_node_snapshot") >= 0
         && cliFeatures.indexOf("node_qualified_dashboard") >= 0
         && cliFeatures.indexOf("typed_exact_node_routing") >= 0
+      globalWorkspacesSupported = federationSupported
+        && cliFeatures.indexOf("global_workspaces") >= 0
+        && cliFeatures.indexOf("multi_node_workspace_placements") >= 0
     } catch (exception) {
       scheduleCommandsSupported = false
       projectListSupported = false
+      projectWorkspaceCreationSupported = false
       shellNameSuggestionSupported = false
       federationSupported = false
+      globalWorkspacesSupported = false
       cliFeatures = []
       console.warn("io.github.gardnmi.boomux:", exception)
     }
@@ -307,155 +339,42 @@ Panel {
   }
 
   function normalizeAgent(source, node, workspaceName) {
-    var id = resourceId(source.id)
-    var workspaceId = resourceId(source.workspace_id)
-    var shellId = resourceId(source.shell_id)
-    var runId = resourceId(source.run_id)
-    var observation = source.observation || {
-      revision: Number(source.observation_revision || 0),
-      state: String(source.state || "unknown"),
-      authority: "daemon_lifecycle",
-      evidence: node.local ? "" : "cached reduced observation",
-      confidence: 0,
-      observed_at_ms: Number(source.observed_at_ms || 0)
-    }
-    var attention = source.attention || null
-    if (attention && !attention.observation) attention = {
-      reason: attention.reason,
-      observation: {
-        revision: Number(attention.observation_revision || 0),
-        observed_at_ms: Number(attention.observed_at_ms || 0)
-      }
-    }
-    return Object.assign({}, source, {
-      id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
-      node_alias: node.alias, node_current: node.current, node_stale: node.stale,
-      workspace_id: workspaceId, workspace_key: resourceKey(node.node_id, workspaceId),
-      workspace_name: String(source.workspace_name || workspaceName || "unknown"),
-      shell_id: shellId, shell_key: resourceKey(node.node_id, shellId), run_id: runId,
-      observation: observation, attention: attention
-    })
+    return WorkspaceModel.normalizeAgent(source, node, workspaceName)
+  }
+
+  function normalizeShell(source, node, workspaceId, workspaceName, workspaceKey) {
+    return WorkspaceModel.normalizeShell(source, node, workspaceId, workspaceName, workspaceKey)
+  }
+
+  function normalizeLauncher(source, node, workspaceId, workspaceName, workspaceKey) {
+    return WorkspaceModel.normalizeLauncher(source, node, workspaceId, workspaceName, workspaceKey)
   }
 
   function normalizeSchedule(source, node, workspaceName) {
-    var id = resourceId(source.id)
-    var workspaceId = resourceId(source.workspace_id)
-    var trigger = source.trigger || {}
-    return Object.assign({}, source, {
-      id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
-      node_alias: node.alias, node_current: node.current, node_stale: node.stale,
-      workspace_id: workspaceId, workspace_key: resourceKey(node.node_id, workspaceId),
-      workspace_name: String(source.workspace_name || workspaceName || "unknown"),
-      cron: String(source.cron || trigger.cron || ""),
-      timezone: String(source.timezone || trigger.timezone || ""),
-      session_mode: source.session_mode || (source.session && source.session.continue ? "continue" : "fresh"),
-      cwd: source.cwd || (node.local ? "" : "remote path available on owner")
-    })
+    return WorkspaceModel.normalizeSchedule(source, node, workspaceName)
   }
 
   function normalizeExecution(source, node) {
-    var id = resourceId(source.id)
-    var scheduleId = resourceId(source.schedule_id)
-    return Object.assign({}, source, {
-      id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
-      node_alias: node.alias, node_current: node.current, node_stale: node.stale,
-      schedule_id: scheduleId, schedule_key: resourceKey(node.node_id, scheduleId),
-      workspace_id: resourceId(source.workspace_id), shell_id: resourceId(source.shell_id),
-      run_id: resourceId(source.run_id), agent_id: resourceId(source.agent_id)
-    })
+    return WorkspaceModel.normalizeExecution(source, node)
   }
 
   function parseNodeSnapshot(raw) {
     try {
       if (snapshotActiveEpoch !== pollEpoch) return
       var data = parseEnvelope(raw, "node.snapshot")
-      if (!Array.isArray(data.nodes)) throw new Error("missing Nodes")
-      var nextNodes = [], nextWorkspaces = [], nextShells = [], nextAgents = []
-      var nextSchedules = [], nextExecutions = []
-      for (var n = 0; n < data.nodes.length; n++) {
-        var rawNode = data.nodes[n]
-        if (!rawNode || typeof rawNode.node_id !== "string" || typeof rawNode.alias !== "string")
-          throw new Error("invalid Node")
-        var node = {
-          node_id: rawNode.node_id, alias: rawNode.alias, local: !!rawNode.local,
-          health: String(rawNode.health || "unobserved"), current: !!rawNode.current,
-          stale: !!rawNode.stale, observed_at_ms: Number(rawNode.observed_at_ms || 0),
-          observed_protocol_version: Number(rawNode.observed_protocol_version || 0),
-          observed_capabilities: Array.isArray(rawNode.observed_capabilities)
-            ? rawNode.observed_capabilities : [],
-          scheduler: rawNode.scheduler || { state: "offline", active_executions: 0, max_concurrent: 0 }
-        }
-        nextNodes.push(node)
-        var projection = node.local ? rawNode.local_snapshot : rawNode.remote_projection
-        if (!projection) continue
-        var projectedWorkspaces = projection.workspaces || []
-        var projectedShells = node.local ? [] : (projection.shells || [])
-        var projectedLaunchers = node.local ? [] : (projection.launchers || [])
-        var projectedAgents = node.local ? [] : (projection.agents || [])
-        var projectedSchedules = node.local ? [] : (projection.schedules || [])
-        for (var w = 0; w < projectedWorkspaces.length; w++) {
-          var rawWorkspace = projectedWorkspaces[w]
-          var workspaceId = resourceId(rawWorkspace.id)
-          var workspace = Object.assign({}, rawWorkspace, {
-            id: workspaceId, key: resourceKey(node.node_id, workspaceId), node_id: node.node_id,
-            node_alias: node.alias, node_current: node.current, node_stale: node.stale,
-            node_health: node.health, shells: [], launchers: [], agents: [], schedules: []
-          })
-          if (node.local) {
-            workspace.shells = rawWorkspace.shells || []
-            workspace.launchers = rawWorkspace.launchers || []
-            workspace.agents = rawWorkspace.agents || []
-            workspace.schedules = rawWorkspace.schedules || []
-          } else {
-            workspace.shells = projectedShells.filter(function(item) {
-              return resourceId(item.workspace_id) === workspaceId
-            })
-            workspace.launchers = projectedLaunchers.filter(function(item) {
-              return resourceId(item.workspace_id) === workspaceId
-            })
-            workspace.agents = projectedAgents.filter(function(item) {
-              return resourceId(item.workspace_id) === workspaceId
-            })
-            workspace.schedules = projectedSchedules.filter(function(item) {
-              return resourceId(item.workspace_id) === workspaceId
-            })
-          }
-          workspace.shell_count = workspace.shells.length
-          workspace.launcher_count = workspace.launchers.length
-          workspace.schedule_count = workspace.schedules.length
-          nextWorkspaces.push(workspace)
-          for (var s = 0; s < workspace.shells.length; s++) {
-            var shell = workspace.shells[s]
-            var shellId = resourceId(shell.id)
-            var owner = shellOwner(shell.owner)
-            nextShells.push(Object.assign({}, shell, {
-              id: shellId, key: resourceKey(node.node_id, shellId), node_id: node.node_id,
-              node_alias: node.alias, node_current: node.current, node_stale: node.stale,
-              workspace_id: workspaceId, workspace_key: workspace.key, workspace_name: workspace.name,
-              owner: owner, status: shellStatus(shell.status),
-              run: shell.run || (shell.run_id ? { id: resourceId(shell.run_id) } : null)
-            }))
-          }
-          for (var a = 0; a < workspace.agents.length; a++)
-            nextAgents.push(normalizeAgent(workspace.agents[a], node, workspace.name))
-          for (var q = 0; q < workspace.schedules.length; q++)
-            nextSchedules.push(normalizeSchedule(workspace.schedules[q], node, workspace.name))
-        }
-        var projectedExecutions = node.local ? [] : (projection.executions || [])
-        for (var e = 0; e < projectedExecutions.length; e++)
-          nextExecutions.push(normalizeExecution(projectedExecutions[e], node))
-      }
-      nodes = nextNodes
-      workspaces = nextWorkspaces
-      shells = nextShells
-      schedules = nextSchedules
-      executions = nextExecutions
-      applyAgentSnapshot(nextAgents)
+      var snapshot = WorkspaceModel.normalizeNodeSnapshot(data)
+      nodes = snapshot.nodes
+      workspaces = snapshot.workspaces
+      shells = snapshot.shells
+      schedules = snapshot.schedules
+      executions = snapshot.executions
+      applyAgentSnapshot(snapshot.agents)
       online = true
       if (pendingWorkspace) {
         for (var p = 0; p < workspaces.length; p++) {
-          if (workspaces[p].node_id === pendingWorkspace.nodeId
-              && workspaces[p].name === pendingWorkspace.name) {
+          if ((!pendingWorkspace.key || workspaces[p].key === pendingWorkspace.key)
+              && workspaces[p].name === pendingWorkspace.name
+              && (!pendingWorkspace.global || workspaces[p].is_global)) {
             selectedWorkspaceKey = workspaces[p].key
             pendingWorkspace = null
             break
@@ -463,6 +382,7 @@ Panel {
         }
       }
       preserveSelections()
+      openPendingShellIfPresent()
       if (activeTab === "schedules" && selectedSchedule) requestExecutions(selectedSchedule)
     } catch (exception) {
       error = "Could not read federated Boomux state"
@@ -491,7 +411,8 @@ Panel {
           max_concurrent: schedulerMaxConcurrent } }]
       workspaces = data.workspaces.map(function(workspace) {
         return Object.assign({}, workspace, { key: resourceKey("local", workspace.id),
-          node_id: "local", node_alias: "local", node_current: true, node_stale: false,
+          node_id: "local", node_alias: "local", node_local: true,
+          node_current: true, node_stale: false,
           node_health: "online" })
       })
       online = true
@@ -527,7 +448,7 @@ Panel {
       if (!Array.isArray(data.shells)) throw new Error("missing shells")
       shells = data.shells.map(function(shell) {
         return Object.assign({}, shell, { key: resourceKey("local", shell.id), node_id: "local",
-          node_alias: "local", node_current: true, node_stale: false,
+          node_alias: "local", node_local: true, node_current: true, node_stale: false,
           workspace_key: resourceKey("local", shell.workspace_id) })
       })
       online = true
@@ -630,7 +551,8 @@ Panel {
   function parseProjects(raw) {
     try {
       var owner = selectedCreationNode()
-      if (!owner || owner.node_id !== projectNodeId) return
+      if (!owner || !WorkspaceModel.projectDiscoveryResponseCurrent(
+          projectRequestedNodeId, projectActiveNodeId, owner.node_id)) return
       var data = parseEnvelope(raw, "project.list")
       if (typeof data.roots_configured !== "boolean" || !Array.isArray(data.projects)
           || !Array.isArray(data.warnings)) throw new Error("missing project discovery fields")
@@ -658,19 +580,27 @@ Panel {
   }
 
   function loadProjects() {
-    if (!projectListSupported || projectListProcess.running) return
+    if (!projectListSupported) return
     projects = []
     projectRootsConfigured = false
     selectedProjectIndex = 0
     projectError = ""
     var node = selectedCreationNode()
     if (!node || (!node.local && !nodeIsActionable(node.node_id, "remote_project_discovery"))) {
+      projectRequestedNodeId = ""
       projectError = "Project discovery is unavailable for this Node"
       return
     }
-    projectNodeId = node.node_id
-    projectListProcess.command = ["boomux", "project", "list", "--json"]
-    if (!node.local) projectListProcess.command.push("--node", node.node_id)
+    projectRequestedNodeId = WorkspaceModel.projectDiscoveryIdentity(node.node_id)
+    if (!projectListProcess.running) startProjectDiscovery()
+  }
+
+  function startProjectDiscovery() {
+    if (projectRequestedNodeId === "") return
+    var node = nodeFor(projectRequestedNodeId)
+    if (!node) return
+    projectActiveNodeId = projectRequestedNodeId
+    projectListProcess.command = WorkspaceModel.projectDiscoveryCommand(node)
     projectListProcess.running = true
   }
 
@@ -698,37 +628,56 @@ Panel {
   function requestShellNameSuggestion() {
     if (!shellNameSuggestionSupported || !workspaceDetail
         || (formMode !== "shell" && formMode !== "agent")) return
-    if (!nodeIsActionable(workspaceDetail.node_id, workspaceDetail.node_id === "local"
+    var owner = creationNode
+    if (!owner || !nodeIsActionable(owner.node_id, owner.local
         ? "" : "typed_node_host_services")) return
-    suggestedNameRequestedWorkspaceKey = workspaceDetail.key
+    var target = workspaceDetail
+    if (workspaceDetail.is_global) {
+      target = null
+      for (var p = 0; p < workspaceDetail.placements.length; p++) {
+        if (workspaceDetail.placements[p].node_id === owner.node_id) {
+          target = { id: workspaceDetail.placements[p].workspace_id, node_id: owner.node_id }
+          break
+        }
+      }
+      if (!target) return
+    }
+    suggestedNameRequestedIdentity = WorkspaceModel.suggestionIdentity(
+      workspaceDetail.key, owner.node_id, target.id)
     if (!shellNameSuggestionProcess.running) startShellNameSuggestion()
   }
 
   function startShellNameSuggestion() {
-    if (suggestedNameRequestedWorkspaceKey === "") return
-    suggestedNameActiveWorkspaceKey = suggestedNameRequestedWorkspaceKey
+    if (!suggestedNameRequestedIdentity) return
+    suggestedNameActiveIdentity = suggestedNameRequestedIdentity
     var workspace = null
     for (var i = 0; i < workspaces.length; i++)
-      if (workspaces[i].key === suggestedNameActiveWorkspaceKey) workspace = workspaces[i]
+      if (workspaces[i].key === suggestedNameActiveIdentity.workspaceKey) workspace = workspaces[i]
     if (!workspace) return
     shellNameSuggestionProcess.command = ["boomux", "shell", "suggest-name",
-      workspace.id, "--json"]
-    if (!nodeFor(workspace.node_id).local)
-      shellNameSuggestionProcess.command.push("--node", workspace.node_id)
+      suggestedNameActiveIdentity.ownerWorkspaceId, "--json"]
+    var owner = nodeFor(suggestedNameActiveIdentity.nodeId)
+    if (owner && !owner.local)
+      shellNameSuggestionProcess.command.push("--node", owner.node_id)
     shellNameSuggestionProcess.running = true
   }
 
   function parseShellNameSuggestion(raw) {
     try {
       var data = parseEnvelope(raw, "shell.suggest-name")
-      var responseWorkspaceId = resourceId(data.workspace_id)
-      var responseNodeId = resourceNode(data.workspace_id,
-        workspaceDetail ? workspaceDetail.node_id : "")
-      if (resourceKey(responseNodeId, responseWorkspaceId) !== suggestedNameActiveWorkspaceKey
+      var owner = suggestedNameActiveIdentity
+        ? nodeFor(suggestedNameActiveIdentity.nodeId) : null
+      if (!owner || !WorkspaceModel.suggestionResponseMatches(data,
+          suggestedNameActiveIdentity, owner.local,
+          workspaceDetail && workspaceDetail.is_global)
           || typeof data.name !== "string" || data.name.trim() === "")
         throw new Error("invalid shell name suggestion")
       if ((formMode === "shell" || formMode === "agent") && workspaceDetail
-          && workspaceDetail.key === suggestedNameActiveWorkspaceKey && !nameFieldEdited
+          && suggestedNameRequestedIdentity
+          && suggestedNameRequestedIdentity.key === suggestedNameActiveIdentity.key
+          && workspaceDetail.key === suggestedNameActiveIdentity.workspaceKey
+          && creationNode && creationNode.node_id === suggestedNameActiveIdentity.nodeId
+          && !nameFieldEdited
           && nameField.text === "") nameField.text = data.name
     } catch (exception) {
       console.warn("io.github.gardnmi.boomux:", exception)
@@ -755,9 +704,10 @@ Panel {
   function parseWorkspaceDetail(raw) {
     try {
       var data = parseEnvelope(raw, "workspace.inspect")
-      if (!data.workspace || resourceKey("local", data.workspace.id) !== selectedWorkspaceKey) return
-      workspaceDetail = Object.assign({}, data.workspace, { key: selectedWorkspaceKey,
-        node_id: "local", node_alias: "local", node_current: true, node_stale: false })
+      var workspace = selectedWorkspace
+      if (!data.workspace || !workspace || resourceId(data.workspace.id) !== workspace.id) return
+      workspaceDetail = WorkspaceModel.normalizeWorkspaceDetail(
+        data.workspace, workspace, nodeFor(workspace.node_id))
       openPendingShellIfPresent()
     } catch (exception) {
       workspaceDetail = null
@@ -766,16 +716,13 @@ Panel {
   }
 
   function openPendingShellIfPresent() {
-    if (!pendingShell || !workspaceDetail || pendingShell.workspaceKey !== workspaceDetail.key) return
-    for (var i = 0; i < workspaceDetail.shells.length; i++) {
-      if (String(workspaceDetail.shells[i].name) === pendingShell.name) {
-        var shell = Object.assign({}, workspaceDetail.shells[i], { node_id: workspaceDetail.node_id,
-          node_alias: workspaceDetail.node_alias })
-        pendingShell = null
-        openShell(shell)
-        return
-      }
-    }
+    if (!pendingShell || !pendingShell.armed) return
+    var models = workspaceDetail && workspaceDetail.key === pendingShell.workspaceKey
+      ? [workspaceDetail] : workspaces
+    var consumed = WorkspaceModel.consumePendingShell(pendingShell, models)
+    pendingShell = consumed.pending
+    if (!consumed.resolved) return
+    openShell(consumed.resolved.shell)
   }
 
   function finishRefresh() {
@@ -865,9 +812,9 @@ Panel {
     if (!workspaceDetail || !workspaceDetail.agents || !shell) return null
     for (var i = 0; i < workspaceDetail.agents.length; i++) {
       var rawAgent = workspaceDetail.agents[i]
-      var agent = rawAgent.key ? rawAgent : normalizeAgent(rawAgent, nodeFor(workspaceDetail.node_id), workspaceDetail.name)
+      var agent = rawAgent.key ? rawAgent : normalizeAgent(rawAgent, nodeFor(shell.node_id), workspaceDetail.name)
       var state = agent.observation ? agent.observation.state : "unknown"
-      if (agent.shell_id === resourceId(shell.id) && agent.run_id === resourceId(shell.run ? shell.run.id : shell.run_id)
+      if (WorkspaceModel.agentMatchesShell(agent, shell)
           && state !== "inactive" && state !== "done" && agentIsProjectedCurrent(agent)) return agent
     }
     return null
@@ -883,18 +830,17 @@ Panel {
       if (owner === "schedule") continue
       var shellId = resourceId(shell.id)
       var normalizedShell = Object.assign({}, shell, { id: shellId,
-        key: resourceKey(workspaceDetail.node_id, shellId), node_id: workspaceDetail.node_id,
-        node_alias: workspaceDetail.node_alias, node_current: workspaceDetail.node_current,
-        node_stale: workspaceDetail.node_stale, workspace_id: workspaceDetail.id,
-        workspace_key: workspaceDetail.key, owner: owner, status: shellStatus(shell.status),
+        key: resourceKey(shell.node_id, shellId), workspace_key: workspaceDetail.key,
+        owner: owner, status: shellStatus(shell.status),
         run: shell.run || (shell.run_id ? { id: resourceId(shell.run_id) } : null) })
       var agent = currentAgentForShell(normalizedShell)
       items.push({
         kind: agent ? "agent" : (shell.command && shell.command.length > 0 ? "command" : "shell"),
         id: shellId,
         key: normalizedShell.key,
-        node_id: workspaceDetail.node_id,
-        node_alias: workspaceDetail.node_alias,
+        node_id: shell.node_id,
+        node_alias: shell.node_alias,
+        node_local: shell.node_local,
         name: shell.name,
         status: agent && agent.observation ? agent.observation.state : normalizedShell.status,
         detail: agent ? String(agent.integration || "agent")
@@ -910,9 +856,10 @@ Panel {
       items.push({
         kind: "launcher",
         id: launcherId,
-        key: resourceKey(workspaceDetail.node_id, launcherId),
-        node_id: workspaceDetail.node_id,
-        node_alias: workspaceDetail.node_alias,
+        key: resourceKey(launcher.node_id, launcherId),
+        node_id: launcher.node_id,
+        node_alias: launcher.node_alias,
+        node_local: launcher.node_local,
         name: launcher.name,
         status: "on workspace open",
         detail: launcher.command ? launcher.command.join(" ") : "",
@@ -922,34 +869,46 @@ Panel {
     return items
   }
 
+  function workspaceCanOpen(workspace) {
+    if (!workspace || workspace.closing) return false
+    if (workspace.is_global) return true
+    if (workspace.is_external && !workspace.available) return false
+    return nodeIsActionable(workspace.node_id, "guarded_remote_management")
+  }
+
+  function workspaceCreationReason(workspace) {
+    return WorkspaceModel.workspaceCreationBlockReason(
+      workspace, eligibleCreationNodes.length)
+  }
+
   function openWorkspace(workspace) {
-    if (!workspace || actionProcess.running
-        || !nodeIsActionable(workspace.node_id, "guarded_remote_management")) return
-    pendingAction = { kind: "open-workspace", key: workspace.key, nodeId: workspace.node_id }
+    if (!workspaceCanOpen(workspace) || actionProcess.running) return
+    pendingAction = { kind: "open-workspace", key: workspace.key,
+      nodeId: workspace.node_id || "" }
     actionMessage = "Opening " + String(workspace.name) + "..."
-    actionProcess.command = ["boomux", "workspace", "open", String(workspace.id)]
-    var args = nodeArgs(workspace.node_id, "guarded_remote_management")
-    if (args === null) return
-    actionProcess.command = actionProcess.command.concat(args)
+    actionProcess.command = WorkspaceModel.workspaceOpenCommand(workspace)
     actionProcess.running = true
   }
 
   function openShell(shell, agent) {
     if (!shell || !shell.id || openProcess.running
-        || !nodeIsActionable(shell.node_id, "remote_pty_attachment")) return
+        || !resourceIsActionable(shell, "remote_pty_attachment")) return
     pendingOpenAgent = agent || null
     pendingOpenKey = resourceKey(shell.node_id, shell.id)
+    pendingOpenRunKey = resourceKey(shell.node_id,
+      shell.run ? shell.run.id : shell.run_id)
     actionMessage = "Opening terminal..."
-    openProcess.command = ["boomux", "open", String(shell.id), "--takeover"]
-    var args = nodeArgs(shell.node_id, "remote_pty_attachment")
-    if (args === null) return
-    openProcess.command = openProcess.command.concat(args)
+    var owner = nodeFor(shell.node_id)
+    openProcess.command = WorkspaceModel.qualifiedCommand(["boomux", "open"], shell.id,
+      shell.node_id, owner && owner.local)
+    openProcess.command.push("--takeover")
     openProcess.running = true
   }
 
   function openAgent(agent) {
     if (!agent) return
-    if (!agentShellRetained(agent)) {
+    var shell = WorkspaceModel.retainedShellForAgent(agent, shells)
+    if (!shell) {
       if (attentionRevision(agent) > 0 && agentCanAcknowledge(agent)) {
         actionMessage = "Acknowledging attention for removed shell..."
         acknowledgeAgent(agent)
@@ -960,14 +919,17 @@ Panel {
       }
       return
     }
-    openShell({ id: agent.shell_id, node_id: agent.node_id, node_alias: agent.node_alias }, agent)
+    var target = WorkspaceModel.agentOpenTarget(agent, shells,
+      nodeIsActionable(agent.node_id, "remote_pty_attachment"))
+    if (!target) {
+      actionMessage = "This Agent placement is unavailable"
+      return
+    }
+    openShell(target, agent)
   }
 
   function agentShellRetained(agent) {
-    if (!agent || !agent.shell_id) return false
-    for (var i = 0; i < shells.length; i++)
-      if (shells[i].node_id === agent.node_id && shells[i].id === agent.shell_id) return true
-    return false
+    return WorkspaceModel.retainedShellForAgent(agent, shells) !== null
   }
 
   function agentIsCurrent(agent) {
@@ -1013,13 +975,13 @@ Panel {
   function openWorkspaceItem(item) {
     if (!item) return
     if (item.kind === "launcher") {
-      if (actionProcess.running) return
+      if (actionProcess.running || !resourceIsActionable(item,
+          "remote_launcher_invocation")) return
       pendingAction = { kind: "invoke-launcher", key: item.key, nodeId: item.node_id }
       actionMessage = "Launching " + String(item.name) + "..."
-      actionProcess.command = ["boomux", "launcher", "invoke", String(item.id)]
-      var args = nodeArgs(item.node_id, "remote_launcher_invocation")
-      if (args === null) return
-      actionProcess.command = actionProcess.command.concat(args)
+      var owner = nodeFor(item.node_id)
+      actionProcess.command = WorkspaceModel.qualifiedCommand(
+        ["boomux", "launcher", "invoke"], item.id, item.node_id, owner && owner.local)
       actionProcess.running = true
       return
     }
@@ -1055,8 +1017,10 @@ Panel {
       key: item.key, nodeId: item.node_id }
     actionMessage = "Removing " + String(item.name) + "..."
     actionProcess.command = item.kind === "launcher"
-      ? ["boomux", "launcher", "remove", String(item.id), "--workspace", String(workspaceDetail.id)]
-      : ["boomux", "shell", "close", String(item.shell.id), "--workspace", String(workspaceDetail.id)]
+      ? ["boomux", "launcher", "remove", String(item.id), "--workspace",
+        String(item.launcher.owner_workspace_id || workspaceDetail.id)]
+      : ["boomux", "shell", "close", String(item.shell.id), "--workspace",
+        String(item.shell.owner_workspace_id || workspaceDetail.id)]
     actionProcess.running = true
   }
 
@@ -1094,7 +1058,7 @@ Panel {
 
   function runSchedule(schedule) {
     if (!schedule || actionProcess.running || executionOpenProcess.running
-        || !nodeIsActionable(schedule.node_id, "remote_agent_schedule_management")) return
+        || !resourceIsActionable(schedule, "remote_agent_schedule_management")) return
     pendingAction = { kind: "run-schedule", key: schedule.key, nodeId: schedule.node_id }
     actionMessage = "Starting " + String(schedule.name) + "..."
     actionProcess.command = ["boomux", "schedule", "run", String(schedule.id), "--json"]
@@ -1106,7 +1070,7 @@ Panel {
 
   function setSchedulePaused(schedule, paused) {
     if (!schedule || actionProcess.running || executionOpenProcess.running
-        || !nodeIsActionable(schedule.node_id, "remote_agent_schedule_management")) return
+        || !resourceIsActionable(schedule, "remote_agent_schedule_management")) return
     pendingAction = { kind: paused ? "pause-schedule" : "resume-schedule",
       key: schedule.key, nodeId: schedule.node_id }
     actionMessage = (paused ? "Pausing " : "Resuming ") + String(schedule.name) + "..."
@@ -1144,17 +1108,31 @@ Panel {
   }
 
   function workspaceItemCount(workspace) {
-    var count = 0
-    for (var i = 0; i < shells.length; i++)
-      if (shells[i].node_id === workspace.node_id && shells[i].workspace_id === workspace.id
-          && shells[i].owner !== "schedule") count++
-    return count + Number(workspace.launcher_count || 0)
+    if (!workspace.shells) return Number(workspace.shell_count || 0)
+      + Number(workspace.launcher_count || 0)
+    return workspace.shells.filter(function(shell) {
+      return shell.owner !== "schedule"
+    }).length + (workspace.launchers || []).length
   }
 
   function workspaceActiveAgentCount(workspace) {
     return visibleAgents.filter(function(agent) {
-      return agent.node_id === workspace.node_id && agent.workspace_id === workspace.id
+      return agent.workspace_key === workspace.key
     }).length
+  }
+
+  function workspaceHealthSummary(workspace) {
+    if (!workspace) return ""
+    if (!workspace.is_global) return (workspace.is_external && !workspace.available
+      ? "unavailable · " : "")
+      + String(workspace.node_health || "online").split("_").join(" ")
+    if (workspace.closing) return "closing · " + workspace.placements.filter(function(placement) {
+      return placement.state === "close_pending"
+    }).length + " pending"
+    var unavailable = workspace.placements.filter(function(placement) {
+      return !placement.available
+    }).length
+    return unavailable > 0 ? unavailable + " unavailable" : "all placements available"
   }
 
   function agentDisplayName(agent) {
@@ -1195,14 +1173,10 @@ Panel {
       }
       return
     }
-    queue.push({
-      agentKey: agent.key,
-      nodeId: agent.node_id,
-      agentId: String(agent.id),
-      revision: revision,
+    queue.push(Object.assign(WorkspaceModel.acknowledgementIdentity(agent, revision), {
       dismissed: !!dismissed,
       automatic: !!automatic
-    })
+    }))
     acknowledgeQueue = queue
     startNextAcknowledgement()
   }
@@ -1249,25 +1223,40 @@ Panel {
   }
 
   function showForm(mode) {
-    var owner = mode === "workspace" ? selectedCreationNode()
-      : (workspaceDetail ? nodeFor(workspaceDetail.node_id) : null)
-    if (!owner || !owner.local) {
-      actionMessage = "Creation is unavailable here; select the local Node"
-      return
+    if (mode !== "workspace") {
+      var blocked = WorkspaceModel.workspaceCreationBlockReason(
+        workspaceDetail, eligibleCreationNodes.length)
+      if (blocked !== "") {
+        actionMessage = blocked
+        return
+      }
+    }
+    if (globalWorkspacesAvailable && (mode === "workspace"
+        || (workspaceDetail && workspaceDetail.is_global))) {
+      creationNodeId = eligibleCreationNodes.length === 1 ? eligibleCreationNodes[0].node_id : ""
+      if (eligibleCreationNodes.length === 0 && mode !== "workspace") {
+        actionMessage = "No Node is currently eligible for Workspace placement"
+        return
+      }
+    } else if (workspaceDetail) {
+      creationNodeId = workspaceDetail.node_id
+      var externalOwner = nodeFor(creationNodeId)
+      if (!externalOwner || !externalOwner.local) {
+        actionMessage = "Creation is unavailable for this owner Workspace"
+        return
+      }
     }
     formMode = mode
     actionMessage = ""
     nameFieldEdited = false
     nameField.text = ""
-    cwdIsExact = !!(mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd)
-    cwdField.text = mode !== "workspace" && workspaceDetail && workspaceDetail.default_cwd
-      ? String(workspaceDetail.default_cwd) : ""
+    applyCreationNodeDefaults()
     if (mode === "workspace") {
       projectSearchField.text = ""
       projectQuery = ""
       selectedProjectIndex = 0
-      workspaceCreationMode = projectListSupported ? "project" : "custom"
-      if (projectListSupported) loadProjects()
+      workspaceCreationMode = projectListSupported && creationNode ? "project" : "custom"
+      if (projectListSupported && creationNode) loadProjects()
     } else requestShellNameSuggestion()
     Qt.callLater(function() {
       if (mode === "workspace" && workspaceCreationMode === "project") projectSearchField.forceActiveFocus()
@@ -1275,9 +1264,48 @@ Panel {
     })
   }
 
+  function placementForNode(workspace, nodeId) {
+    if (!workspace || !workspace.placements) return null
+    for (var i = 0; i < workspace.placements.length; i++)
+      if (workspace.placements[i].node_id === nodeId) return workspace.placements[i]
+    return null
+  }
+
+  function applyCreationNodeDefaults() {
+    var placement = workspaceDetail && workspaceDetail.is_global
+      ? placementForNode(workspaceDetail, creationNodeId) : workspaceDetail
+    var cwd = formMode !== "workspace" && placement && placement.default_cwd
+      ? String(placement.default_cwd) : ""
+    cwdIsExact = cwd !== ""
+    cwdField.text = cwd
+  }
+
+  function selectCreationNode(nodeId) {
+    var node = nodeFor(nodeId)
+    if (!node || !node.workspace_owner_eligible) return
+    creationNodeId = node.node_id
+    nameField.text = ""
+    nameFieldEdited = false
+    applyCreationNodeDefaults()
+    if (formMode === "workspace" && projectListSupported) loadProjects()
+    else requestShellNameSuggestion()
+  }
+
+  function formCanSubmit() {
+    var hasName = formMode === "workspace" && workspaceCreationMode === "project"
+      ? selectedProject !== null : nameField.text.trim() !== ""
+    if (!hasName) return false
+    if (formMode !== "workspace" && workspaceCreationReason(workspaceDetail) !== "") return false
+    if (!globalWorkspacesAvailable) return true
+    if (formMode !== "workspace" || workspaceCreationMode === "project"
+        || cwdField.text.trim() !== "") return creationNode !== null
+    return true
+  }
+
   function cancelForm() {
     directoryPickerOpen = false
-    suggestedNameRequestedWorkspaceKey = ""
+    projectRequestedNodeId = ""
+    suggestedNameRequestedIdentity = null
     formMode = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -1358,26 +1386,51 @@ Panel {
       actionMessage = "A name is required"
       return
     }
+    if (formMode !== "workspace") {
+      var blocked = WorkspaceModel.workspaceCreationBlockReason(
+        workspaceDetail, eligibleCreationNodes.length)
+      if (blocked !== "") {
+        actionMessage = blocked
+        return
+      }
+    }
+    var owner = creationNode
+    if (globalWorkspacesAvailable && ((formMode === "workspace" && cwd !== "")
+        || (workspaceDetail && workspaceDetail.is_global)) && !owner) {
+      actionMessage = "Select a Node for this Workspace resource"
+      return
+    }
 
     var command
     if (formMode === "workspace") {
-      pendingAction = { kind: "create-workspace", key: resourceKey("local", "new:" + name),
-        nodeId: "local" }
-      pendingWorkspace = { nodeId: "local", name: name }
-      command = ["boomux", "workspace", "create", name]
-      if (cwd !== "") command.push("--cwd", cwd)
+      if (globalWorkspacesAvailable && cwd !== "") {
+        if (!projectWorkspaceCreationSupported) {
+          actionMessage = "This Boomux CLI lacks atomic global project creation"
+          return
+        }
+        var projectNodeArgs = WorkspaceModel.creationNodeArgs(nodes, owner.node_id)
+        pendingAction = { kind: "create-project", key: "new:" + name,
+          nodeId: owner.node_id }
+        pendingWorkspace = null
+        command = WorkspaceModel.workspaceCreateCommand(name, cwd, projectNodeArgs, true)
+      } else {
+        pendingAction = { kind: "create-workspace", key: "new:" + name,
+          nodeId: owner ? owner.node_id : "local" }
+        pendingWorkspace = { name: name, global: globalWorkspacesAvailable }
+        command = WorkspaceModel.workspaceCreateCommand(name, cwd, [], false)
+      }
     } else if (formMode === "shell" && workspaceDetail) {
       pendingAction = { kind: "create-shell", key: workspaceDetail.key + "\u001fnew:" + name,
-        nodeId: workspaceDetail.node_id }
-      command = ["boomux", "shell", "create", String(workspaceDetail.id), "--name", name]
-      if (cwd !== "") command.push("--cwd", cwd)
+        nodeId: owner.node_id }
+      command = WorkspaceModel.shellCreateCommand(
+        workspaceDetail, name, cwd, owner.node_id, [])
     } else if (formMode === "agent" && workspaceDetail) {
       pendingAction = { kind: "create-agent", key: workspaceDetail.key + "\u001fnew:" + name,
-        nodeId: workspaceDetail.node_id }
-      pendingShell = { workspaceKey: workspaceDetail.key, nodeId: workspaceDetail.node_id, name: name }
-      command = ["boomux", "shell", "create", String(workspaceDetail.id), "--name", name]
-      if (cwd !== "") command.push("--cwd", cwd)
-      command.push("--", agentHost)
+        nodeId: owner.node_id }
+      pendingShell = { workspaceKey: workspaceDetail.key, nodeId: owner.node_id,
+        name: name, armed: false }
+      command = WorkspaceModel.shellCreateCommand(
+        workspaceDetail, name, cwd, owner.node_id, [agentHost])
     } else {
       return
     }
@@ -1431,7 +1484,9 @@ Panel {
         root.capabilitiesReady = true
         root.scheduleCommandsSupported = false
         root.projectListSupported = false
+        root.projectWorkspaceCreationSupported = false
         root.federationSupported = false
+        root.globalWorkspacesSupported = false
       }
       if (root.opened && root.activeTab === "schedules") root.refresh()
     }
@@ -1443,12 +1498,18 @@ Panel {
     stdout: StdioCollector { id: projectListStdout; waitForEnd: true }
     stderr: StdioCollector { id: projectListStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      var owner = root.selectedCreationNode()
+      var current = owner && WorkspaceModel.projectDiscoveryResponseCurrent(
+        root.projectRequestedNodeId, root.projectActiveNodeId, owner.node_id)
       if (exitCode === 0) root.parseProjects(projectListStdout.text)
-      else {
+      else if (current) {
         root.projects = []
         root.projectError = root.processError(projectListStderr.text || projectListStdout.text,
           "Could not discover configured projects")
       }
+      if (root.projectRequestedNodeId !== ""
+          && root.projectRequestedNodeId !== root.projectActiveNodeId)
+        Qt.callLater(function() { root.startProjectDiscovery() })
     }
   }
 
@@ -1461,8 +1522,9 @@ Panel {
       else console.warn("io.github.gardnmi.boomux:", root.processError(
         shellNameSuggestionStderr.text || shellNameSuggestionStdout.text,
         "Could not suggest a shell name"))
-      if (root.suggestedNameRequestedWorkspaceKey !== ""
-          && root.suggestedNameRequestedWorkspaceKey !== root.suggestedNameActiveWorkspaceKey)
+      if (root.suggestedNameRequestedIdentity
+          && (!root.suggestedNameActiveIdentity
+            || root.suggestedNameRequestedIdentity.key !== root.suggestedNameActiveIdentity.key))
         root.startShellNameSuggestion()
     }
   }
@@ -1590,7 +1652,8 @@ Panel {
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
     onExited: function(exitCode) {
-      var action = root.pendingAction ? root.pendingAction.kind : ""
+      var pending = root.pendingAction
+      var action = pending ? pending.kind : ""
       root.pendingAction = null
       if (exitCode !== 0) {
         root.pendingShell = null
@@ -1598,8 +1661,24 @@ Panel {
         root.actionMessage = root.processError(actionStderr.text || actionStdout.text, "Boomux action failed")
         return
       }
+      if (action === "create-project") {
+        try {
+          var created = WorkspaceModel.parseProjectCreationResponse(
+            actionStdout.text, pending.nodeId)
+          root.pendingWorkspace = { key: WorkspaceModel.globalKey(created.workspace.id),
+            name: created.workspace.name, global: true, nodeId: created.node_id,
+            shellId: created.shell.id, ownerWorkspaceId: created.shell.workspace_id }
+        } catch (exception) {
+          root.actionMessage = "Workspace created, but Boomux returned an invalid identity response"
+          root.refresh()
+          return
+        }
+      }
+      if (action === "create-agent" && root.pendingShell)
+        root.pendingShell = Object.assign({}, root.pendingShell, { armed: true })
       root.cancelForm()
       if (action === "create-workspace") root.actionMessage = "Workspace created"
+      else if (action === "create-project") root.actionMessage = "Workspace and first Shell created"
       else if (action === "create-shell") root.actionMessage = "Shell added"
       else if (action === "create-agent") root.actionMessage = "Starting " + root.agentHost + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
@@ -1619,6 +1698,7 @@ Panel {
       var agent = root.pendingOpenAgent
       root.pendingOpenAgent = null
       root.pendingOpenKey = ""
+      root.pendingOpenRunKey = ""
       if (exitCode !== 0) {
         root.actionMessage = "Could not open terminal"
         return
@@ -1655,10 +1735,22 @@ Panel {
     onExited: function(exitCode) {
       var dismissed = root.activeAcknowledgement && root.activeAcknowledgement.dismissed
       var automatic = root.activeAcknowledgement && root.activeAcknowledgement.automatic
-      if (exitCode !== 0)
-        root.actionMessage = root.processError(acknowledgeStderr.text || acknowledgeStdout.text,
-          dismissed ? "Could not dismiss Agent notification"
-            : (automatic ? "Could not clear resumed Agent attention" : "Could not acknowledge Agent attention"))
+      var validResponse = false
+      if (exitCode === 0 && root.activeAcknowledgement) {
+        try {
+          validResponse = WorkspaceModel.acknowledgementResponseMatches(
+            root.parseEnvelope(acknowledgeStdout.text, "attention.acknowledge"),
+            root.activeAcknowledgement)
+        } catch (exception) {
+          validResponse = false
+        }
+      }
+      if (exitCode !== 0 || !validResponse)
+        root.actionMessage = exitCode !== 0
+          ? root.processError(acknowledgeStderr.text || acknowledgeStdout.text,
+            dismissed ? "Could not dismiss Agent notification"
+              : (automatic ? "Could not clear resumed Agent attention" : "Could not acknowledge Agent attention"))
+          : "Could not validate the acknowledged Agent identity"
       else if (root.opened && !automatic)
         root.actionMessage = dismissed ? "Agent notification dismissed" : "Agent attention acknowledged"
       var queue = root.acknowledgeQueue.slice()
@@ -2032,6 +2124,7 @@ Panel {
                 selected: root.workspaceCreationMode === "project"
                 focusable: true
                 bordered: true
+                enabled: !root.globalWorkspacesAvailable || root.creationNode !== null
                 foreground: root.foreground
                 onClicked: root.selectWorkspaceCreationMode("project")
               }
@@ -2044,6 +2137,50 @@ Panel {
                 bordered: true
                 foreground: root.foreground
                 onClicked: root.selectWorkspaceCreationMode("custom")
+              }
+            }
+
+            Column {
+              visible: !root.directoryPickerOpen && root.globalWorkspacesAvailable
+                && (root.formMode === "workspace"
+                  || (root.workspaceDetail && root.workspaceDetail.is_global))
+              width: parent.width
+              spacing: Style.space(3)
+
+              Text {
+                visible: root.eligibleCreationNodes.length === 1
+                width: parent.width
+                text: root.creationNode ? "Placement: " + root.creationNode.alias + " · automatic" : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+
+              ListView {
+                visible: root.eligibleCreationNodes.length !== 1
+                width: parent.width
+                implicitHeight: Math.min(contentHeight, Style.space(126))
+                model: root.nodes
+                spacing: Style.space(3)
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: Button {
+                  required property var modelData
+                  width: ListView.view.width
+                  text: String(modelData.alias) + " · "
+                    + (modelData.workspace_owner_eligible ? "available"
+                      : (modelData.workspace_owner_unavailable_reason
+                        || root.nodeHealthLabel(modelData)))
+                  selected: root.creationNodeId === modelData.node_id
+                  enabled: !!modelData.workspace_owner_eligible
+                  focusable: true
+                  bordered: true
+                  foreground: root.foreground
+                  fontSize: Style.font.caption
+                  onClicked: root.selectCreationNode(modelData.node_id)
+                }
               }
             }
 
@@ -2198,6 +2335,7 @@ Panel {
                 bordered: true
                 foreground: root.foreground
                 onClicked: root.openDirectoryPicker()
+                enabled: root.creationNode && root.creationNode.local
               }
             }
             Row {
@@ -2241,9 +2379,7 @@ Panel {
                 bordered: true
                 focusable: true
                 active: true
-                enabled: !actionProcess.running && (root.formMode === "workspace"
-                  && root.workspaceCreationMode === "project"
-                    ? root.selectedProject !== null : nameField.text.trim() !== "")
+                enabled: !actionProcess.running && root.formCanSubmit()
                 foreground: root.foreground
                 onClicked: root.submitForm()
               }
@@ -2371,7 +2507,8 @@ Panel {
                 width: ListView.view.width
                 height: Style.space(50)
                 radius: Style.cornerRadius
-                opacity: modelData.node_stale ? 0.66 : 1
+                opacity: modelData.node_stale || (modelData.is_external && !modelData.available)
+                  ? 0.66 : 1
                 color: modelData.key === root.selectedWorkspaceKey
                   ? Style.selectedFillFor(root.foreground, Color.accent)
                   : (workspaceMouse.containsMouse
@@ -2386,7 +2523,7 @@ Panel {
                   spacing: Style.space(2)
                   Text {
                     width: parent.width
-                    text: root.nodeName(modelData) + " / " + String(modelData.name)
+                    text: String(modelData.name)
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -2395,10 +2532,11 @@ Panel {
                   }
                   Text {
                     width: parent.width
-                    text: root.workspaceItemCount(modelData) + " items · "
+                    text: root.workspaceOwnershipLabel(modelData) + " · "
+                      + root.workspaceItemCount(modelData) + " items · "
                       + Number(modelData.schedule_count || 0) + " schedules · "
                       + root.workspaceActiveAgentCount(modelData) + " active agents · "
-                      + String(modelData.node_health).split("_").join(" ")
+                      + root.workspaceHealthSummary(modelData)
                     color: modelData.attention_count > 0 ? root.urgent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2411,8 +2549,7 @@ Panel {
                   hoverEnabled: true
                   onEntered: root.selectedIndex = index
                   onClicked: root.selectWorkspace(modelData.key)
-                  onDoubleClicked: if (root.nodeIsActionable(modelData.node_id,
-                    "guarded_remote_management")) root.openWorkspace(modelData)
+                  onDoubleClicked: if (root.workspaceCanOpen(modelData)) root.openWorkspace(modelData)
                 }
               }
             }
@@ -2435,8 +2572,7 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: root.workspaceDetail
-                    ? root.nodeName(root.workspaceDetail) + " / " + String(root.workspaceDetail.name) : ""
+                  text: root.workspaceDetail ? String(root.workspaceDetail.name) : ""
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -2446,12 +2582,61 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: root.workspaceDetail && root.workspaceDetail.default_cwd
-                    ? root.compactPath(root.workspaceDetail.default_cwd) : "No default directory"
+                  text: root.workspaceDetail && root.workspaceDetail.is_global
+                    ? "Coordinator Workspace · directories are placement-specific"
+                    : (root.workspaceDetail && root.workspaceDetail.default_cwd
+                      ? root.compactPath(root.workspaceDetail.default_cwd) : "No default directory")
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideMiddle
+                }
+
+                ListView {
+                  visible: root.workspaceDetail && root.workspaceDetail.is_global
+                    && root.workspaceDetail.placements.length > 0
+                  width: parent.width
+                  implicitHeight: Math.min(contentHeight, Style.space(112))
+                  model: root.workspaceDetail && root.workspaceDetail.is_global
+                    ? root.workspaceDetail.placements : []
+                  spacing: Style.space(2)
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                  delegate: Rectangle {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: Style.space(42)
+                    radius: Style.cornerRadius
+                    color: Util.alpha(root.foreground, 0.035)
+                    opacity: modelData.available ? 1 : 0.66
+                    Column {
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.margins: Style.space(7)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(1)
+                      Text {
+                        width: parent.width
+                        text: "Node: " + String(modelData.node_alias) + " · "
+                          + String(modelData.state).split("_").join(" ") + " · "
+                          + String(modelData.node_health).split("_").join(" ")
+                        color: modelData.available ? root.foreground : root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        width: parent.width
+                        text: modelData.default_cwd ? root.compactPath(modelData.default_cwd)
+                          : "No default directory on this Node"
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideMiddle
+                      }
+                    }
+                  }
                 }
 
                 Row {
@@ -2463,8 +2648,7 @@ Panel {
                     iconText: ""
                     tooltipText: "Open selected workspace"
                     bordered: true
-                    enabled: root.workspaceDetail
-                      && root.nodeIsActionable(root.workspaceDetail.node_id, "guarded_remote_management")
+                    enabled: root.workspaceCanOpen(root.workspaceDetail)
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.body
@@ -2474,9 +2658,10 @@ Panel {
                     width: (parent.width - parent.spacing * 2) / 3
                     text: "Shell"
                     iconText: "+"
-                    tooltipText: "Add shell to selected workspace"
+                     tooltipText: root.workspaceCreationReason(root.workspaceDetail)
+                       || "Add shell to selected Workspace"
                     bordered: true
-                    enabled: root.workspaceDetail && root.nodeFor(root.workspaceDetail.node_id).local
+                     enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.body
@@ -2486,9 +2671,10 @@ Panel {
                     width: (parent.width - parent.spacing * 2) / 3
                     text: "Agent"
                     iconText: "+"
-                    tooltipText: "Start Agent in selected workspace"
+                     tooltipText: root.workspaceCreationReason(root.workspaceDetail)
+                       || "Start Agent in selected Workspace"
                     bordered: true
-                    enabled: root.workspaceDetail && root.nodeFor(root.workspaceDetail.node_id).local
+                     enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.body
@@ -2561,7 +2747,9 @@ Panel {
                       }
                       Text {
                         width: parent.width
-                        text: String(modelData.status) + (modelData.detail
+                        text: "Workspace: " + String(root.workspaceDetail.name)
+                          + " · Node: " + String(modelData.node_alias) + " · "
+                          + String(modelData.status) + (modelData.detail
                           ? " · " + (modelData.kind === "shell"
                             ? root.compactPath(modelData.detail) : String(modelData.detail)) : "")
                         color: root.dim
@@ -2574,7 +2762,7 @@ Panel {
                       id: itemMouse
                       anchors.fill: parent
                       hoverEnabled: true
-                      enabled: root.nodeIsActionable(modelData.node_id,
+                      enabled: root.resourceIsActionable(modelData,
                         modelData.kind === "launcher" ? "remote_launcher_invocation" : "remote_pty_attachment")
                       onClicked: root.openWorkspaceItem(modelData)
                     }
@@ -2714,8 +2902,7 @@ Panel {
                   spacing: Style.space(2)
                   Text {
                     width: parent.width
-                    text: root.nodeName(modelData) + " / " + String(modelData.workspace_name)
-                      + " / " + String(modelData.name)
+                    text: String(modelData.name)
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -2724,7 +2911,9 @@ Panel {
                   }
                   Text {
                     width: parent.width
-                    text: String(modelData.state) + " · " + root.scheduleTiming(modelData)
+                    text: "Workspace: " + String(modelData.workspace_name)
+                      + " · Node: " + root.nodeName(modelData) + " · "
+                      + String(modelData.state) + " · " + root.scheduleTiming(modelData)
                     color: modelData.state === "enabled" ? Color.accent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2800,7 +2989,7 @@ Panel {
                     bordered: true
                     active: true
                     enabled: root.selectedSchedule
-                      && root.nodeIsActionable(root.selectedSchedule.node_id,
+                      && root.resourceIsActionable(root.selectedSchedule,
                         "remote_agent_schedule_management")
                       && !actionProcess.running && !executionOpenProcess.running
                     foreground: root.foreground
@@ -2816,7 +3005,7 @@ Panel {
                       ? "Enable future timed dispatch" : "Pause future timed dispatch"
                     bordered: true
                     enabled: root.selectedSchedule
-                      && root.nodeIsActionable(root.selectedSchedule.node_id,
+                      && root.resourceIsActionable(root.selectedSchedule,
                         "remote_agent_schedule_management")
                       && !actionProcess.running && !executionOpenProcess.running
                     foreground: root.foreground
@@ -2977,7 +3166,7 @@ Panel {
       ? !!root.completedAgents[agent.key] || root.attentionReason(agent) === "completed" : false
     readonly property bool dismissible: agent
       ? !!root.completedAgents[agent.key] || root.attentionRevision(agent) > 0 : false
-    readonly property bool actionable: agent && root.nodeIsActionable(agent.node_id,
+    readonly property bool actionable: agent && root.resourceIsActionable(agent,
       "remote_pty_attachment")
 
     height: Style.space(66)
@@ -3006,8 +3195,7 @@ Panel {
       spacing: Style.space(2)
       Text {
         width: parent.width
-        text: agent ? root.nodeName(agent) + " / " + String(agent.workspace_name)
-          + " / " + root.agentDisplayName(agent) : "Agent"
+        text: agent ? root.agentDisplayName(agent) : "Agent"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -3016,7 +3204,9 @@ Panel {
       }
       Text {
         width: parent.width
-        text: (agentRow.justCompleted ? "finished" : agentRow.state)
+        text: (agent ? "Workspace: " + String(agent.workspace_name)
+          + " · Node: " + root.nodeName(agent) + " · Agent · " : "")
+          + (agentRow.justCompleted ? "finished" : agentRow.state)
           + (agentRow.needsAttention ? " · needs attention" : "")
           + (agent && !root.agentShellRetained(agent)
             ? (root.attentionRevision(agent) > 0

@@ -6,7 +6,9 @@ about operations that can start processes or take over terminals.
 
 ## Repository Map
 
-- `Panel.qml`: complete runtime implementation and UI
+- `Panel.qml`: runtime integration and UI
+- `WorkspaceModel.js`: protocol-38 grouping and qualified command construction
+- `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
 - `README.md`: user contract, dependency, safety, and lifecycle documentation
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
@@ -22,9 +24,9 @@ publication.
 
 ## Supported Contract
 
-- Minimum Boomux version: `0.19.0`
+- Planned minimum released Boomux version: `0.19.0`
 - Stable JSON envelope: `boomux.cli/v1`
-- Current tested daemon protocol: 37
+- Current branch-validated daemon protocol: 38; live installed validation remains protocol 37
 - Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations
 
 Parse JSON only from commands advertised by `boomux capabilities --json`.
@@ -33,7 +35,9 @@ shell, launcher, Agent, run, and observation-revision IDs returned by Boomux;
 never infer IDs from names, terminal output, process names, or list order.
 
 Federation requires advertised `node.snapshot`, `combined_node_snapshot`,
-`node_qualified_dashboard`, and `typed_exact_node_routing` support. Keep the
+`node_qualified_dashboard`, and `typed_exact_node_routing` support. Global
+Workspace grouping additionally requires `global_workspaces` and
+`multi_node_workspace_placements`. Keep the
 installed CLI capability, local daemon protocol, and each remote Node's observed
 capabilities distinct. Every projected and pending resource identity is the
 structural pair `(node_id, resource_id)`; bare IDs are never globally unique.
@@ -63,12 +67,17 @@ The panel has three top-level views:
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 
-Protocol 37 adds combined Node-qualified resources. Resource labels use
-`Node / Workspace / Resource` paths, and every stable health value (`unobserved`, `online`,
+Protocol 38 adds coordinator-owned global Workspaces with explicit Node
+placements. Keep Workspace grouping task-first; show Node ownership as secondary
+metadata rather than a filter or Node-first path. Every stable health value (`unobserved`, `online`,
 `reconnecting`, `stale`, `unreachable`, `authentication_required`,
 `identity_changed`, `identity_conflict`, and `unsupported`) remains visible.
 Cached stale rows are presentation only and all owner-dependent actions are
 disabled. Scheduler health is Node-specific.
+
+Never merge owner Workspaces by name. Global membership comes only from explicit
+placements; unlinked owner Workspaces remain qualified external singletons.
+Protocol 37 and older snapshot shapes retain their owner-local presentation.
 
 Workspace items are projected as:
 
@@ -128,6 +137,7 @@ plugin must never fabricate an Agent registration or lifecycle observation.
 - Keep **New Workspace** at workspace-section scope.
 - Keep **Open**, **Shell**, and **Agent** inside the selected workspace detail
   surface so their target is unambiguous.
+- Keep **Add Node** beside **Open TUI**; do not add a Node filter.
 - Do not use collapsible workspace cards unless explicitly requested.
 - Use Omarchy `qs.Ui` controls and `Style.space(...)`; follow the active bar
   foreground, urgent color, font, and accent.
@@ -149,9 +159,10 @@ an actionable message in the panel. Boomux JSON errors use `error.code` for
 program logic; messages are suitable only for display.
 
 Polling currently checks daemon status once per second and fetches Agent, shell,
-and workspace snapshots only while the daemon is running. With protocol 37 it
-fetches one combined Node snapshot, then performs live exact execution reads for
-the selected Schedule. Older daemons retain the local list polling path.
+and Workspace snapshots only while the daemon is running. With protocol 38 it
+groups one combined Node snapshot by coordinator Workspace; protocol 37 uses the
+same read with owner-local grouping. It then performs live exact execution reads
+for the selected Schedule. Older daemons retain the local list polling path.
 Schedule and latest execution snapshots are fetched only while the Schedules
 tab is open. A future event-driven implementation should retain the
 passive-daemon invariant and handle cursor expiry by reacquiring a baseline.
@@ -169,6 +180,7 @@ omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Panel.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
+bun test tests/workspace-model.test.js
 mise tasks
 git diff --check
 ```
