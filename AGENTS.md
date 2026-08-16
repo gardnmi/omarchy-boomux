@@ -63,8 +63,8 @@ The panel has three top-level views:
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 
-Protocol 37 adds an all-Nodes/exact-Node filter. Node badges are mandatory on
-resource rows, and every stable health value (`unobserved`, `online`,
+Protocol 37 adds combined Node-qualified resources. Resource labels use
+`Node / Workspace / Resource` paths, and every stable health value (`unobserved`, `online`,
 `reconnecting`, `stale`, `unreachable`, `authentication_required`,
 `identity_changed`, `identity_conflict`, and `unsupported`) remains visible.
 Cached stale rows are presentation only and all owner-dependent actions are

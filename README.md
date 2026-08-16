@@ -26,8 +26,7 @@ workspaces, and operate recurring Agent Schedules without leaving the Omarchy ba
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
 - Polls local Boomux state once per second for responsive updates
-- Combines local and registered remote Nodes with unmistakable ownership badges
-- Filters all resources by **All Nodes** or one exact Node
+- Combines local and registered remote resources with `Node / Workspace / Resource` labels
 - Shows every Node health state without hiding cached stale resources
 - Shows scheduler health independently per Node and disables owner-dependent
   actions while its state is stale or unavailable
@@ -88,7 +87,6 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
 | Tab or `1` / `2` / `3` | Switch between Agents, Workspaces, and Schedules |
-| `[` / `]` | Select the previous or next Node filter |
 | `A` | Open interactive Add Node in a native terminal |
 | Up / Down | Select an Agent, workspace, or Schedule |
 | Enter | Open a selected Agent or select a workspace or Schedule |
@@ -98,11 +96,11 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Escape | Close the panel |
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. The Node strip selects **All Nodes** or one owner, and every resource row
-has a `NODE` badge. **Add Node** opens local interactive `boomux node add` in a
-native terminal, where Boomux alone handles SSH authentication, remote install
-details, and confirmation. **New Workspace** remains a local action. Selecting a
-workspace shows its
+window. Every resource row starts with its owning Node, such as
+`local / boomux / agent`. **Add Node** opens local interactive `boomux node add`
+in a native terminal, where Boomux alone handles SSH authentication, remote
+install details, and confirmation. **New Workspace** remains a local action.
+Selecting a workspace shows its
 directory, items, and scoped **Open**, **Shell**, and **Agent** actions below the
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
@@ -273,7 +271,7 @@ omarchy-shell shell rescanPlugins
 
 ### A remote Node is stale or unavailable
 
-The Node badge reports Boomux's stable health value. `reconnecting` and `stale`
+Secondary status text reports Boomux's stable Node health value. `reconnecting` and `stale`
 retain the last bounded projection. `unreachable`, `authentication required`,
 `identity changed`, `identity conflict`, and `unsupported` require owner or route
 attention. Controls remain disabled until Boomux reports a current,
@@ -315,7 +313,7 @@ boomux daemon status --json
 
 Protocol 37 live validation additionally needs two privacy-safe Nodes to verify
 duplicate names and inner IDs, health and reconnect behavior, keyboard and mouse
-filtering, exact action routing, remote PTY attachment, Schedule controls, and
+selection, exact action routing, remote PTY attachment, Schedule controls, and
 reconnect attention presentation. Do not fabricate Node screenshots or use
 private paths, titles, prompts, terminal output, or targets.
 

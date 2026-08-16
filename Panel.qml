@@ -29,7 +29,6 @@ Panel {
   property var workspaceDetail: null
   property string selectedWorkspaceKey: ""
   property string selectedScheduleKey: ""
-  property string selectedNodeId: "all"
   property string activeTab: "agents"
   property int selectedIndex: 0
   property bool online: false
@@ -84,17 +83,12 @@ Panel {
   property int pollEpoch: 0
   property int snapshotActiveEpoch: 0
 
-  readonly property var visibleWorkspaces: workspaces.filter(function(workspace) {
-    return selectedNodeId === "all" || workspace.node_id === selectedNodeId
-  })
-  readonly property var visibleSchedules: schedules.filter(function(schedule) {
-    return selectedNodeId === "all" || schedule.node_id === selectedNodeId
-  })
+  readonly property var visibleWorkspaces: workspaces
+  readonly property var visibleSchedules: schedules
 
   readonly property var visibleAgents: agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
-    return (selectedNodeId === "all" || agent.node_id === selectedNodeId)
-      && !agentIsScheduleOwned(agent)
+    return !agentIsScheduleOwned(agent)
       && ((agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
         || attentionRevision(agent) > 0)
   })
@@ -179,15 +173,12 @@ Panel {
   }
 
   function selectedCreationNode() {
-    if (!federationAvailable || selectedNodeId === "all") {
-      for (var i = 0; i < nodes.length; i++) if (nodes[i].local) return nodes[i]
-      return { node_id: "local", alias: "local", local: true, current: online, stale: false }
-    }
-    return nodeFor(selectedNodeId)
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].local) return nodes[i]
+    return { node_id: "local", alias: "local", local: true, current: online, stale: false }
   }
 
-  function nodeBadge(item) {
-    return "[" + String(item && item.node_alias ? item.node_alias : "local") + "]"
+  function nodeName(item) {
+    return String(item && item.node_alias ? item.node_alias : "local")
   }
 
   function nodeHealthLabel(node) {
@@ -471,8 +462,6 @@ Panel {
           }
         }
       }
-      var selectedNode = nodeFor(selectedNodeId)
-      if (selectedNodeId !== "all" && !selectedNode) selectedNodeId = "all"
       preserveSelections()
       if (activeTab === "schedules" && selectedSchedule) requestExecutions(selectedSchedule)
     } catch (exception) {
@@ -482,9 +471,9 @@ Panel {
   }
 
   function preserveSelections() {
-    if (!selectedWorkspace || (selectedNodeId !== "all" && selectedWorkspace.node_id !== selectedNodeId))
+    if (!selectedWorkspace)
       selectedWorkspaceKey = visibleWorkspaces.length > 0 ? visibleWorkspaces[0].key : ""
-    if (!selectedSchedule || (selectedNodeId !== "all" && selectedSchedule.node_id !== selectedNodeId))
+    if (!selectedSchedule)
       selectedScheduleKey = visibleSchedules.length > 0 ? visibleSchedules[0].key : ""
     workspaceDetail = selectedWorkspace
     syncWorkspaceIndex()
@@ -864,22 +853,6 @@ Panel {
       }
     }
     clampSelection()
-  }
-
-  function selectNode(nodeId) {
-    selectedNodeId = String(nodeId)
-    selectedIndex = 0
-    preserveSelections()
-    cancelForm()
-  }
-
-  function cycleNode(direction) {
-    if (!federationAvailable) return
-    var ids = ["all"]
-    for (var i = 0; i < nodes.length; i++) ids.push(nodes[i].node_id)
-    var index = ids.indexOf(selectedNodeId)
-    var step = direction < 0 ? -1 : 1
-    selectNode(ids[(index + step + ids.length) % ids.length])
   }
 
   function compactPath(path) {
@@ -1795,8 +1768,6 @@ Panel {
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
         else if (text === "3") root.selectTab("schedules")
-        else if (text === "[") root.cycleNode(-1)
-        else if (text === "]") root.cycleNode(1)
         else if ((text === "a" || text === "A") && root.federationAvailable) root.addNode()
         else if (text === "n" || text === "N") root.showForm("workspace")
         else if ((text === "d" || text === "D") && root.activeTab === "agents")
@@ -1823,73 +1794,33 @@ Panel {
             }
           }
           trailingControl: Component {
-            Button {
-              text: "Open TUI"
-              iconText: ""
-              tooltipText: "Open the Boomux dashboard"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.body
-              iconSize: Style.font.body
-              horizontalPadding: Style.space(5)
-              verticalPadding: Style.space(2)
-              onClicked: root.openDashboard()
-            }
-          }
-        }
-
-        Column {
-          visible: root.federationAvailable
-          width: parent.width
-          spacing: Style.space(4)
-          Row {
-            width: parent.width
-            PanelSectionHeader {
-              width: parent.width - addNodeButton.width
-              anchors.verticalCenter: parent.verticalCenter
-              text: "NODES"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-            Button {
-              id: addNodeButton
-              text: "Add Node"
-              iconText: "+"
-              tooltipText: "Open interactive local boomux node add"
-              bordered: true
-              foreground: root.foreground
-              fontSize: Style.font.caption
-              horizontalPadding: Style.space(6)
-              verticalPadding: Style.space(2)
-              onClicked: root.addNode()
-            }
-          }
-          ListView {
-            width: parent.width
-            height: Style.space(34)
-            orientation: ListView.Horizontal
-            model: [{ node_id: "all", alias: "All Nodes", health: "" }].concat(root.nodes)
-            spacing: Style.space(5)
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
-            delegate: Button {
-              required property var modelData
-              height: Style.space(28)
-              text: modelData.node_id === "all" ? "ALL NODES"
-                : "NODE " + String(modelData.alias) + " · " + root.nodeHealthLabel(modelData)
-              tooltipText: modelData.node_id === "all" ? "Show resources from every Node"
-                : (root.nodeHealthLabel(modelData) + " · scheduler "
-                  + String(modelData.scheduler ? modelData.scheduler.state : "offline"))
-              selected: root.selectedNodeId === modelData.node_id
-              bordered: true
-              foreground: modelData.stale || (modelData.health && modelData.health !== "online")
-                ? root.urgent : root.foreground
-              fontSize: Style.font.caption
-              horizontalPadding: Style.space(7)
-              verticalPadding: Style.space(2)
-              onClicked: root.selectNode(modelData.node_id)
+            Row {
+              spacing: Style.space(4)
+              Button {
+                visible: root.federationAvailable
+                text: "Add Node"
+                iconText: "+"
+                tooltipText: "Open guided Node setup"
+                bordered: true
+                foreground: root.foreground
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: root.addNode()
+              }
+              Button {
+                text: "Open TUI"
+                iconText: ""
+                tooltipText: "Open the Boomux dashboard"
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                iconSize: Style.font.body
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: root.openDashboard()
+              }
             }
           }
         }
@@ -2455,7 +2386,7 @@ Panel {
                   spacing: Style.space(2)
                   Text {
                     width: parent.width
-                    text: root.nodeBadge(modelData) + "  " + String(modelData.name)
+                    text: root.nodeName(modelData) + " / " + String(modelData.name)
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -2505,7 +2436,7 @@ Panel {
                 Text {
                   width: parent.width
                   text: root.workspaceDetail
-                    ? root.nodeBadge(root.workspaceDetail) + "  " + String(root.workspaceDetail.name) : ""
+                    ? root.nodeName(root.workspaceDetail) + " / " + String(root.workspaceDetail.name) : ""
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -2700,9 +2631,9 @@ Panel {
                   ? (root.nodeFor(root.selectedSchedule.node_id).scheduler.state === "active"
                     ? Number(root.nodeFor(root.selectedSchedule.node_id).scheduler.active_executions || 0)
                       + "/" + Number(root.nodeFor(root.selectedSchedule.node_id).scheduler.max_concurrent || 0)
-                      + " active · " + root.nodeBadge(root.selectedSchedule)
+                      + " active · " + root.nodeName(root.selectedSchedule)
                     : String(root.nodeFor(root.selectedSchedule.node_id).scheduler.state)
-                      + " · " + root.nodeBadge(root.selectedSchedule))
+                      + " · " + root.nodeName(root.selectedSchedule))
                   : root.nodes.length + " Nodes"
                 color: root.selectedSchedule && root.nodeFor(root.selectedSchedule.node_id)
                   && root.nodeFor(root.selectedSchedule.node_id).scheduler.state === "active"
@@ -2783,7 +2714,7 @@ Panel {
                   spacing: Style.space(2)
                   Text {
                     width: parent.width
-                    text: root.nodeBadge(modelData) + "  " + String(modelData.workspace_name)
+                    text: root.nodeName(modelData) + " / " + String(modelData.workspace_name)
                       + " / " + String(modelData.name)
                     color: root.foreground
                     font.family: root.fontFamily
@@ -3075,7 +3006,7 @@ Panel {
       spacing: Style.space(2)
       Text {
         width: parent.width
-        text: agent ? root.nodeBadge(agent) + "  " + String(agent.workspace_name)
+        text: agent ? root.nodeName(agent) + " / " + String(agent.workspace_name)
           + " / " + root.agentDisplayName(agent) : "Agent"
         color: root.foreground
         font.family: root.fontFamily
