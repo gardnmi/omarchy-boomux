@@ -108,7 +108,8 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
 window. **Add Node** remains beside it and opens local interactive `boomux node add`
 in a native terminal, where Boomux alone handles SSH authentication, remote
-install details, and confirmation. Selecting a Workspace shows its Node
+install details, and confirmation. The terminal remains open after setup so its
+success or failure is visible. Selecting a Workspace shows its Node
 placements, placement-specific directories and health, items, and scoped
 **Open**, **Shell**, and **Agent** actions below the
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;

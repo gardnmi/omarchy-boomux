@@ -1,4 +1,5 @@
 const { describe, expect, test } = require("bun:test")
+const fs = require("node:fs")
 const model = require("../WorkspaceModel.js")
 const protocol38Envelope = require("./fixtures/protocol38-multi-node.json")
 const protocol37Envelope = require("./fixtures/protocol37-local.json")
@@ -6,6 +7,13 @@ const protocol37Envelope = require("./fixtures/protocol37-local.json")
 function normalized(envelope = protocol38Envelope) {
   return model.normalizeNodeSnapshot(model.parseEnvelope(envelope, "node.snapshot"))
 }
+
+test("keeps guided Node setup feedback visible", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain(
+    "omarchy-launch-tui --hold --app-id=org.omarchy.boomux-node-add boomux node add"
+  )
+})
 
 describe("CLI envelope normalization", () => {
   test("parses protocol 38 into one task-first multi-placement Workspace", () => {
