@@ -24,16 +24,20 @@ Panel {
   property var agents: []
   property var schedules: []
   property var executions: []
+  property var nodes: []
   property var projects: []
   property var workspaceDetail: null
-  property string selectedWorkspaceId: ""
-  property string selectedScheduleId: ""
+  property string selectedWorkspaceKey: ""
+  property string selectedScheduleKey: ""
+  property string selectedNodeId: "all"
   property string activeTab: "agents"
   property int selectedIndex: 0
   property bool online: false
   property bool refreshing: false
   property int refreshPending: 0
   property bool capabilitiesReady: false
+  property bool federationSupported: false
+  property var cliFeatures: []
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
   property bool shellNameSuggestionSupported: false
@@ -49,9 +53,11 @@ Panel {
   property var activeAcknowledgement: null
   property var automaticAttentionRevisions: ({})
   property var pendingOpenAgent: null
+  property string pendingOpenKey: ""
+  property string pendingExecutionOpenKey: ""
   property var itemToRemove: null
-  property string inspectRequestedId: ""
-  property string inspectActiveId: ""
+  property string inspectRequestedKey: ""
+  property string inspectActiveKey: ""
   property string error: ""
   property string scheduleError: ""
   property string executionError: ""
@@ -63,35 +69,49 @@ Panel {
   property string projectError: ""
   property bool cwdIsExact: false
   property bool nameFieldEdited: false
-  property string suggestedNameRequestedWorkspaceId: ""
-  property string suggestedNameActiveWorkspaceId: ""
+  property string suggestedNameRequestedWorkspaceKey: ""
+  property string suggestedNameActiveWorkspaceKey: ""
   property bool directoryPickerOpen: false
   property string directoryPickerPath: ""
   property int directoryPickerIndex: 0
   property string agentHost: "opencode"
-  property string pendingAction: ""
-  property string pendingWorkspaceName: ""
-  property string pendingShellName: ""
+  property var pendingAction: null
+  property var pendingWorkspace: null
+  property var pendingShell: null
+  property string projectNodeId: ""
+  property string executionRequestedScheduleKey: ""
+  property string executionActiveScheduleKey: ""
+  property int pollEpoch: 0
+  property int snapshotActiveEpoch: 0
+
+  readonly property var visibleWorkspaces: workspaces.filter(function(workspace) {
+    return selectedNodeId === "all" || workspace.node_id === selectedNodeId
+  })
+  readonly property var visibleSchedules: schedules.filter(function(schedule) {
+    return selectedNodeId === "all" || schedule.node_id === selectedNodeId
+  })
 
   readonly property var visibleAgents: agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
-    return !agentIsScheduleOwned(agent)
+    return (selectedNodeId === "all" || agent.node_id === selectedNodeId)
+      && !agentIsScheduleOwned(agent)
       && ((agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
         || attentionRevision(agent) > 0)
   })
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
-      if (workspaces[i].id === selectedWorkspaceId) return workspaces[i]
+      if (workspaces[i].key === selectedWorkspaceKey) return workspaces[i]
     return null
   }
   readonly property bool scheduleAvailable: scheduleCommandsSupported && daemonProtocolVersion >= 25
+  readonly property bool federationAvailable: federationSupported && daemonProtocolVersion >= 33
   readonly property var selectedSchedule: {
     for (var i = 0; i < schedules.length; i++)
-      if (schedules[i].id === selectedScheduleId) return schedules[i]
+      if (schedules[i].key === selectedScheduleKey) return schedules[i]
     return null
   }
   readonly property var selectedExecutions: executions.filter(function(execution) {
-    return execution.schedule_id === selectedScheduleId
+    return execution.schedule_key === selectedScheduleKey
   })
   readonly property var latestExecution: selectedExecutions.length > 0 ? selectedExecutions[0] : null
   readonly property var visibleProjects: filterProjects()
@@ -99,10 +119,10 @@ Panel {
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
   readonly property var workspaceItems: buildWorkspaceItems()
   readonly property int itemCount: activeTab === "agents" ? visibleAgents.length
-    : (activeTab === "workspaces" ? workspaces.length : schedules.length)
+    : (activeTab === "workspaces" ? visibleWorkspaces.length : visibleSchedules.length)
   readonly property var selectedItem: {
     var model = activeTab === "agents" ? visibleAgents
-      : (activeTab === "workspaces" ? workspaces : schedules)
+      : (activeTab === "workspaces" ? visibleWorkspaces : visibleSchedules)
     return selectedIndex >= 0 && selectedIndex < model.length ? model[selectedIndex] : null
   }
   readonly property int blockedCount: visibleAgents.filter(function(agent) {
@@ -125,14 +145,82 @@ Panel {
 
   Component.onCompleted: capabilityProcess.running = true
 
+  function resourceId(value) {
+    return value && typeof value === "object" ? String(value.inner_id || "") : String(value || "")
+  }
+
+  function resourceNode(value, fallback) {
+    return value && typeof value === "object" ? String(value.node_id || fallback || "")
+      : String(fallback || "")
+  }
+
+  function resourceKey(nodeId, value) {
+    return String(nodeId || "") + "\u001f" + resourceId(value)
+  }
+
+  function nodeFor(nodeId) {
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].node_id === nodeId) return nodes[i]
+    return null
+  }
+
+  function nodeIsActionable(nodeId, capability) {
+    var node = nodeFor(nodeId)
+    if (!node) return !federationAvailable && nodeId === "local"
+    if (!node.current || node.stale || node.health !== "online") return false
+    if (node.local || !capability) return true
+    return cliFeatures.indexOf(capability) >= 0
+      && node.observed_capabilities.indexOf(capability) >= 0
+  }
+
+  function nodeArgs(nodeId, capability) {
+    var node = nodeFor(nodeId)
+    if (!node || node.local) return []
+    return nodeIsActionable(nodeId, capability) ? ["--node", nodeId] : null
+  }
+
+  function selectedCreationNode() {
+    if (!federationAvailable || selectedNodeId === "all") {
+      for (var i = 0; i < nodes.length; i++) if (nodes[i].local) return nodes[i]
+      return { node_id: "local", alias: "local", local: true, current: online, stale: false }
+    }
+    return nodeFor(selectedNodeId)
+  }
+
+  function nodeBadge(item) {
+    return "[" + String(item && item.node_alias ? item.node_alias : "local") + "]"
+  }
+
+  function nodeHealthLabel(node) {
+    if (!node) return "unknown"
+    return String(node.health).split("_").join(" ") + (node.stale ? " · stale cache" : "")
+  }
+
+  function shellOwner(owner) {
+    if (typeof owner === "string") return owner
+    return owner && owner.kind === "schedule" ? "schedule" : "user"
+  }
+
+  function shellStatus(status) {
+    if (typeof status === "string") return status
+    return status && status.exited !== undefined ? "exited" : "unknown"
+  }
+
   function refresh() {
     if (daemonStatusProcess.running) return
     daemonStatusProcess.running = true
   }
 
   function refreshData() {
-    if (workspaceListProcess.running || listProcess.running || agentProcess.running
-        || scheduleListProcess.running || executionListProcess.running) return
+    if (nodeSnapshotProcess.running || workspaceListProcess.running || listProcess.running
+        || agentProcess.running || scheduleListProcess.running || executionListProcess.running) return
+    if (federationAvailable) {
+      refreshing = true
+      refreshPending = 1
+      error = ""
+      snapshotActiveEpoch = pollEpoch
+      nodeSnapshotProcess.running = true
+      return
+    }
     var loadSchedules = opened && activeTab === "schedules" && scheduleAvailable
     refreshing = true
     refreshPending = loadSchedules ? 5 : 3
@@ -149,6 +237,7 @@ Panel {
   }
 
   function setOffline(message) {
+    pollEpoch++
     online = false
     refreshing = false
     workspaces = []
@@ -156,9 +245,10 @@ Panel {
     agents = []
     schedules = []
     executions = []
+    nodes = []
     workspaceDetail = null
-    selectedWorkspaceId = ""
-    selectedScheduleId = ""
+    selectedWorkspaceKey = ""
+    selectedScheduleKey = ""
     itemToRemove = null
     daemonProtocolVersion = 0
     schedulerState = "offline"
@@ -202,6 +292,7 @@ Panel {
     try {
       var data = parseEnvelope(raw, "capabilities")
       if (!Array.isArray(data.json_commands)) throw new Error("missing JSON commands")
+      cliFeatures = Array.isArray(data.features) ? data.features : []
       var required = ["schedule.list", "schedule.pause", "schedule.resume",
         "schedule.run", "execution.list", "execution.open"]
       scheduleCommandsSupported = required.every(function(command) {
@@ -209,35 +300,227 @@ Panel {
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
       shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
+      federationSupported = data.json_commands.indexOf("node.snapshot") >= 0
+        && cliFeatures.indexOf("combined_node_snapshot") >= 0
+        && cliFeatures.indexOf("node_qualified_dashboard") >= 0
+        && cliFeatures.indexOf("typed_exact_node_routing") >= 0
     } catch (exception) {
       scheduleCommandsSupported = false
       projectListSupported = false
       shellNameSuggestionSupported = false
+      federationSupported = false
+      cliFeatures = []
       console.warn("io.github.gardnmi.boomux:", exception)
     }
     capabilitiesReady = true
+  }
+
+  function normalizeAgent(source, node, workspaceName) {
+    var id = resourceId(source.id)
+    var workspaceId = resourceId(source.workspace_id)
+    var shellId = resourceId(source.shell_id)
+    var runId = resourceId(source.run_id)
+    var observation = source.observation || {
+      revision: Number(source.observation_revision || 0),
+      state: String(source.state || "unknown"),
+      authority: "daemon_lifecycle",
+      evidence: node.local ? "" : "cached reduced observation",
+      confidence: 0,
+      observed_at_ms: Number(source.observed_at_ms || 0)
+    }
+    var attention = source.attention || null
+    if (attention && !attention.observation) attention = {
+      reason: attention.reason,
+      observation: {
+        revision: Number(attention.observation_revision || 0),
+        observed_at_ms: Number(attention.observed_at_ms || 0)
+      }
+    }
+    return Object.assign({}, source, {
+      id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
+      node_alias: node.alias, node_current: node.current, node_stale: node.stale,
+      workspace_id: workspaceId, workspace_key: resourceKey(node.node_id, workspaceId),
+      workspace_name: String(source.workspace_name || workspaceName || "unknown"),
+      shell_id: shellId, shell_key: resourceKey(node.node_id, shellId), run_id: runId,
+      observation: observation, attention: attention
+    })
+  }
+
+  function normalizeSchedule(source, node, workspaceName) {
+    var id = resourceId(source.id)
+    var workspaceId = resourceId(source.workspace_id)
+    var trigger = source.trigger || {}
+    return Object.assign({}, source, {
+      id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
+      node_alias: node.alias, node_current: node.current, node_stale: node.stale,
+      workspace_id: workspaceId, workspace_key: resourceKey(node.node_id, workspaceId),
+      workspace_name: String(source.workspace_name || workspaceName || "unknown"),
+      cron: String(source.cron || trigger.cron || ""),
+      timezone: String(source.timezone || trigger.timezone || ""),
+      session_mode: source.session_mode || (source.session && source.session.continue ? "continue" : "fresh"),
+      cwd: source.cwd || (node.local ? "" : "remote path available on owner")
+    })
+  }
+
+  function normalizeExecution(source, node) {
+    var id = resourceId(source.id)
+    var scheduleId = resourceId(source.schedule_id)
+    return Object.assign({}, source, {
+      id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
+      node_alias: node.alias, node_current: node.current, node_stale: node.stale,
+      schedule_id: scheduleId, schedule_key: resourceKey(node.node_id, scheduleId),
+      workspace_id: resourceId(source.workspace_id), shell_id: resourceId(source.shell_id),
+      run_id: resourceId(source.run_id), agent_id: resourceId(source.agent_id)
+    })
+  }
+
+  function parseNodeSnapshot(raw) {
+    try {
+      if (snapshotActiveEpoch !== pollEpoch) return
+      var data = parseEnvelope(raw, "node.snapshot")
+      if (!Array.isArray(data.nodes)) throw new Error("missing Nodes")
+      var nextNodes = [], nextWorkspaces = [], nextShells = [], nextAgents = []
+      var nextSchedules = [], nextExecutions = []
+      for (var n = 0; n < data.nodes.length; n++) {
+        var rawNode = data.nodes[n]
+        if (!rawNode || typeof rawNode.node_id !== "string" || typeof rawNode.alias !== "string")
+          throw new Error("invalid Node")
+        var node = {
+          node_id: rawNode.node_id, alias: rawNode.alias, local: !!rawNode.local,
+          health: String(rawNode.health || "unobserved"), current: !!rawNode.current,
+          stale: !!rawNode.stale, observed_at_ms: Number(rawNode.observed_at_ms || 0),
+          observed_protocol_version: Number(rawNode.observed_protocol_version || 0),
+          observed_capabilities: Array.isArray(rawNode.observed_capabilities)
+            ? rawNode.observed_capabilities : [],
+          scheduler: rawNode.scheduler || { state: "offline", active_executions: 0, max_concurrent: 0 }
+        }
+        nextNodes.push(node)
+        var projection = node.local ? rawNode.local_snapshot : rawNode.remote_projection
+        if (!projection) continue
+        var projectedWorkspaces = projection.workspaces || []
+        var projectedShells = node.local ? [] : (projection.shells || [])
+        var projectedLaunchers = node.local ? [] : (projection.launchers || [])
+        var projectedAgents = node.local ? [] : (projection.agents || [])
+        var projectedSchedules = node.local ? [] : (projection.schedules || [])
+        for (var w = 0; w < projectedWorkspaces.length; w++) {
+          var rawWorkspace = projectedWorkspaces[w]
+          var workspaceId = resourceId(rawWorkspace.id)
+          var workspace = Object.assign({}, rawWorkspace, {
+            id: workspaceId, key: resourceKey(node.node_id, workspaceId), node_id: node.node_id,
+            node_alias: node.alias, node_current: node.current, node_stale: node.stale,
+            node_health: node.health, shells: [], launchers: [], agents: [], schedules: []
+          })
+          if (node.local) {
+            workspace.shells = rawWorkspace.shells || []
+            workspace.launchers = rawWorkspace.launchers || []
+            workspace.agents = rawWorkspace.agents || []
+            workspace.schedules = rawWorkspace.schedules || []
+          } else {
+            workspace.shells = projectedShells.filter(function(item) {
+              return resourceId(item.workspace_id) === workspaceId
+            })
+            workspace.launchers = projectedLaunchers.filter(function(item) {
+              return resourceId(item.workspace_id) === workspaceId
+            })
+            workspace.agents = projectedAgents.filter(function(item) {
+              return resourceId(item.workspace_id) === workspaceId
+            })
+            workspace.schedules = projectedSchedules.filter(function(item) {
+              return resourceId(item.workspace_id) === workspaceId
+            })
+          }
+          workspace.shell_count = workspace.shells.length
+          workspace.launcher_count = workspace.launchers.length
+          workspace.schedule_count = workspace.schedules.length
+          nextWorkspaces.push(workspace)
+          for (var s = 0; s < workspace.shells.length; s++) {
+            var shell = workspace.shells[s]
+            var shellId = resourceId(shell.id)
+            var owner = shellOwner(shell.owner)
+            nextShells.push(Object.assign({}, shell, {
+              id: shellId, key: resourceKey(node.node_id, shellId), node_id: node.node_id,
+              node_alias: node.alias, node_current: node.current, node_stale: node.stale,
+              workspace_id: workspaceId, workspace_key: workspace.key, workspace_name: workspace.name,
+              owner: owner, status: shellStatus(shell.status),
+              run: shell.run || (shell.run_id ? { id: resourceId(shell.run_id) } : null)
+            }))
+          }
+          for (var a = 0; a < workspace.agents.length; a++)
+            nextAgents.push(normalizeAgent(workspace.agents[a], node, workspace.name))
+          for (var q = 0; q < workspace.schedules.length; q++)
+            nextSchedules.push(normalizeSchedule(workspace.schedules[q], node, workspace.name))
+        }
+        var projectedExecutions = node.local ? [] : (projection.executions || [])
+        for (var e = 0; e < projectedExecutions.length; e++)
+          nextExecutions.push(normalizeExecution(projectedExecutions[e], node))
+      }
+      nodes = nextNodes
+      workspaces = nextWorkspaces
+      shells = nextShells
+      schedules = nextSchedules
+      executions = nextExecutions
+      applyAgentSnapshot(nextAgents)
+      online = true
+      if (pendingWorkspace) {
+        for (var p = 0; p < workspaces.length; p++) {
+          if (workspaces[p].node_id === pendingWorkspace.nodeId
+              && workspaces[p].name === pendingWorkspace.name) {
+            selectedWorkspaceKey = workspaces[p].key
+            pendingWorkspace = null
+            break
+          }
+        }
+      }
+      var selectedNode = nodeFor(selectedNodeId)
+      if (selectedNodeId !== "all" && !selectedNode) selectedNodeId = "all"
+      preserveSelections()
+      if (activeTab === "schedules" && selectedSchedule) requestExecutions(selectedSchedule)
+    } catch (exception) {
+      error = "Could not read federated Boomux state"
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
+  }
+
+  function preserveSelections() {
+    if (!selectedWorkspace || (selectedNodeId !== "all" && selectedWorkspace.node_id !== selectedNodeId))
+      selectedWorkspaceKey = visibleWorkspaces.length > 0 ? visibleWorkspaces[0].key : ""
+    if (!selectedSchedule || (selectedNodeId !== "all" && selectedSchedule.node_id !== selectedNodeId))
+      selectedScheduleKey = visibleSchedules.length > 0 ? visibleSchedules[0].key : ""
+    workspaceDetail = selectedWorkspace
+    syncWorkspaceIndex()
+    syncScheduleIndex()
+    clampSelection()
   }
 
   function parseWorkspaces(raw) {
     try {
       var data = parseEnvelope(raw, "workspace.list")
       if (!Array.isArray(data.workspaces)) throw new Error("missing workspaces")
-      workspaces = data.workspaces
+      nodes = [{ node_id: "local", alias: "local", local: true, health: "online",
+        current: true, stale: false, observed_capabilities: [],
+        scheduler: { state: schedulerState, active_executions: schedulerActiveExecutions,
+          max_concurrent: schedulerMaxConcurrent } }]
+      workspaces = data.workspaces.map(function(workspace) {
+        return Object.assign({}, workspace, { key: resourceKey("local", workspace.id),
+          node_id: "local", node_alias: "local", node_current: true, node_stale: false,
+          node_health: "online" })
+      })
       online = true
 
-      if (pendingWorkspaceName !== "") {
+      if (pendingWorkspace) {
         for (var i = 0; i < workspaces.length; i++) {
-          if (workspaces[i].name === pendingWorkspaceName) {
-            selectedWorkspaceId = workspaces[i].id
-            pendingWorkspaceName = ""
+          if (workspaces[i].node_id === pendingWorkspace.nodeId
+              && workspaces[i].name === pendingWorkspace.name) {
+            selectedWorkspaceKey = workspaces[i].key
+            pendingWorkspace = null
             break
           }
         }
       }
-      if (!selectedWorkspace || selectedWorkspaceId === "")
-        selectedWorkspaceId = workspaces.length > 0 ? workspaces[0].id : ""
+      if (!selectedWorkspace || selectedWorkspaceKey === "")
+        selectedWorkspaceKey = workspaces.length > 0 ? workspaces[0].key : ""
       syncWorkspaceIndex()
-      if (selectedWorkspaceId !== "") inspectWorkspace(selectedWorkspaceId)
+      if (selectedWorkspaceKey !== "") inspectWorkspace(selectedWorkspaceKey)
       else workspaceDetail = null
       clampSelection()
     } catch (exception) {
@@ -253,7 +536,11 @@ Panel {
     try {
       var data = parseEnvelope(raw, "list")
       if (!Array.isArray(data.shells)) throw new Error("missing shells")
-      shells = data.shells
+      shells = data.shells.map(function(shell) {
+        return Object.assign({}, shell, { key: resourceKey("local", shell.id), node_id: "local",
+          node_alias: "local", node_current: true, node_stale: false,
+          workspace_key: resourceKey("local", shell.workspace_id) })
+      })
       online = true
     } catch (exception) {
       shells = []
@@ -265,7 +552,18 @@ Panel {
     try {
       var data = parseEnvelope(raw, "agent.list")
       if (!Array.isArray(data.agents)) throw new Error("missing agents")
-      var nextAgents = data.agents
+      var localNode = nodes.length > 0 ? nodes[0]
+        : { node_id: "local", alias: "local", local: true, current: true, stale: false }
+      applyAgentSnapshot(data.agents.map(function(agent) {
+        return normalizeAgent(agent, localNode, agent.workspace_name)
+      }))
+    } catch (exception) {
+      agents = []
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
+  }
+
+  function applyAgentSnapshot(nextAgents) {
       var nextStates = ({})
       var nextCompleted = ({})
       var nextAutomaticAttentionRevisions = ({})
@@ -275,13 +573,15 @@ Panel {
         if (agentIsScheduleOwned(agent)) continue
         var state = agent.observation ? agent.observation.state : "unknown"
         var attentionRevision = root.attentionRevision(agent)
-        nextStates[agent.id] = state
-        if (completedAgents[agent.id] && state === "idle") nextCompleted[agent.id] = true
-        if (agentBaselineReady && previousAgentStates[agent.id] === "working" && state === "idle")
-          nextCompleted[agent.id] = true
+        nextStates[agent.key] = state
+        if (completedAgents[agent.key] && state === "idle") nextCompleted[agent.key] = true
+        if ((!federationAvailable || nodeFor(agent.node_id).local) && agentBaselineReady
+            && previousAgentStates[agent.key] === "working" && state === "idle")
+          nextCompleted[agent.key] = true
         if (state === "working" && attentionRevision > 0 && attentionReason(agent) === "blocked") {
-          nextAutomaticAttentionRevisions[agent.id] = attentionRevision
-          if (automaticAttentionRevisions[agent.id] !== attentionRevision)
+          nextAutomaticAttentionRevisions[agent.key] = attentionRevision
+          if (automaticAttentionRevisions[agent.key] !== attentionRevision
+              && nodeIsActionable(agent.node_id, "guarded_remote_management"))
             acknowledgeAgent(agent, false, true)
         }
       }
@@ -292,25 +592,25 @@ Panel {
       agentBaselineReady = true
       agents = nextAgents
       clampSelection()
-    } catch (exception) {
-      agents = []
-      console.warn("io.github.gardnmi.boomux:", exception)
-    }
   }
 
   function parseSchedules(raw) {
     try {
       var data = parseEnvelope(raw, "schedule.list")
       if (!Array.isArray(data.schedules)) throw new Error("missing schedules")
-      schedules = data.schedules
-      if (!selectedSchedule || selectedScheduleId === "")
-        selectedScheduleId = schedules.length > 0 ? String(schedules[0].id) : ""
+      var localNode = nodes.length > 0 ? nodes[0]
+        : { node_id: "local", alias: "local", local: true, current: true, stale: false }
+      schedules = data.schedules.map(function(schedule) {
+        return normalizeSchedule(schedule, localNode, schedule.workspace_name)
+      })
+      if (!selectedSchedule || selectedScheduleKey === "")
+        selectedScheduleKey = schedules.length > 0 ? schedules[0].key : ""
       syncScheduleIndex()
       clampSelection()
     } catch (exception) {
       schedules = []
       executions = []
-      selectedScheduleId = ""
+      selectedScheduleKey = ""
       scheduleError = "Could not read Boomux Schedules"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
@@ -320,7 +620,16 @@ Panel {
     try {
       var data = parseEnvelope(raw, "execution.list")
       if (!Array.isArray(data.executions)) throw new Error("missing executions")
-      executions = data.executions
+      if (executionActiveScheduleKey !== executionRequestedScheduleKey) return
+      var schedule = selectedSchedule
+      if (!schedule || schedule.key !== executionActiveScheduleKey) return
+      var node = nodeFor(schedule.node_id)
+      var replacement = data.executions.map(function(execution) {
+        return normalizeExecution(execution, node)
+      })
+      executions = executions.filter(function(execution) {
+        return execution.schedule_key !== executionActiveScheduleKey
+      }).concat(replacement)
       executionError = ""
     } catch (exception) {
       executions = []
@@ -331,6 +640,8 @@ Panel {
 
   function parseProjects(raw) {
     try {
+      var owner = selectedCreationNode()
+      if (!owner || owner.node_id !== projectNodeId) return
       var data = parseEnvelope(raw, "project.list")
       if (typeof data.roots_configured !== "boolean" || !Array.isArray(data.projects)
           || !Array.isArray(data.warnings)) throw new Error("missing project discovery fields")
@@ -363,6 +674,14 @@ Panel {
     projectRootsConfigured = false
     selectedProjectIndex = 0
     projectError = ""
+    var node = selectedCreationNode()
+    if (!node || (!node.local && !nodeIsActionable(node.node_id, "remote_project_discovery"))) {
+      projectError = "Project discovery is unavailable for this Node"
+      return
+    }
+    projectNodeId = node.node_id
+    projectListProcess.command = ["boomux", "project", "list", "--json"]
+    if (!node.local) projectListProcess.command.push("--node", node.node_id)
     projectListProcess.running = true
   }
 
@@ -390,58 +709,83 @@ Panel {
   function requestShellNameSuggestion() {
     if (!shellNameSuggestionSupported || !workspaceDetail
         || (formMode !== "shell" && formMode !== "agent")) return
-    suggestedNameRequestedWorkspaceId = String(workspaceDetail.id)
+    if (!nodeIsActionable(workspaceDetail.node_id, workspaceDetail.node_id === "local"
+        ? "" : "typed_node_host_services")) return
+    suggestedNameRequestedWorkspaceKey = workspaceDetail.key
     if (!shellNameSuggestionProcess.running) startShellNameSuggestion()
   }
 
   function startShellNameSuggestion() {
-    if (suggestedNameRequestedWorkspaceId === "") return
-    suggestedNameActiveWorkspaceId = suggestedNameRequestedWorkspaceId
+    if (suggestedNameRequestedWorkspaceKey === "") return
+    suggestedNameActiveWorkspaceKey = suggestedNameRequestedWorkspaceKey
+    var workspace = null
+    for (var i = 0; i < workspaces.length; i++)
+      if (workspaces[i].key === suggestedNameActiveWorkspaceKey) workspace = workspaces[i]
+    if (!workspace) return
     shellNameSuggestionProcess.command = ["boomux", "shell", "suggest-name",
-      suggestedNameActiveWorkspaceId, "--json"]
+      workspace.id, "--json"]
+    if (!nodeFor(workspace.node_id).local)
+      shellNameSuggestionProcess.command.push("--node", workspace.node_id)
     shellNameSuggestionProcess.running = true
   }
 
   function parseShellNameSuggestion(raw) {
     try {
       var data = parseEnvelope(raw, "shell.suggest-name")
-      if (typeof data.workspace_id !== "string" || data.workspace_id !== suggestedNameActiveWorkspaceId
+      var responseWorkspaceId = resourceId(data.workspace_id)
+      var responseNodeId = resourceNode(data.workspace_id,
+        workspaceDetail ? workspaceDetail.node_id : "")
+      if (resourceKey(responseNodeId, responseWorkspaceId) !== suggestedNameActiveWorkspaceKey
           || typeof data.name !== "string" || data.name.trim() === "")
         throw new Error("invalid shell name suggestion")
       if ((formMode === "shell" || formMode === "agent") && workspaceDetail
-          && workspaceDetail.id === data.workspace_id && !nameFieldEdited
+          && workspaceDetail.key === suggestedNameActiveWorkspaceKey && !nameFieldEdited
           && nameField.text === "") nameField.text = data.name
     } catch (exception) {
       console.warn("io.github.gardnmi.boomux:", exception)
     }
   }
 
-  function inspectWorkspace(workspaceId) {
-    inspectRequestedId = String(workspaceId || "")
-    if (inspectRequestedId === "" || workspaceInspectProcess.running) return
-    inspectActiveId = inspectRequestedId
-    workspaceInspectProcess.command = ["boomux", "workspace", "inspect", inspectActiveId, "--json"]
+  function inspectWorkspace(workspaceKey) {
+    inspectRequestedKey = String(workspaceKey || "")
+    if (inspectRequestedKey === "") return
+    var workspace = null
+    for (var i = 0; i < workspaces.length; i++) if (workspaces[i].key === inspectRequestedKey) workspace = workspaces[i]
+    if (!workspace) return
+    if (federationAvailable) {
+      workspaceDetail = workspace
+      openPendingShellIfPresent()
+      return
+    }
+    if (workspaceInspectProcess.running) return
+    inspectActiveKey = inspectRequestedKey
+    workspaceInspectProcess.command = ["boomux", "workspace", "inspect", workspace.id, "--json"]
     workspaceInspectProcess.running = true
   }
 
   function parseWorkspaceDetail(raw) {
     try {
       var data = parseEnvelope(raw, "workspace.inspect")
-      if (!data.workspace || data.workspace.id !== selectedWorkspaceId) return
-      workspaceDetail = data.workspace
-      if (pendingShellName !== "") {
-        for (var i = 0; i < workspaceDetail.shells.length; i++) {
-          if (workspaceDetail.shells[i].name === pendingShellName) {
-            var shell = workspaceDetail.shells[i]
-            pendingShellName = ""
-            openShell(shell)
-            break
-          }
-        }
-      }
+      if (!data.workspace || resourceKey("local", data.workspace.id) !== selectedWorkspaceKey) return
+      workspaceDetail = Object.assign({}, data.workspace, { key: selectedWorkspaceKey,
+        node_id: "local", node_alias: "local", node_current: true, node_stale: false })
+      openPendingShellIfPresent()
     } catch (exception) {
       workspaceDetail = null
       console.warn("io.github.gardnmi.boomux:", exception)
+    }
+  }
+
+  function openPendingShellIfPresent() {
+    if (!pendingShell || !workspaceDetail || pendingShell.workspaceKey !== workspaceDetail.key) return
+    for (var i = 0; i < workspaceDetail.shells.length; i++) {
+      if (String(workspaceDetail.shells[i].name) === pendingShell.name) {
+        var shell = Object.assign({}, workspaceDetail.shells[i], { node_id: workspaceDetail.node_id,
+          node_alias: workspaceDetail.node_alias })
+        pendingShell = null
+        openShell(shell)
+        return
+      }
     }
   }
 
@@ -482,21 +826,21 @@ Panel {
 
   function activateSelected() {
     if (activeTab === "agents") openAgent(selectedItem)
-    else if (activeTab === "workspaces" && selectedItem) selectWorkspace(selectedItem.id)
-    else if (selectedItem) selectSchedule(selectedItem.id)
+    else if (activeTab === "workspaces" && selectedItem) selectWorkspace(selectedItem.key)
+    else if (selectedItem) selectSchedule(selectedItem.key)
   }
 
-  function selectWorkspace(workspaceId) {
-    selectedWorkspaceId = String(workspaceId)
+  function selectWorkspace(workspaceKey) {
+    selectedWorkspaceKey = String(workspaceKey)
     syncWorkspaceIndex()
     workspaceDetail = null
-    inspectWorkspace(selectedWorkspaceId)
+    inspectWorkspace(selectedWorkspaceKey)
   }
 
   function syncWorkspaceIndex() {
     if (activeTab !== "workspaces") return
-    for (var i = 0; i < workspaces.length; i++) {
-      if (workspaces[i].id === selectedWorkspaceId) {
+    for (var i = 0; i < visibleWorkspaces.length; i++) {
+      if (visibleWorkspaces[i].key === selectedWorkspaceKey) {
         selectedIndex = i
         return
       }
@@ -504,22 +848,38 @@ Panel {
     clampSelection()
   }
 
-  function selectSchedule(scheduleId) {
-    selectedScheduleId = String(scheduleId)
+  function selectSchedule(scheduleKey) {
+    selectedScheduleKey = String(scheduleKey)
     executionError = ""
     syncScheduleIndex()
-    refresh()
+    if (selectedSchedule) requestExecutions(selectedSchedule)
   }
 
   function syncScheduleIndex() {
     if (activeTab !== "schedules") return
-    for (var i = 0; i < schedules.length; i++) {
-      if (schedules[i].id === selectedScheduleId) {
+    for (var i = 0; i < visibleSchedules.length; i++) {
+      if (visibleSchedules[i].key === selectedScheduleKey) {
         selectedIndex = i
         return
       }
     }
     clampSelection()
+  }
+
+  function selectNode(nodeId) {
+    selectedNodeId = String(nodeId)
+    selectedIndex = 0
+    preserveSelections()
+    cancelForm()
+  }
+
+  function cycleNode(direction) {
+    if (!federationAvailable) return
+    var ids = ["all"]
+    for (var i = 0; i < nodes.length; i++) ids.push(nodes[i].node_id)
+    var index = ids.indexOf(selectedNodeId)
+    var step = direction < 0 ? -1 : 1
+    selectNode(ids[(index + step + ids.length) % ids.length])
   }
 
   function compactPath(path) {
@@ -531,9 +891,10 @@ Panel {
   function currentAgentForShell(shell) {
     if (!workspaceDetail || !workspaceDetail.agents || !shell) return null
     for (var i = 0; i < workspaceDetail.agents.length; i++) {
-      var agent = workspaceDetail.agents[i]
+      var rawAgent = workspaceDetail.agents[i]
+      var agent = rawAgent.key ? rawAgent : normalizeAgent(rawAgent, nodeFor(workspaceDetail.node_id), workspaceDetail.name)
       var state = agent.observation ? agent.observation.state : "unknown"
-      if (agent.shell_id === shell.id && agent.run_id === (shell.run ? shell.run.id : "")
+      if (agent.shell_id === resourceId(shell.id) && agent.run_id === resourceId(shell.run ? shell.run.id : shell.run_id)
           && state !== "inactive" && state !== "done" && agentIsProjectedCurrent(agent)) return agent
     }
     return null
@@ -545,25 +906,40 @@ Panel {
     var detailShells = workspaceDetail.shells || []
     for (var i = 0; i < detailShells.length; i++) {
       var shell = detailShells[i]
-      if (shell.owner === "schedule") continue
-      var agent = currentAgentForShell(shell)
+      var owner = shellOwner(shell.owner)
+      if (owner === "schedule") continue
+      var shellId = resourceId(shell.id)
+      var normalizedShell = Object.assign({}, shell, { id: shellId,
+        key: resourceKey(workspaceDetail.node_id, shellId), node_id: workspaceDetail.node_id,
+        node_alias: workspaceDetail.node_alias, node_current: workspaceDetail.node_current,
+        node_stale: workspaceDetail.node_stale, workspace_id: workspaceDetail.id,
+        workspace_key: workspaceDetail.key, owner: owner, status: shellStatus(shell.status),
+        run: shell.run || (shell.run_id ? { id: resourceId(shell.run_id) } : null) })
+      var agent = currentAgentForShell(normalizedShell)
       items.push({
         kind: agent ? "agent" : (shell.command && shell.command.length > 0 ? "command" : "shell"),
-        id: shell.id,
+        id: shellId,
+        key: normalizedShell.key,
+        node_id: workspaceDetail.node_id,
+        node_alias: workspaceDetail.node_alias,
         name: shell.name,
-        status: agent && agent.observation ? agent.observation.state : shell.status,
+        status: agent && agent.observation ? agent.observation.state : normalizedShell.status,
         detail: agent ? String(agent.integration || "agent")
           : (shell.command && shell.command.length > 0 ? shell.command.join(" ") : String(shell.cwd || "")),
-        shell: shell,
+        shell: normalizedShell,
         agent: agent
       })
     }
     var launchers = workspaceDetail.launchers || []
     for (var j = 0; j < launchers.length; j++) {
       var launcher = launchers[j]
+      var launcherId = resourceId(launcher.id)
       items.push({
         kind: "launcher",
-        id: launcher.id,
+        id: launcherId,
+        key: resourceKey(workspaceDetail.node_id, launcherId),
+        node_id: workspaceDetail.node_id,
+        node_alias: workspaceDetail.node_alias,
         name: launcher.name,
         status: "on workspace open",
         detail: launcher.command ? launcher.command.join(" ") : "",
@@ -574,39 +950,50 @@ Panel {
   }
 
   function openWorkspace(workspace) {
-    if (!workspace || actionProcess.running) return
-    pendingAction = "open-workspace"
+    if (!workspace || actionProcess.running
+        || !nodeIsActionable(workspace.node_id, "guarded_remote_management")) return
+    pendingAction = { kind: "open-workspace", key: workspace.key, nodeId: workspace.node_id }
     actionMessage = "Opening " + String(workspace.name) + "..."
     actionProcess.command = ["boomux", "workspace", "open", String(workspace.id)]
+    var args = nodeArgs(workspace.node_id, "guarded_remote_management")
+    if (args === null) return
+    actionProcess.command = actionProcess.command.concat(args)
     actionProcess.running = true
   }
 
   function openShell(shell, agent) {
-    if (!shell || !shell.id || openProcess.running) return
+    if (!shell || !shell.id || openProcess.running
+        || !nodeIsActionable(shell.node_id, "remote_pty_attachment")) return
     pendingOpenAgent = agent || null
+    pendingOpenKey = resourceKey(shell.node_id, shell.id)
     actionMessage = "Opening terminal..."
     openProcess.command = ["boomux", "open", String(shell.id), "--takeover"]
+    var args = nodeArgs(shell.node_id, "remote_pty_attachment")
+    if (args === null) return
+    openProcess.command = openProcess.command.concat(args)
     openProcess.running = true
   }
 
   function openAgent(agent) {
     if (!agent) return
     if (!agentShellRetained(agent)) {
-      if (attentionRevision(agent) > 0) {
+      if (attentionRevision(agent) > 0 && agentCanAcknowledge(agent)) {
         actionMessage = "Acknowledging attention for removed shell..."
         acknowledgeAgent(agent)
+      } else if (attentionRevision(agent) > 0) {
+        actionMessage = "Remote attention remains visible; this CLI cannot acknowledge it"
       } else {
         actionMessage = "This Agent's shell was removed"
       }
       return
     }
-    openShell({ id: agent.shell_id }, agent)
+    openShell({ id: agent.shell_id, node_id: agent.node_id, node_alias: agent.node_alias }, agent)
   }
 
   function agentShellRetained(agent) {
     if (!agent || !agent.shell_id) return false
     for (var i = 0; i < shells.length; i++)
-      if (shells[i].id === agent.shell_id) return true
+      if (shells[i].node_id === agent.node_id && shells[i].id === agent.shell_id) return true
     return false
   }
 
@@ -614,7 +1001,8 @@ Panel {
     if (!agent || !agent.shell_id || !agent.run_id) return false
     for (var i = 0; i < shells.length; i++) {
       var shell = shells[i]
-      if (shell.id === agent.shell_id && shell.run && shell.run.id === agent.run_id)
+      if (shell.node_id === agent.node_id && shell.id === agent.shell_id
+          && shell.run && resourceId(shell.run.id) === agent.run_id)
         return true
     }
     return false
@@ -623,7 +1011,8 @@ Panel {
   function agentIsScheduleOwned(agent) {
     if (!agent || !agent.shell_id) return false
     for (var i = 0; i < shells.length; i++)
-      if (shells[i].id === agent.shell_id) return shells[i].owner === "schedule"
+      if (shells[i].node_id === agent.node_id && shells[i].id === agent.shell_id)
+        return shells[i].owner === "schedule"
     return false
   }
 
@@ -634,7 +1023,8 @@ Panel {
     for (var i = 0; i < agents.length; i++) {
       var candidate = agents[i]
       var state = candidate.observation ? candidate.observation.state : "unknown"
-      if (candidate.id === agent.id || candidate.shell_id !== agent.shell_id
+      if (candidate.key === agent.key || candidate.node_id !== agent.node_id
+          || candidate.shell_id !== agent.shell_id
           || candidate.run_id !== agent.run_id || state === "inactive" || state === "done") continue
       var candidateObservedAt = candidate.observation
         ? Number(candidate.observation.observed_at_ms || 0) : 0
@@ -651,9 +1041,12 @@ Panel {
     if (!item) return
     if (item.kind === "launcher") {
       if (actionProcess.running) return
-      pendingAction = "invoke-launcher"
+      pendingAction = { kind: "invoke-launcher", key: item.key, nodeId: item.node_id }
       actionMessage = "Launching " + String(item.name) + "..."
       actionProcess.command = ["boomux", "launcher", "invoke", String(item.id)]
+      var args = nodeArgs(item.node_id, "remote_launcher_invocation")
+      if (args === null) return
+      actionProcess.command = actionProcess.command.concat(args)
       actionProcess.running = true
       return
     }
@@ -661,7 +1054,9 @@ Panel {
   }
 
   function requestRemoveItem(item) {
-    if (!item || actionProcess.running || openProcess.running || executionOpenProcess.running) return
+    var node = item ? nodeFor(item.node_id) : null
+    if (!item || !node || !node.local
+        || actionProcess.running || openProcess.running || executionOpenProcess.running) return
     removeItemDialog.selectedIndex = 0
     itemToRemove = item
   }
@@ -683,7 +1078,8 @@ Panel {
     var item = itemToRemove
     itemToRemove = null
     if (!item || !workspaceDetail || actionProcess.running) return
-    pendingAction = item.kind === "launcher" ? "remove-launcher" : "remove-shell"
+    pendingAction = { kind: item.kind === "launcher" ? "remove-launcher" : "remove-shell",
+      key: item.key, nodeId: item.node_id }
     actionMessage = "Removing " + String(item.name) + "..."
     actionProcess.command = item.kind === "launcher"
       ? ["boomux", "launcher", "remove", String(item.id), "--workspace", String(workspaceDetail.id)]
@@ -697,34 +1093,55 @@ Panel {
     close()
   }
 
+  function addNode() {
+    if (!bar || !federationAvailable) return
+    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux node add")
+    close()
+  }
+
   function openExecution(execution) {
-    if (!execution || executionOpenProcess.running || actionProcess.running) return
+    if (!execution || executionOpenProcess.running || actionProcess.running
+        || !nodeIsActionable(execution.node_id, "remote_scheduled_execution_observation")) return
     actionMessage = "Opening last Schedule run..."
+    pendingExecutionOpenKey = execution.key
     executionOpenProcess.command = ["boomux", "execution", "open", String(execution.id), "--json"]
+    var args = nodeArgs(execution.node_id, "remote_scheduled_execution_observation")
+    if (args === null) return
+    executionOpenProcess.command = executionOpenProcess.command.concat(args)
     executionOpenProcess.running = true
   }
 
   function executionCanOpen(execution) {
-    if (!execution) return false
+    if (!execution || !nodeIsActionable(execution.node_id,
+        "remote_scheduled_execution_observation")) return false
     return !!execution.agent_id
       || ((execution.state === "starting" || execution.state === "active")
         && daemonProtocolVersion >= 26 && !!execution.shell_id && !!execution.run_id)
   }
 
   function runSchedule(schedule) {
-    if (!schedule || actionProcess.running || executionOpenProcess.running) return
-    pendingAction = "run-schedule"
+    if (!schedule || actionProcess.running || executionOpenProcess.running
+        || !nodeIsActionable(schedule.node_id, "remote_agent_schedule_management")) return
+    pendingAction = { kind: "run-schedule", key: schedule.key, nodeId: schedule.node_id }
     actionMessage = "Starting " + String(schedule.name) + "..."
     actionProcess.command = ["boomux", "schedule", "run", String(schedule.id), "--json"]
+    var args = nodeArgs(schedule.node_id, "remote_agent_schedule_management")
+    if (args === null) return
+    actionProcess.command = actionProcess.command.concat(args)
     actionProcess.running = true
   }
 
   function setSchedulePaused(schedule, paused) {
-    if (!schedule || actionProcess.running || executionOpenProcess.running) return
-    pendingAction = paused ? "pause-schedule" : "resume-schedule"
+    if (!schedule || actionProcess.running || executionOpenProcess.running
+        || !nodeIsActionable(schedule.node_id, "remote_agent_schedule_management")) return
+    pendingAction = { kind: paused ? "pause-schedule" : "resume-schedule",
+      key: schedule.key, nodeId: schedule.node_id }
     actionMessage = (paused ? "Pausing " : "Resuming ") + String(schedule.name) + "..."
     actionProcess.command = ["boomux", "schedule", paused ? "pause" : "resume",
       String(schedule.id), "--json"]
+    var args = nodeArgs(schedule.node_id, "remote_agent_schedule_management")
+    if (args === null) return
+    actionProcess.command = actionProcess.command.concat(args)
     actionProcess.running = true
   }
 
@@ -738,7 +1155,9 @@ Panel {
     if (schedule.state === "paused") return "no future dispatch"
     if (schedule.next_occurrence && schedule.next_occurrence.scheduled_at_ms)
       return "next " + formatTimestamp(schedule.next_occurrence.scheduled_at_ms)
-    return schedulerState === "active" ? "next occurrence unavailable" : "scheduler " + schedulerState
+    var node = nodeFor(schedule.node_id)
+    var state = node && node.scheduler ? String(node.scheduler.state || "offline") : "offline"
+    return state === "active" ? "next occurrence unavailable" : "scheduler " + state
   }
 
   function executionDetail(execution) {
@@ -751,23 +1170,24 @@ Panel {
     return execution.dispatch_kind ? String(execution.dispatch_kind) : ""
   }
 
-  function workspaceItemCount(workspaceId) {
+  function workspaceItemCount(workspace) {
     var count = 0
     for (var i = 0; i < shells.length; i++)
-      if (shells[i].workspace_id === workspaceId && shells[i].owner !== "schedule") count++
-    for (var j = 0; j < workspaces.length; j++)
-      if (workspaces[j].id === workspaceId) return count + Number(workspaces[j].launcher_count || 0)
-    return count
+      if (shells[i].node_id === workspace.node_id && shells[i].workspace_id === workspace.id
+          && shells[i].owner !== "schedule") count++
+    return count + Number(workspace.launcher_count || 0)
   }
 
-  function workspaceActiveAgentCount(workspaceId) {
-    return visibleAgents.filter(function(agent) { return agent.workspace_id === workspaceId }).length
+  function workspaceActiveAgentCount(workspace) {
+    return visibleAgents.filter(function(agent) {
+      return agent.node_id === workspace.node_id && agent.workspace_id === workspace.id
+    }).length
   }
 
   function agentDisplayName(agent) {
     if (!agent) return "Agent"
     for (var i = 0; i < shells.length; i++)
-      if (shells[i].id === agent.shell_id) return shells[i].name
+      if (shells[i].node_id === agent.node_id && shells[i].id === agent.shell_id) return shells[i].name
     return agent.name
   }
 
@@ -784,12 +1204,17 @@ Panel {
     return attentionRevision(agent) > 0 && attentionReason(agent) === "blocked"
   }
 
+  function agentCanAcknowledge(agent) {
+    var node = agent ? nodeFor(agent.node_id) : null
+    return !!node && node.local && nodeIsActionable(agent.node_id, "")
+  }
+
   function acknowledgeAgent(agent, dismissed, automatic) {
     var revision = attentionRevision(agent)
-    if (revision <= 0) return
+    if (revision <= 0 || !agentCanAcknowledge(agent)) return
     var queue = acknowledgeQueue.slice()
     for (var i = 0; i < queue.length; i++) {
-      if (queue[i].agentId !== String(agent.id) || queue[i].revision !== revision) continue
+      if (queue[i].agentKey !== agent.key || queue[i].revision !== revision) continue
       if (dismissed) {
         queue[i].dismissed = true
         queue[i].automatic = false
@@ -798,6 +1223,8 @@ Panel {
       return
     }
     queue.push({
+      agentKey: agent.key,
+      nodeId: agent.node_id,
       agentId: String(agent.id),
       revision: revision,
       dismissed: !!dismissed,
@@ -808,8 +1235,9 @@ Panel {
   }
 
   function dismissAgent(agent) {
-    if (!agent || (!completedAgents[agent.id] && attentionRevision(agent) <= 0)) return
-    clearCompletedAgent(agent.id)
+    if (!agent || (!completedAgents[agent.key] && attentionRevision(agent) <= 0)
+        || !agentCanAcknowledge(agent)) return
+    clearCompletedAgent(agent.key)
     if (attentionRevision(agent) > 0) {
       actionMessage = "Dismissing Agent notification..."
       acknowledgeAgent(agent, true)
@@ -831,23 +1259,29 @@ Panel {
     var completed = ({})
     for (var i = 0; i < agents.length; i++) {
       if (agentIsScheduleOwned(agents[i])) continue
-      if (completedAgents[agents[i].id] && agentIsProjectedCurrent(agents[i]))
-        completed[agents[i].id] = true
+      if (completedAgents[agents[i].key] && agentIsProjectedCurrent(agents[i]))
+        completed[agents[i].key] = true
       if (attentionReason(agents[i]) === "completed" && attentionRevision(agents[i]) > 0)
-        completed[agents[i].id] = true
+        completed[agents[i].key] = true
     }
     return Object.keys(completed).length
   }
 
-  function clearCompletedAgent(agentId) {
-    if (!completedAgents[agentId]) return
+  function clearCompletedAgent(agentKey) {
+    if (!completedAgents[agentKey]) return
     var nextCompleted = ({})
     for (var id in completedAgents)
-      if (id !== agentId) nextCompleted[id] = completedAgents[id]
+      if (id !== agentKey) nextCompleted[id] = completedAgents[id]
     completedAgents = nextCompleted
   }
 
   function showForm(mode) {
+    var owner = mode === "workspace" ? selectedCreationNode()
+      : (workspaceDetail ? nodeFor(workspaceDetail.node_id) : null)
+    if (!owner || !owner.local) {
+      actionMessage = "Creation is unavailable here; select the local Node"
+      return
+    }
     formMode = mode
     actionMessage = ""
     nameFieldEdited = false
@@ -870,7 +1304,7 @@ Panel {
 
   function cancelForm() {
     directoryPickerOpen = false
-    suggestedNameRequestedWorkspaceId = ""
+    suggestedNameRequestedWorkspaceKey = ""
     formMode = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -954,17 +1388,20 @@ Panel {
 
     var command
     if (formMode === "workspace") {
-      pendingAction = "create-workspace"
-      pendingWorkspaceName = name
+      pendingAction = { kind: "create-workspace", key: resourceKey("local", "new:" + name),
+        nodeId: "local" }
+      pendingWorkspace = { nodeId: "local", name: name }
       command = ["boomux", "workspace", "create", name]
       if (cwd !== "") command.push("--cwd", cwd)
     } else if (formMode === "shell" && workspaceDetail) {
-      pendingAction = "create-shell"
+      pendingAction = { kind: "create-shell", key: workspaceDetail.key + "\u001fnew:" + name,
+        nodeId: workspaceDetail.node_id }
       command = ["boomux", "shell", "create", String(workspaceDetail.id), "--name", name]
       if (cwd !== "") command.push("--cwd", cwd)
     } else if (formMode === "agent" && workspaceDetail) {
-      pendingAction = "create-agent"
-      pendingShellName = name
+      pendingAction = { kind: "create-agent", key: workspaceDetail.key + "\u001fnew:" + name,
+        nodeId: workspaceDetail.node_id }
+      pendingShell = { workspaceKey: workspaceDetail.key, nodeId: workspaceDetail.node_id, name: name }
       command = ["boomux", "shell", "create", String(workspaceDetail.id), "--name", name]
       if (cwd !== "") command.push("--cwd", cwd)
       command.push("--", agentHost)
@@ -987,6 +1424,22 @@ Panel {
     return message !== "" ? message : fallback
   }
 
+  function requestExecutions(schedule) {
+    if (!schedule || executionListProcess.running) {
+      if (schedule) executionRequestedScheduleKey = schedule.key
+      return
+    }
+    if (!nodeIsActionable(schedule.node_id, "remote_scheduled_execution_observation")) return
+    executionRequestedScheduleKey = schedule.key
+    executionActiveScheduleKey = schedule.key
+    executionListProcess.command = ["boomux", "execution", "list", "--schedule",
+      schedule.id, "--limit", "1", "--json"]
+    var args = nodeArgs(schedule.node_id, "remote_scheduled_execution_observation")
+    if (args === null) return
+    executionListProcess.command = executionListProcess.command.concat(args)
+    executionListProcess.running = true
+  }
+
   onOpenedChanged: if (opened) {
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -1005,6 +1458,7 @@ Panel {
         root.capabilitiesReady = true
         root.scheduleCommandsSupported = false
         root.projectListSupported = false
+        root.federationSupported = false
       }
       if (root.opened && root.activeTab === "schedules") root.refresh()
     }
@@ -1034,8 +1488,8 @@ Panel {
       else console.warn("io.github.gardnmi.boomux:", root.processError(
         shellNameSuggestionStderr.text || shellNameSuggestionStdout.text,
         "Could not suggest a shell name"))
-      if (root.suggestedNameRequestedWorkspaceId !== ""
-          && root.suggestedNameRequestedWorkspaceId !== root.suggestedNameActiveWorkspaceId)
+      if (root.suggestedNameRequestedWorkspaceKey !== ""
+          && root.suggestedNameRequestedWorkspaceKey !== root.suggestedNameActiveWorkspaceKey)
         root.startShellNameSuggestion()
     }
   }
@@ -1046,6 +1500,21 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseDaemonStatus(text) }
     onExited: function(exitCode) {
       if (exitCode !== 0) root.setOffline("Boomux daemon is stopped")
+    }
+  }
+
+  Process {
+    id: nodeSnapshotProcess
+    command: ["boomux", "node", "snapshot", "--json"]
+    stdout: StdioCollector { id: nodeSnapshotStdout; waitForEnd: true }
+    stderr: StdioCollector { id: nodeSnapshotStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.finishRefresh()
+      if (exitCode === 0) root.parseNodeSnapshot(nodeSnapshotStdout.text)
+      else {
+        root.error = root.processError(nodeSnapshotStderr.text || nodeSnapshotStdout.text,
+          "Could not read federated Boomux state")
+      }
     }
   }
 
@@ -1094,10 +1563,8 @@ Panel {
       root.finishRefresh()
       if (exitCode === 0) {
         root.parseSchedules(scheduleListStdout.text)
-        if (root.selectedScheduleId !== "") {
-          executionListProcess.command = ["boomux", "execution", "list", "--schedule",
-            root.selectedScheduleId, "--limit", "1", "--json"]
-          executionListProcess.running = true
+        if (root.selectedSchedule) {
+          root.requestExecutions(root.selectedSchedule)
         } else {
           root.executions = []
           root.finishRefresh()
@@ -1105,7 +1572,7 @@ Panel {
       } else {
         root.schedules = []
         root.executions = []
-        root.selectedScheduleId = ""
+        root.selectedScheduleKey = ""
         root.scheduleError = root.processError(scheduleListStderr.text || scheduleListStdout.text,
           "Could not read Boomux Schedules")
         root.finishRefresh()
@@ -1121,9 +1588,17 @@ Panel {
       root.finishRefresh()
       if (exitCode === 0) root.parseExecutions(executionListStdout.text)
       else {
-        root.executions = []
         root.executionError = root.processError(executionListStderr.text || executionListStdout.text,
           "Could not read the last Schedule run")
+      }
+      if (root.executionRequestedScheduleKey !== ""
+          && root.executionRequestedScheduleKey !== root.executionActiveScheduleKey) {
+        for (var i = 0; i < root.schedules.length; i++) {
+          if (root.schedules[i].key === root.executionRequestedScheduleKey) {
+            root.requestExecutions(root.schedules[i])
+            break
+          }
+        }
       }
     }
   }
@@ -1132,8 +1607,8 @@ Panel {
     id: workspaceInspectProcess
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseWorkspaceDetail(text) }
     onExited: function(exitCode) {
-      if (root.inspectRequestedId !== "" && root.inspectRequestedId !== root.inspectActiveId)
-        root.inspectWorkspace(root.inspectRequestedId)
+      if (root.inspectRequestedKey !== "" && root.inspectRequestedKey !== root.inspectActiveKey)
+        root.inspectWorkspace(root.inspectRequestedKey)
     }
   }
 
@@ -1142,11 +1617,11 @@ Panel {
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
     onExited: function(exitCode) {
-      var action = root.pendingAction
-      root.pendingAction = ""
+      var action = root.pendingAction ? root.pendingAction.kind : ""
+      root.pendingAction = null
       if (exitCode !== 0) {
-        root.pendingShellName = ""
-        root.pendingWorkspaceName = ""
+        root.pendingShell = null
+        root.pendingWorkspace = null
         root.actionMessage = root.processError(actionStderr.text || actionStdout.text, "Boomux action failed")
         return
       }
@@ -1170,12 +1645,13 @@ Panel {
     onExited: function(exitCode) {
       var agent = root.pendingOpenAgent
       root.pendingOpenAgent = null
+      root.pendingOpenKey = ""
       if (exitCode !== 0) {
         root.actionMessage = "Could not open terminal"
         return
       }
       if (agent) {
-        root.clearCompletedAgent(agent.id)
+        root.clearCompletedAgent(agent.key)
         root.acknowledgeAgent(agent)
       }
       root.actionMessage = ""
@@ -1188,6 +1664,7 @@ Panel {
     stdout: StdioCollector { id: executionOpenStdout; waitForEnd: true }
     stderr: StdioCollector { id: executionOpenStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      root.pendingExecutionOpenKey = ""
       if (exitCode !== 0) {
         root.actionMessage = root.processError(executionOpenStderr.text || executionOpenStdout.text,
           "Could not open the last Schedule run")
@@ -1318,6 +1795,9 @@ Panel {
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
         else if (text === "3") root.selectTab("schedules")
+        else if (text === "[") root.cycleNode(-1)
+        else if (text === "]") root.cycleNode(1)
+        else if ((text === "a" || text === "A") && root.federationAvailable) root.addNode()
         else if (text === "n" || text === "N") root.showForm("workspace")
         else if ((text === "d" || text === "D") && root.activeTab === "agents")
           root.dismissAgent(root.selectedItem)
@@ -1355,6 +1835,61 @@ Panel {
               horizontalPadding: Style.space(5)
               verticalPadding: Style.space(2)
               onClicked: root.openDashboard()
+            }
+          }
+        }
+
+        Column {
+          visible: root.federationAvailable
+          width: parent.width
+          spacing: Style.space(4)
+          Row {
+            width: parent.width
+            PanelSectionHeader {
+              width: parent.width - addNodeButton.width
+              anchors.verticalCenter: parent.verticalCenter
+              text: "NODES"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            Button {
+              id: addNodeButton
+              text: "Add Node"
+              iconText: "+"
+              tooltipText: "Open interactive local boomux node add"
+              bordered: true
+              foreground: root.foreground
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(6)
+              verticalPadding: Style.space(2)
+              onClicked: root.addNode()
+            }
+          }
+          ListView {
+            width: parent.width
+            height: Style.space(34)
+            orientation: ListView.Horizontal
+            model: [{ node_id: "all", alias: "All Nodes", health: "" }].concat(root.nodes)
+            spacing: Style.space(5)
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+            delegate: Button {
+              required property var modelData
+              height: Style.space(28)
+              text: modelData.node_id === "all" ? "ALL NODES"
+                : "NODE " + String(modelData.alias) + " · " + root.nodeHealthLabel(modelData)
+              tooltipText: modelData.node_id === "all" ? "Show resources from every Node"
+                : (root.nodeHealthLabel(modelData) + " · scheduler "
+                  + String(modelData.scheduler ? modelData.scheduler.state : "offline"))
+              selected: root.selectedNodeId === modelData.node_id
+              bordered: true
+              foreground: modelData.stale || (modelData.health && modelData.health !== "online")
+                ? root.urgent : root.foreground
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(7)
+              verticalPadding: Style.space(2)
+              onClicked: root.selectNode(modelData.node_id)
             }
           }
         }
@@ -1878,7 +2413,7 @@ Panel {
               }
             }
             Text {
-              visible: root.workspaces.length === 0
+              visible: root.visibleWorkspaces.length === 0
               width: parent.width
               text: root.error !== "" ? root.error : "No Boomux workspaces"
               color: root.dim
@@ -1890,10 +2425,10 @@ Panel {
             }
             ListView {
               id: workspaceList
-              visible: root.workspaces.length > 0
+              visible: root.visibleWorkspaces.length > 0
               width: parent.width
               implicitHeight: Math.min(contentHeight, Style.space(150))
-              model: root.workspaces
+              model: root.visibleWorkspaces
               spacing: Style.space(3)
               clip: true
               boundsBehavior: Flickable.StopAtBounds
@@ -1905,7 +2440,8 @@ Panel {
                 width: ListView.view.width
                 height: Style.space(50)
                 radius: Style.cornerRadius
-                color: modelData.id === root.selectedWorkspaceId
+                opacity: modelData.node_stale ? 0.66 : 1
+                color: modelData.key === root.selectedWorkspaceKey
                   ? Style.selectedFillFor(root.foreground, Color.accent)
                   : (workspaceMouse.containsMouse
                     ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
@@ -1919,18 +2455,19 @@ Panel {
                   spacing: Style.space(2)
                   Text {
                     width: parent.width
-                    text: String(modelData.name)
+                    text: root.nodeBadge(modelData) + "  " + String(modelData.name)
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
-                    font.bold: modelData.id === root.selectedWorkspaceId
+                    font.bold: modelData.key === root.selectedWorkspaceKey
                     elide: Text.ElideRight
                   }
                   Text {
                     width: parent.width
-                    text: root.workspaceItemCount(modelData.id) + " items · "
+                    text: root.workspaceItemCount(modelData) + " items · "
                       + Number(modelData.schedule_count || 0) + " schedules · "
-                      + root.workspaceActiveAgentCount(modelData.id) + " active agents"
+                      + root.workspaceActiveAgentCount(modelData) + " active agents · "
+                      + String(modelData.node_health).split("_").join(" ")
                     color: modelData.attention_count > 0 ? root.urgent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1942,8 +2479,9 @@ Panel {
                   anchors.fill: parent
                   hoverEnabled: true
                   onEntered: root.selectedIndex = index
-                  onClicked: root.selectWorkspace(modelData.id)
-                  onDoubleClicked: root.openWorkspace(modelData)
+                  onClicked: root.selectWorkspace(modelData.key)
+                  onDoubleClicked: if (root.nodeIsActionable(modelData.node_id,
+                    "guarded_remote_management")) root.openWorkspace(modelData)
                 }
               }
             }
@@ -1966,7 +2504,8 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: root.workspaceDetail ? String(root.workspaceDetail.name) : ""
+                  text: root.workspaceDetail
+                    ? root.nodeBadge(root.workspaceDetail) + "  " + String(root.workspaceDetail.name) : ""
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -1993,6 +2532,8 @@ Panel {
                     iconText: ""
                     tooltipText: "Open selected workspace"
                     bordered: true
+                    enabled: root.workspaceDetail
+                      && root.nodeIsActionable(root.workspaceDetail.node_id, "guarded_remote_management")
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.body
@@ -2004,6 +2545,7 @@ Panel {
                     iconText: "+"
                     tooltipText: "Add shell to selected workspace"
                     bordered: true
+                    enabled: root.workspaceDetail && root.nodeFor(root.workspaceDetail.node_id).local
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.body
@@ -2015,6 +2557,7 @@ Panel {
                     iconText: "+"
                     tooltipText: "Start Agent in selected workspace"
                     bordered: true
+                    enabled: root.workspaceDetail && root.nodeFor(root.workspaceDetail.node_id).local
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.body
@@ -2100,6 +2643,8 @@ Panel {
                       id: itemMouse
                       anchors.fill: parent
                       hoverEnabled: true
+                      enabled: root.nodeIsActionable(modelData.node_id,
+                        modelData.kind === "launcher" ? "remote_launcher_invocation" : "remote_pty_attachment")
                       onClicked: root.openWorkspaceItem(modelData)
                     }
                     Button {
@@ -2113,7 +2658,9 @@ Panel {
                         ? "Remove launcher definition"
                         : "Close and remove backing shell"
                       bordered: true
-                      enabled: !actionProcess.running && !openProcess.running && !executionOpenProcess.running
+                      enabled: root.nodeFor(modelData.node_id) && root.nodeFor(modelData.node_id).local
+                        && !actionProcess.running
+                        && !openProcess.running && !executionOpenProcess.running
                       foreground: root.urgent
                       fontSize: Style.font.caption
                       horizontalPadding: Style.space(6)
@@ -2149,10 +2696,17 @@ Panel {
               Text {
                 id: schedulerStatus
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.schedulerState === "active"
-                  ? root.schedulerActiveExecutions + "/" + root.schedulerMaxConcurrent + " active"
-                  : root.schedulerState
-                color: root.schedulerState === "active" ? Color.accent : root.dim
+                text: root.selectedSchedule && root.nodeFor(root.selectedSchedule.node_id)
+                  ? (root.nodeFor(root.selectedSchedule.node_id).scheduler.state === "active"
+                    ? Number(root.nodeFor(root.selectedSchedule.node_id).scheduler.active_executions || 0)
+                      + "/" + Number(root.nodeFor(root.selectedSchedule.node_id).scheduler.max_concurrent || 0)
+                      + " active · " + root.nodeBadge(root.selectedSchedule)
+                    : String(root.nodeFor(root.selectedSchedule.node_id).scheduler.state)
+                      + " · " + root.nodeBadge(root.selectedSchedule))
+                  : root.nodes.length + " Nodes"
+                color: root.selectedSchedule && root.nodeFor(root.selectedSchedule.node_id)
+                  && root.nodeFor(root.selectedSchedule.node_id).scheduler.state === "active"
+                  ? Color.accent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -2175,7 +2729,7 @@ Panel {
             }
 
             Text {
-              visible: root.scheduleAvailable && root.online && root.schedules.length === 0
+              visible: root.scheduleAvailable && root.online && root.visibleSchedules.length === 0
               width: parent.width
               text: root.scheduleError !== "" ? root.scheduleError : "No Boomux Schedules"
               color: root.scheduleError !== "" ? root.urgent : root.dim
@@ -2189,10 +2743,10 @@ Panel {
 
             ListView {
               id: scheduleList
-              visible: root.scheduleAvailable && root.online && root.schedules.length > 0
+              visible: root.scheduleAvailable && root.online && root.visibleSchedules.length > 0
               width: parent.width
               implicitHeight: Math.min(contentHeight, Style.space(190))
-              model: root.schedules
+              model: root.visibleSchedules
               spacing: Style.space(3)
               clip: true
               boundsBehavior: Flickable.StopAtBounds
@@ -2204,7 +2758,8 @@ Panel {
                 width: ListView.view.width
                 height: Style.space(58)
                 radius: Style.cornerRadius
-                color: modelData.id === root.selectedScheduleId
+                opacity: modelData.node_stale ? 0.66 : 1
+                color: modelData.key === root.selectedScheduleKey
                   ? Style.selectedFillFor(root.foreground, Color.accent)
                   : (scheduleMouse.containsMouse
                     ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
@@ -2228,11 +2783,12 @@ Panel {
                   spacing: Style.space(2)
                   Text {
                     width: parent.width
-                    text: String(modelData.workspace_name) + " / " + String(modelData.name)
+                    text: root.nodeBadge(modelData) + "  " + String(modelData.workspace_name)
+                      + " / " + String(modelData.name)
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
-                    font.bold: modelData.id === root.selectedScheduleId
+                    font.bold: modelData.key === root.selectedScheduleKey
                     elide: Text.ElideRight
                   }
                   Text {
@@ -2249,7 +2805,7 @@ Panel {
                   anchors.fill: parent
                   hoverEnabled: true
                   onEntered: root.selectedIndex = index
-                  onClicked: root.selectSchedule(modelData.id)
+                  onClicked: root.selectSchedule(modelData.key)
                 }
               }
             }
@@ -2312,7 +2868,10 @@ Panel {
                     tooltipText: "Start one execution now"
                     bordered: true
                     active: true
-                    enabled: !actionProcess.running && !executionOpenProcess.running
+                    enabled: root.selectedSchedule
+                      && root.nodeIsActionable(root.selectedSchedule.node_id,
+                        "remote_agent_schedule_management")
+                      && !actionProcess.running && !executionOpenProcess.running
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.caption
@@ -2325,7 +2884,10 @@ Panel {
                     tooltipText: root.selectedSchedule && root.selectedSchedule.state === "paused"
                       ? "Enable future timed dispatch" : "Pause future timed dispatch"
                     bordered: true
-                    enabled: !actionProcess.running && !executionOpenProcess.running
+                    enabled: root.selectedSchedule
+                      && root.nodeIsActionable(root.selectedSchedule.node_id,
+                        "remote_agent_schedule_management")
+                      && !actionProcess.running && !executionOpenProcess.running
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     iconSize: Style.font.caption
@@ -2428,7 +2990,7 @@ Panel {
             }
 
             Text {
-              visible: root.scheduleAvailable && root.online && root.schedules.length > 0
+              visible: root.scheduleAvailable && root.online && root.visibleSchedules.length > 0
               width: parent.width
               text: "Enter selects · Tab switches · R refreshes"
               color: root.dim
@@ -2481,14 +3043,17 @@ Panel {
     readonly property string state: agent && agent.observation ? agent.observation.state : "unknown"
     readonly property bool needsAttention: root.agentNeedsAttention(agent)
     readonly property bool justCompleted: agent
-      ? !!root.completedAgents[agent.id] || root.attentionReason(agent) === "completed" : false
+      ? !!root.completedAgents[agent.key] || root.attentionReason(agent) === "completed" : false
     readonly property bool dismissible: agent
-      ? !!root.completedAgents[agent.id] || root.attentionRevision(agent) > 0 : false
+      ? !!root.completedAgents[agent.key] || root.attentionRevision(agent) > 0 : false
+    readonly property bool actionable: agent && root.nodeIsActionable(agent.node_id,
+      "remote_pty_attachment")
 
     height: Style.space(66)
     radius: Style.cornerRadius
     color: selected ? Style.selectedFillFor(root.foreground, Color.accent)
       : (agentMouse.containsMouse ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06) : "transparent")
+    opacity: agent && agent.node_stale ? 0.66 : 1
     Text {
       id: agentGlyph
       anchors.left: parent.left
@@ -2510,7 +3075,8 @@ Panel {
       spacing: Style.space(2)
       Text {
         width: parent.width
-        text: agent ? String(agent.workspace_name) + " / " + root.agentDisplayName(agent) : "Agent"
+        text: agent ? root.nodeBadge(agent) + "  " + String(agent.workspace_name)
+          + " / " + root.agentDisplayName(agent) : "Agent"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -2525,6 +3091,8 @@ Panel {
             ? (root.attentionRevision(agent) > 0
               ? " · shell removed · dismiss notification" : " · shell removed") : "")
           + (agent && agent.integration ? " · " + String(agent.integration) : "")
+          + (agent && (agent.node_stale || !agent.node_current)
+            ? " · " + root.nodeHealthLabel(root.nodeFor(agent.node_id)) : "")
           + (agent && agent.observation && agent.observation.evidence ? " · " + String(agent.observation.evidence) : "")
         color: agentRow.needsAttention ? root.urgent : root.dim
         font.family: root.fontFamily
@@ -2535,6 +3103,8 @@ Panel {
     MouseArea {
       id: agentMouse
       anchors.fill: parent
+      enabled: agentRow.actionable || (agentRow.dismissible
+        && root.agentCanAcknowledge(agent))
       hoverEnabled: true
       onEntered: agentRow.hovered()
       onClicked: agentRow.activated()
@@ -2548,6 +3118,7 @@ Panel {
       text: "Dismiss"
       tooltipText: "Dismiss Agent notification"
       bordered: true
+      enabled: root.agentCanAcknowledge(agent)
       foreground: root.foreground
       fontSize: Style.font.caption
       horizontalPadding: Style.space(6)

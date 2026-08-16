@@ -1,7 +1,7 @@
 # Boomux for Omarchy
 
-Monitor interactive Boomux Agents, manage native-terminal workspaces, and
-operate recurring Agent Schedules without leaving the Omarchy bar.
+Monitor interactive Boomux Agents, manage local and federated native-terminal
+workspaces, and operate recurring Agent Schedules without leaving the Omarchy bar.
 
 ![Boomux Agent status in the Omarchy bar](assets/agents.png)
 
@@ -26,6 +26,12 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
 - Polls local Boomux state once per second for responsive updates
+- Combines local and registered remote Nodes with unmistakable ownership badges
+- Filters all resources by **All Nodes** or one exact Node
+- Shows every Node health state without hiding cached stale resources
+- Shows scheduler health independently per Node and disables owner-dependent
+  actions while its state is stale or unavailable
+- Opens interactive **Add Node** setup only in a local native terminal
 
 ![Boomux workspace management in the Omarchy bar](assets/workspaces.png)
 
@@ -34,7 +40,7 @@ operate recurring Agent Schedules without leaving the Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.18.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.19.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 
@@ -50,6 +56,10 @@ boomux integration setup pi
 
 The plugin does not automatically start a stopped Boomux daemon. Launch Boomux
 or open a managed workspace before using the panel.
+
+Federation activates only when the local CLI advertises the protocol 37 Node
+snapshot and exact-routing capabilities and the running local daemon can
+negotiate them. Older Boomux daemons retain the existing local-only panel.
 
 Follow the setup command's restart and verification guidance. See the
 [Boomux installation instructions](https://github.com/gardnmi/boomux#install)
@@ -78,6 +88,8 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
 | Tab or `1` / `2` / `3` | Switch between Agents, Workspaces, and Schedules |
+| `[` / `]` | Select the previous or next Node filter |
+| `A` | Open interactive Add Node in a native terminal |
 | Up / Down | Select an Agent, workspace, or Schedule |
 | Enter | Open a selected Agent or select a workspace or Schedule |
 | `D` | Dismiss the selected Agent notification |
@@ -86,7 +98,11 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Escape | Close the panel |
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. **New Workspace** is a global action. Selecting a workspace shows its
+window. The Node strip selects **All Nodes** or one owner, and every resource row
+has a `NODE` badge. **Add Node** opens local interactive `boomux node add` in a
+native terminal, where Boomux alone handles SSH authentication, remote install
+details, and confirmation. **New Workspace** remains a local action. Selecting a
+workspace shows its
 directory, items, and scoped **Open**, **Shell**, and **Agent** actions below the
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
@@ -99,6 +115,10 @@ path, or choose **Custom** to enter an unrelated workspace name and optional
 default directory. **Browse** opens a bounded local directory browser and fills
 the exact selected path; manual path entry remains available. Choosing a project
 or directory does not create or start anything until **Create** is pressed.
+Remote paths are never opened in the local directory browser. Any remote project
+or path data comes from Boomux's owner-routed `project list --node` service;
+unsupported remote creation controls stay disabled.
+
 Configure the suggestions in Boomux, for example:
 
 ```toml
@@ -149,7 +169,10 @@ or substitutes a later run. **Run Now** can start an Agent and its permitted
 tool, filesystem, and network activity even while a Schedule is paused.
 **Pause** prevents future timed dispatch but does not cancel active work;
 **Resume** plans future occurrences without catching up paused time. Execution
-failures do not change the bomb's Agent-attention spark.
+failures do not change the bomb's Agent-attention spark. Federated Schedule rows
+use each owner Node's scheduler health. Live remote controls and exact execution
+reads include that Node's exact ID and are disabled for cached stale,
+reconnecting, unreachable, authentication, identity, or unsupported states.
 
 ## Update
 
@@ -171,17 +194,26 @@ and data.
 
 ## Data And Privacy
 
-- The plugin checks local daemon status once per second without starting it. If
-  Boomux is already running, it polls Agent, shell, and workspace state once per
-  second and inspects the selected workspace. Schedule definitions and the
-  prompt-free latest run are polled only while the Schedules tab is open.
+- The plugin checks only the local daemon status once per second without starting
+  it. On protocol 37 it consumes local `boomux node snapshot --json`, containing
+  rich local and bounded prompt-free cached remote state. It never polls a remote
+  host itself. Older daemons use the previous local Agent, shell, and workspace
+  commands. Prompt-free exact latest-run reads occur only in the Schedules tab.
 - The passive `boomux capabilities --json` check gates Schedule support. The
   plugin never requests or displays persisted Schedule prompts. When New
   Workspace opens, the advertised passive `boomux project list --json` command
   scans configured roots without contacting or starting the daemon.
-- It makes no network requests and does not read or store credentials.
+- QML makes no SSH or other network requests and does not read or store
+  credentials. Every command targets the local Boomux CLI; Boomux owns verified
+  routing, authentication, installation confirmation, and its bounded cache.
+- The plugin does not persist Node projections, prompts, credentials, attachment
+  environments, remote terminal content, or remote paths.
 - The directory browser reads names of local readable subdirectories only while
   it is open; it does not read file contents or send paths elsewhere.
+- Boomux may deliver one locally deduplicated, bounded reconnect attention digest
+  after a verified remote cursor resumes. The plugin presents Boomux's durable
+  projected attention after refresh; it does not derive or deliver notifications
+  from health changes, execution outcomes, quiet output, or cache reseeds.
 - It does not modify Boomux or Omarchy configuration directly.
 - After an Agent terminal opens successfully, its notification is explicitly
   dismissed, or a blocked Agent reports `working` again, the plugin can run the
@@ -199,6 +231,13 @@ and data.
   dispatch. Opening the latest run can attach its exact active run or launch its
   harness to resume the exact linked session. Schedule actions do not edit
   prompts, cancel executions, or remove Schedules.
+- Remote opens and mutations include the resource's structural Node identity.
+  Stale rows remain visible but cannot launch, mutate, acknowledge, inspect
+  private state, or start owner-side processes; offline writes are never queued.
+- The protocol 37 CLI does not expose Node context on attention acknowledgment,
+  workspace/shell creation, or destructive workspace/shell/launcher mutations.
+  Those controls remain disabled for remote owners rather than dropping Node
+  identity or accidentally applying an operation locally.
 
 ## Troubleshooting
 
@@ -232,6 +271,23 @@ reload, request a plugin rescan:
 omarchy-shell shell rescanPlugins
 ```
 
+### A remote Node is stale or unavailable
+
+The Node badge reports Boomux's stable health value. `reconnecting` and `stale`
+retain the last bounded projection. `unreachable`, `authentication required`,
+`identity changed`, `identity conflict`, and `unsupported` require owner or route
+attention. Controls remain disabled until Boomux reports a current,
+identity-verified `online` observation. Inspect through the local CLI:
+
+```bash
+boomux node list --json
+boomux node snapshot --json
+boomux doctor
+```
+
+Use **Add Node** for a new registration so authentication and bootstrap
+confirmation stay in the native terminal rather than the panel.
+
 ## Development
 
 Deploy the complete working tree while Quickshell is stopped, then restart it:
@@ -249,7 +305,19 @@ Validate the repository with:
 omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Panel.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
+bash -n deploy-local.sh
+mise tasks
+git diff --check
+boomux --version
+boomux capabilities --json
+boomux daemon status --json
 ```
+
+Protocol 37 live validation additionally needs two privacy-safe Nodes to verify
+duplicate names and inner IDs, health and reconnect behavior, keyboard and mouse
+filtering, exact action routing, remote PTY attachment, Schedule controls, and
+reconnect attention presentation. Do not fabricate Node screenshots or use
+private paths, titles, prompts, terminal output, or targets.
 
 ## License
 
