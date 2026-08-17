@@ -118,6 +118,9 @@ describe("qualified commands and action gates", () => {
     expect(model.workspaceOpenCommand(localExternal)).toEqual([
       "boomux", "workspace", "open", "global-1", "--node", "node-a"
     ])
+    expect(model.workspaceCloseCommand(global)).toEqual([
+      "boomux", "workspace", "close", "global-1"
+    ])
   })
 
   test("keeps unavailable and close-pending placement resources disabled", () => {

@@ -1005,12 +1005,29 @@ Panel {
     itemToRemove = item
   }
 
+  function workspaceCanRemove(workspace) {
+    if (!workspace || actionProcess.running || openProcess.running
+        || executionOpenProcess.running) return false
+    if (workspace.is_global) return true
+    var node = nodeFor(workspace.node_id)
+    return !globalWorkspacesAvailable && !!node && node.local
+  }
+
+  function requestRemoveWorkspace(workspace) {
+    if (!workspaceCanRemove(workspace)) return
+    removeItemDialog.selectedIndex = 0
+    itemToRemove = { kind: "workspace", workspace: workspace }
+  }
+
   function cancelRemoveItem() {
     itemToRemove = null
   }
 
   function removeItemMessage(item) {
     if (!item) return ""
+    if (item.kind === "workspace")
+      return "Remove Workspace " + String(item.workspace.name)
+        + "? This terminates its running Shells and removes its launchers, schedules and persisted prompts, retained terminal state, Agent records, attention, and Workspace metadata."
     if (item.kind === "launcher")
       return "Remove launcher " + String(item.name)
         + "? This deletes its workspace definition. Applications it already launched keep running."
@@ -1021,6 +1038,14 @@ Panel {
   function confirmRemoveItem() {
     var item = itemToRemove
     itemToRemove = null
+    if (item && item.kind === "workspace") {
+      if (!workspaceCanRemove(item.workspace)) return
+      pendingAction = { kind: "remove-workspace", key: item.workspace.key }
+      actionMessage = "Removing " + String(item.workspace.name) + "..."
+      actionProcess.command = WorkspaceModel.workspaceCloseCommand(item.workspace)
+      actionProcess.running = true
+      return
+    }
     if (!item || !workspaceDetail || actionProcess.running) return
     pendingAction = { kind: item.kind === "launcher" ? "remove-launcher" : "remove-shell",
       key: item.key, nodeId: item.node_id }
@@ -1695,6 +1720,7 @@ Panel {
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
       else if (action === "remove-launcher") root.actionMessage = "Launcher removed"
       else if (action === "remove-shell") root.actionMessage = "Workspace item removed"
+      else if (action === "remove-workspace") root.actionMessage = "Workspace removed"
       else if (action === "run-schedule") root.actionMessage = "Schedule execution started"
       else if (action === "pause-schedule") root.actionMessage = "Schedule paused"
       else if (action === "resume-schedule") root.actionMessage = "Schedule resumed"
@@ -2573,53 +2599,6 @@ Panel {
                   elide: Text.ElideMiddle
                 }
 
-                ListView {
-                  visible: root.workspaceDetail && root.workspaceDetail.is_global
-                    && root.workspaceDetail.placements.length > 0
-                  width: parent.width
-                  implicitHeight: Math.min(contentHeight, Style.space(112))
-                  model: root.workspaceDetail && root.workspaceDetail.is_global
-                    ? root.workspaceDetail.placements : []
-                  spacing: Style.space(2)
-                  clip: true
-                  boundsBehavior: Flickable.StopAtBounds
-                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                  delegate: Rectangle {
-                    required property var modelData
-                    width: ListView.view.width
-                    height: Style.space(42)
-                    radius: Style.cornerRadius
-                    color: Util.alpha(root.foreground, 0.035)
-                    opacity: modelData.available ? 1 : 0.66
-                    Column {
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.margins: Style.space(7)
-                      anchors.verticalCenter: parent.verticalCenter
-                      spacing: Style.space(1)
-                      Text {
-                        width: parent.width
-                        text: "Node: " + String(modelData.node_alias) + " · "
-                          + String(modelData.state).split("_").join(" ") + " · "
-                          + String(modelData.node_health).split("_").join(" ")
-                        color: modelData.available ? root.foreground : root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                      }
-                      Text {
-                        width: parent.width
-                        text: modelData.default_cwd ? root.compactPath(modelData.default_cwd)
-                          : "No default directory on this Node"
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideMiddle
-                      }
-                    }
-                  }
-                }
-
                 Row {
                   width: parent.width
                   spacing: Style.space(5)
@@ -2661,6 +2640,17 @@ Panel {
                     iconSize: Style.font.body
                     onClicked: root.showForm("agent")
                   }
+                }
+
+                Button {
+                  width: parent.width
+                  text: "Remove Workspace"
+                  tooltipText: "Remove this Workspace and all managed resources"
+                  bordered: true
+                  enabled: root.workspaceCanRemove(root.workspaceDetail)
+                  foreground: root.urgent
+                  fontSize: Style.font.caption
+                  onClicked: root.requestRemoveWorkspace(root.workspaceDetail)
                 }
 
                 PanelSectionHeader {
@@ -2729,8 +2719,7 @@ Panel {
                       Text {
                         width: parent.width
                         text: "Workspace: " + String(root.workspaceDetail.name)
-                          + " · Node: " + String(modelData.node_alias) + " · "
-                          + String(modelData.status) + (modelData.detail
+                          + " · " + String(modelData.status) + (modelData.detail
                           ? " · " + (modelData.kind === "shell"
                             ? root.compactPath(modelData.detail) : String(modelData.detail)) : "")
                         color: root.dim

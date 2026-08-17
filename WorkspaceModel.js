@@ -460,6 +460,10 @@ function workspaceOpenCommand(workspace) {
   return command
 }
 
+function workspaceCloseCommand(workspace) {
+  return ["boomux", "workspace", "close", String(workspace.id)]
+}
+
 function qualifiedCommand(prefix, resourceIdValue, nodeId, local) {
   var command = prefix.concat([String(resourceIdValue)])
   if (!local) command.push("--node", String(nodeId))
@@ -650,6 +654,7 @@ if (typeof module !== "undefined") module.exports = {
   externalKey: externalKey,
   groupSnapshot: groupSnapshot,
   workspaceOpenCommand: workspaceOpenCommand,
+  workspaceCloseCommand: workspaceCloseCommand,
   qualifiedCommand: qualifiedCommand,
   eligibleNodes: eligibleNodes,
   defaultCreationNodeId: defaultCreationNodeId,

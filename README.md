@@ -109,9 +109,8 @@ The **Open TUI** button launches the Boomux dashboard in a new native terminal
 window. **Add Node** remains beside it and opens local interactive `boomux node add`
 in a native terminal, where Boomux alone handles SSH authentication, remote
 install details, and confirmation. The terminal remains open after setup so its
-success or failure is visible. Selecting a Workspace shows its Node
-placements, placement-specific directories and health, items, and scoped
-**Open**, **Shell**, and **Agent** actions below the
+success or failure is visible. Selecting a Workspace shows its items and scoped
+**Open**, **Shell**, **Agent**, and **Remove Workspace** actions below the
 Workspace dropdown. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
@@ -149,7 +148,9 @@ item closes its exact backing shell, terminates it if running, and deletes its
 shell definition and retained terminal state. Durable Agent history may remain
 available for acknowledgement. Removing a launcher deletes only that launcher
 definition; applications it already launched keep running. Both operations ask
-for confirmation before changing the workspace.
+for confirmation before changing the workspace. Removing a Workspace also asks
+for confirmation and removes its managed processes, launchers, schedules and
+persisted prompts, retained state, Agent and attention records, and metadata.
 
 Opening a complete global Workspace is one Boomux fan-out request. Available
 placements start immediately while unavailable placements remain visible and
