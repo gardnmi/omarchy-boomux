@@ -151,6 +151,9 @@ Panel {
   onSelectedWorkspaceKeyChanged: if (workspaceDropdown)
     workspaceDropdown.value = selectedWorkspaceKey
 
+  onSelectedScheduleKeyChanged: if (scheduleDropdown)
+    scheduleDropdown.value = selectedScheduleKey
+
   visible: true
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -217,6 +220,11 @@ Panel {
     if (!workspace) return ""
     var label = String(workspace.name)
     return workspace.is_external ? label + " · " + nodeName(workspace) : label
+  }
+
+  function scheduleSelectionLabel(schedule) {
+    if (!schedule) return ""
+    return String(schedule.name) + " · " + String(schedule.workspace_name)
   }
 
   function nodeHealthLabel(node) {
@@ -770,7 +778,7 @@ Panel {
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
     if (activeTab === "agents") agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
     else if (activeTab === "workspaces") selectWorkspace(visibleWorkspaces[selectedIndex].key)
-    else scheduleList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    else selectSchedule(visibleSchedules[selectedIndex].key)
   }
 
   function activateSelected() {
@@ -1874,7 +1882,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editing || workspaceDropdown.popupOpen
+      blocked: root.editing || workspaceDropdown.popupOpen || scheduleDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
         if (root.itemToRemove && (dx !== 0 || dy !== 0))
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
@@ -2834,74 +2842,21 @@ Panel {
               wrapMode: Text.Wrap
             }
 
-            ListView {
-              id: scheduleList
+            Dropdown {
+              id: scheduleDropdown
               visible: root.scheduleAvailable && root.online && root.visibleSchedules.length > 0
               width: parent.width
-              implicitHeight: Math.min(contentHeight, Style.space(190))
-              model: root.visibleSchedules
-              spacing: Style.space(3)
-              clip: true
-              boundsBehavior: Flickable.StopAtBounds
-              currentIndex: root.activeTab === "schedules" ? root.selectedIndex : -1
-              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              delegate: Rectangle {
-                required property var modelData
-                required property int index
-                width: ListView.view.width
-                height: Style.space(58)
-                radius: Style.cornerRadius
-                opacity: modelData.node_stale ? 0.66 : 1
-                color: modelData.key === root.selectedScheduleKey
-                  ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (scheduleMouse.containsMouse
-                    ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-                    : "transparent")
-                Text {
-                  id: scheduleGlyph
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(10)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: modelData.state === "enabled" ? "●" : "○"
-                  color: modelData.state === "enabled" ? Color.accent : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
+              label: "Select Schedule"
+              value: root.selectedScheduleKey
+              options: root.visibleSchedules.map(function(schedule) {
+                return {
+                  value: String(schedule.key),
+                  label: root.scheduleSelectionLabel(schedule)
                 }
-                Column {
-                  anchors.left: scheduleGlyph.right
-                  anchors.leftMargin: Style.space(10)
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(10)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(2)
-                  Text {
-                    width: parent.width
-                    text: String(modelData.name)
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: modelData.key === root.selectedScheduleKey
-                    elide: Text.ElideRight
-                  }
-                  Text {
-                    width: parent.width
-                    text: "Workspace: " + String(modelData.workspace_name)
-                      + " · Node: " + root.nodeName(modelData) + " · "
-                      + String(modelData.state) + " · " + root.scheduleTiming(modelData)
-                    color: modelData.state === "enabled" ? Color.accent : root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                }
-                MouseArea {
-                  id: scheduleMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  onEntered: root.selectedIndex = index
-                  onClicked: root.selectSchedule(modelData.key)
-                }
-              }
+              })
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onChanged: function(value) { root.selectSchedule(value) }
             }
 
             BorderSurface {

@@ -181,7 +181,7 @@ working again. Failed acknowledgements remain visible for manual dismissal.
 
 The **Schedules** surface activates only when the installed CLI advertises the
 required JSON commands and the running daemon supports protocol 25 or newer.
-Schedule rows show their durable paused or enabled state and next occurrence.
+The Schedule dropdown identifies each definition by name and Workspace.
 The detail surface shows prompt-free configuration and the latest retained run.
 Clicking that run asks Boomux to open its exact active shell run or resume its
 exact linked Agent Session; it never restarts the private Schedule runner shell
@@ -189,8 +189,8 @@ or substitutes a later run. **Run Now** can start an Agent and its permitted
 tool, filesystem, and network activity even while a Schedule is paused.
 **Pause** prevents future timed dispatch but does not cancel active work;
 **Resume** plans future occurrences without catching up paused time. Execution
-failures do not change the bomb's Agent-attention spark. Federated Schedule rows
-use each owner Node's scheduler health. Live remote controls and exact execution
+failures do not change the bomb's Agent-attention spark. Federated Schedules use
+each owner Node's scheduler health. Live remote controls and exact execution
 reads include that Node's exact ID and are disabled for cached stale,
 reconnecting, unreachable, authentication, identity, or unsupported states.
 
