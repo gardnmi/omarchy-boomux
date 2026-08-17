@@ -11,6 +11,17 @@ function resourceKey(nodeId, value) {
   return String(nodeId || "") + "\u001f" + resourceId(value)
 }
 
+function versionIsNewer(candidate, current) {
+  var candidateMatch = String(candidate || "").match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
+  var currentMatch = String(current || "").match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
+  if (!candidateMatch || !currentMatch) return false
+  for (var i = 1; i <= 3; i++) {
+    var difference = Number(candidateMatch[i]) - Number(currentMatch[i])
+    if (difference !== 0) return difference > 0
+  }
+  return false
+}
+
 function qualifiedId(value, nodeId, field) {
   var id = resourceId(value)
   if (!id || resourceNode(value, nodeId) !== nodeId)
@@ -645,6 +656,7 @@ function acknowledgementResponseMatches(data, identity) {
 }
 
 if (typeof module !== "undefined") module.exports = {
+  versionIsNewer: versionIsNewer,
   resourceId: resourceId,
   resourceNode: resourceNode,
   resourceKey: resourceKey,

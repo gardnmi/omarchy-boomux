@@ -205,6 +205,11 @@ omarchy plugin update io.github.gardnmi.boomux
 ```
 
 Omarchy rescans plugins after an update; a shell restart is not normally needed.
+At shell startup, the plugin performs two bounded, read-only HTTPS checks against
+GitHub: the latest stable Boomux release and the published plugin manifest on
+`main`. Newer semantic versions add an upward-arrow badge and separate update
+buttons in the panel. Failures are silent, and the plugin never downloads or
+installs an update automatically.
 
 ## Remove
 
@@ -228,9 +233,11 @@ and data.
   plugin never requests or displays persisted Schedule prompts. When New
   Workspace opens, the advertised passive `boomux project list --json` command
   scans configured roots without contacting or starting the daemon.
-- QML makes no SSH or other network requests and does not read or store
-  credentials. Every command targets the local Boomux CLI; Boomux owns verified
-  routing, authentication, installation confirmation, and its bounded cache.
+- QML makes no SSH requests and does not read or store credentials. Its only
+  direct network access is the bounded startup update check against the fixed
+  Boomux GitHub release API and plugin `main` manifest URLs. Every management
+  command targets the local Boomux CLI; Boomux owns verified routing,
+  authentication, installation confirmation, and its bounded cache.
 - The plugin does not persist Node projections, prompts, credentials, attachment
   environments, remote terminal content, or remote paths.
 - The directory browser reads names of local readable subdirectories only while

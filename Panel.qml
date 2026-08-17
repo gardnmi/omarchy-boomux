@@ -19,6 +19,8 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string home: Quickshell.env("HOME") || ""
+  readonly property string boomuxRepositoryUrl: "https://github.com/gardnmi/boomux"
+  readonly property string pluginRepositoryUrl: "https://github.com/gardnmi/omarchy-boomux"
 
   property var workspaces: []
   property var shells: []
@@ -37,6 +39,16 @@ Panel {
   property int refreshPending: 0
   property bool capabilitiesReady: false
   property bool cliAvailable: false
+  property string cliVersion: ""
+  property string latestBoomuxVersion: ""
+  property string latestBoomuxUrl: ""
+  property string pluginVersion: ""
+  property string latestPluginVersion: ""
+  readonly property bool boomuxUpdateAvailable:
+    WorkspaceModel.versionIsNewer(latestBoomuxVersion, cliVersion)
+  readonly property bool pluginUpdateAvailable:
+    WorkspaceModel.versionIsNewer(latestPluginVersion, pluginVersion)
+  readonly property bool updateAvailable: boomuxUpdateAvailable || pluginUpdateAvailable
   property bool federationSupported: false
   property bool globalWorkspacesSupported: false
   property var cliFeatures: []
@@ -159,7 +171,16 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  Component.onCompleted: capabilityProcess.running = true
+  Component.onCompleted: {
+    try {
+      pluginVersion = String(JSON.parse(pluginManifest.text()).version || "")
+    } catch (exception) {
+      pluginVersion = ""
+    }
+    capabilityProcess.running = true
+    boomuxUpdateProcess.running = true
+    pluginUpdateProcess.running = true
+  }
 
   function resourceId(value) {
     return value && typeof value === "object" ? String(value.inner_id || "") : String(value || "")
@@ -329,6 +350,7 @@ Panel {
     try {
       var data = parseEnvelope(raw, "capabilities")
       if (!Array.isArray(data.json_commands)) throw new Error("missing JSON commands")
+      cliVersion = String(data.cli_version || "")
       cliFeatures = Array.isArray(data.features) ? data.features : []
       var required = ["schedule.list", "schedule.pause", "schedule.resume",
         "schedule.run", "execution.list", "execution.open"]
@@ -1501,6 +1523,25 @@ Panel {
     return message !== "" ? message : fallback
   }
 
+  function parseBoomuxRelease(raw) {
+    try {
+      var release = JSON.parse(String(raw || ""))
+      latestBoomuxVersion = String(release.tag_name || "").replace(/^v/, "")
+      latestBoomuxUrl = String(release.html_url || boomuxRepositoryUrl + "/releases")
+    } catch (exception) {
+      latestBoomuxVersion = ""
+      latestBoomuxUrl = ""
+    }
+  }
+
+  function parsePluginRelease(raw) {
+    try {
+      latestPluginVersion = String(JSON.parse(String(raw || "")).version || "")
+    } catch (exception) {
+      latestPluginVersion = ""
+    }
+  }
+
   function requestExecutions(schedule) {
     if (!schedule || executionListProcess.running) {
       if (schedule) executionRequestedScheduleKey = schedule.key
@@ -1523,6 +1564,26 @@ Panel {
   } else {
     itemToRemove = null
     cancelForm()
+  }
+
+  Process {
+    id: boomuxUpdateProcess
+    command: ["curl", "--fail", "--silent", "--location", "--max-time", "5",
+      "https://api.github.com/repos/gardnmi/boomux/releases/latest"]
+    stdout: StdioCollector { id: boomuxUpdateStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.parseBoomuxRelease(boomuxUpdateStdout.text)
+    }
+  }
+
+  Process {
+    id: pluginUpdateProcess
+    command: ["curl", "--fail", "--silent", "--location", "--max-time", "5",
+      "https://raw.githubusercontent.com/gardnmi/omarchy-boomux/main/manifest.json"]
+    stdout: StdioCollector { id: pluginUpdateStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.parsePluginRelease(pluginUpdateStdout.text)
+    }
   }
 
   Process {
@@ -1830,6 +1891,13 @@ Panel {
       Math.min(root.directoryPickerIndex, count - 1))
   }
 
+  FileView {
+    id: pluginManifest
+    path: Qt.resolvedUrl("manifest.json")
+    blockLoading: true
+    printErrors: false
+  }
+
   Timer {
     interval: 1000
     running: true
@@ -1848,14 +1916,15 @@ Panel {
         BoomuxIcon {
           anchors.fill: parent
           color: root.blockedCount > 0 ? root.urgent
-            : (root.completedCount > 0 ? Color.accent : root.foreground)
+            : ((root.completedCount > 0 || root.updateAvailable) ? Color.accent : root.foreground)
           lit: root.blockedCount > 0 || root.completedCount > 0
         }
         Text {
-          visible: root.blockedCount > 0 || root.completedCount > 0
+          visible: root.blockedCount > 0 || root.completedCount > 0 || root.updateAvailable
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          text: String(root.blockedCount > 0 ? root.blockedCount : root.completedCount)
+          text: root.blockedCount > 0 ? String(root.blockedCount)
+            : (root.completedCount > 0 ? String(root.completedCount) : "↑")
           color: root.blockedCount > 0 ? root.urgent : Color.accent
           font.family: root.fontFamily
           font.pixelSize: Math.max(7, Math.round(parent.height * 0.42))
@@ -1863,10 +1932,12 @@ Panel {
         }
       }
     }
-    active: root.blockedCount > 0 || root.completedCount > 0
-    tooltipText: root.online
+    active: root.blockedCount > 0 || root.completedCount > 0 || root.updateAvailable
+    tooltipText: root.updateAvailable ? "Update available"
+      : (root.online
       ? root.visibleAgents.length + " agents · " + root.workspaces.length + " workspaces"
       : "Boomux unavailable"
+      )
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.refresh()
       else root.toggle()
@@ -2010,6 +2081,46 @@ Panel {
         PanelSeparator { foreground: root.foreground }
 
         Item {
+          visible: root.updateAvailable
+          width: parent.width
+          implicitHeight: updateColumn.implicitHeight
+
+          Column {
+            id: updateColumn
+            width: parent.width
+            spacing: Style.space(6)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "UPDATES AVAILABLE"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            Button {
+              visible: root.boomuxUpdateAvailable
+              width: parent.width
+              text: "Boomux " + root.cliVersion + " → " + root.latestBoomuxVersion
+              iconText: "↗"
+              tooltipText: "Open the latest Boomux release"
+              bordered: true
+              foreground: root.foreground
+              onClicked: Qt.openUrlExternally(root.latestBoomuxUrl
+                || root.boomuxRepositoryUrl + "/releases")
+            }
+            Button {
+              visible: root.pluginUpdateAvailable
+              width: parent.width
+              text: "Plugin " + root.pluginVersion + " → " + root.latestPluginVersion
+              iconText: "↗"
+              tooltipText: "Open the Boomux plugin repository"
+              bordered: true
+              foreground: root.foreground
+              onClicked: Qt.openUrlExternally(root.pluginRepositoryUrl)
+            }
+          }
+        }
+
+        Item {
           visible: root.capabilitiesReady && !root.cliAvailable
           width: parent.width
           implicitHeight: installColumn.implicitHeight
@@ -2036,7 +2147,7 @@ Panel {
             }
             Text {
               width: parent.width
-              text: "https://github.com/gardnmi/boomux"
+              text: root.boomuxRepositoryUrl
               color: Color.accent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -2050,7 +2161,7 @@ Panel {
               bordered: true
               active: true
               foreground: root.foreground
-              onClicked: Qt.openUrlExternally("https://github.com/gardnmi/boomux")
+              onClicked: Qt.openUrlExternally(root.boomuxRepositoryUrl)
             }
           }
         }

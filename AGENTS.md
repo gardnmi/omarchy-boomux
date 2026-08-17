@@ -98,10 +98,12 @@ plugin must never fabricate an Agent registration or lifecycle observation.
 
 - Check `boomux daemon status --json` before daemon-backed polling. A stopped
   daemon must remain stopped; the widget must not resurrect it.
-- QML invokes only the local Boomux CLI and daemon. It must not invoke SSH,
-  contact a Node directly, store credentials, or handle remote bootstrap
-  confirmation. **Add Node** may only launch interactive `boomux node add` in a
-  local native terminal.
+- QML invokes only the local Boomux CLI and daemon for management. It must not
+  invoke SSH, contact a Node directly, store credentials, or handle remote
+  bootstrap confirmation. The sole direct network exception is a bounded,
+  read-only startup check against fixed GitHub URLs for the latest Boomux release
+  and published plugin manifest; failures remain silent. **Add Node** may only
+  launch interactive `boomux node add` in a local native terminal.
 - Consume federation through `boomux node snapshot --json`. Pass exact `--node`
   context to every supported remote open, inspect, host service, attention,
   Schedule, execution, and mutation command. Never queue an offline action.

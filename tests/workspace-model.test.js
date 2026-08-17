@@ -8,6 +8,14 @@ function normalized(envelope = protocol38Envelope) {
   return model.normalizeNodeSnapshot(model.parseEnvelope(envelope, "node.snapshot"))
 }
 
+test("compares only valid semantic release versions", () => {
+  expect(model.versionIsNewer("v0.18.1", "0.18.0")).toBe(true)
+  expect(model.versionIsNewer("0.19.0", "0.18.9")).toBe(true)
+  expect(model.versionIsNewer("0.18.0", "0.18.0")).toBe(false)
+  expect(model.versionIsNewer("0.17.9", "0.18.0")).toBe(false)
+  expect(model.versionIsNewer("main", "0.18.0")).toBe(false)
+})
+
 test("keeps guided Node setup feedback visible", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain(
