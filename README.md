@@ -115,7 +115,8 @@ placements, placement-specific directories and health, items, and scoped
 workspace list. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
-terminal size and input stream.
+terminal size and input stream. Expanded Workspace details remain inside the
+panel and scroll when their items exceed the available detail surface.
 
 **New Workspace** creates coordinator metadata and opens with the same projects Boomux discovers from configured
 `[projects].roots`. Search and select a project to use its canonical name and

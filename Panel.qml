@@ -2723,7 +2723,7 @@ Panel {
                 ListView {
                   id: itemList
                   width: parent.width
-                  implicitHeight: Math.min(contentHeight, Style.space(220))
+                  implicitHeight: Math.min(contentHeight, Style.space(112))
                   model: root.workspaceItems
                   spacing: Style.space(3)
                   clip: true
