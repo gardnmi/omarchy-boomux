@@ -112,7 +112,7 @@ install details, and confirmation. The terminal remains open after setup so its
 success or failure is visible. Selecting a Workspace shows its Node
 placements, placement-specific directories and health, items, and scoped
 **Open**, **Shell**, and **Agent** actions below the
-workspace list. Clicking a shell, command, or Agent opens its managed terminal;
+Workspace dropdown. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
 terminal size and input stream. Expanded Workspace details remain inside the

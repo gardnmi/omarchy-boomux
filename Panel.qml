@@ -148,6 +148,9 @@ Panel {
     clampProjectSelection()
   }
 
+  onSelectedWorkspaceKeyChanged: if (workspaceDropdown)
+    workspaceDropdown.value = selectedWorkspaceKey
+
   visible: true
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -208,6 +211,12 @@ Panel {
       + (workspace.placements.length === 1 ? "" : "s")
     return "Node: " + nodeName(workspace)
       + (workspace.is_external ? " · external Workspace" : "")
+  }
+
+  function workspaceSelectionLabel(workspace) {
+    if (!workspace) return ""
+    var label = String(workspace.name)
+    return workspace.is_external ? label + " · " + nodeName(workspace) : label
   }
 
   function nodeHealthLabel(node) {
@@ -756,7 +765,7 @@ Panel {
     if (editing || itemCount === 0) return
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
     if (activeTab === "agents") agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
-    else if (activeTab === "workspaces") workspaceList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    else if (activeTab === "workspaces") selectWorkspace(visibleWorkspaces[selectedIndex].key)
     else scheduleList.positionViewAtIndex(selectedIndex, ListView.Contain)
   }
 
@@ -1835,7 +1844,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editing
+      blocked: root.editing || workspaceDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
         if (root.itemToRemove && (dx !== 0 || dy !== 0))
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
@@ -2509,68 +2518,21 @@ Panel {
               topPadding: Style.space(18)
               bottomPadding: Style.space(18)
             }
-            ListView {
-              id: workspaceList
+            Dropdown {
+              id: workspaceDropdown
               visible: root.visibleWorkspaces.length > 0
               width: parent.width
-              implicitHeight: Math.min(contentHeight, Style.space(150))
-              model: root.visibleWorkspaces
-              spacing: Style.space(3)
-              clip: true
-              boundsBehavior: Flickable.StopAtBounds
-              currentIndex: root.activeTab === "workspaces" ? root.selectedIndex : -1
-              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              delegate: Rectangle {
-                required property var modelData
-                required property int index
-                width: ListView.view.width
-                height: Style.space(50)
-                radius: Style.cornerRadius
-                opacity: modelData.node_stale || (modelData.is_external && !modelData.available)
-                  ? 0.66 : 1
-                color: modelData.key === root.selectedWorkspaceKey
-                  ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (workspaceMouse.containsMouse
-                    ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-                    : "transparent")
-                Column {
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(10)
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(10)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(2)
-                  Text {
-                    width: parent.width
-                    text: String(modelData.name)
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: modelData.key === root.selectedWorkspaceKey
-                    elide: Text.ElideRight
-                  }
-                  Text {
-                    width: parent.width
-                    text: root.workspaceOwnershipLabel(modelData) + " · "
-                      + root.workspaceItemCount(modelData) + " items · "
-                      + Number(modelData.schedule_count || 0) + " schedules · "
-                      + root.workspaceActiveAgentCount(modelData) + " active agents · "
-                      + root.workspaceHealthSummary(modelData)
-                    color: modelData.attention_count > 0 ? root.urgent : root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
+              label: "Select Workspace"
+              value: root.selectedWorkspaceKey
+              options: root.visibleWorkspaces.map(function(workspace) {
+                return {
+                  value: String(workspace.key),
+                  label: root.workspaceSelectionLabel(workspace)
                 }
-                MouseArea {
-                  id: workspaceMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  onEntered: root.selectedIndex = index
-                  onClicked: root.selectWorkspace(modelData.key)
-                  onDoubleClicked: if (root.workspaceCanOpen(modelData)) root.openWorkspace(modelData)
-                }
-              }
+              })
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onChanged: function(value) { root.selectWorkspace(value) }
             }
 
             BorderSurface {
