@@ -36,6 +36,7 @@ Panel {
   property bool refreshing: false
   property int refreshPending: 0
   property bool capabilitiesReady: false
+  property bool cliAvailable: false
   property bool federationSupported: false
   property bool globalWorkspacesSupported: false
   property var cliFeatures: []
@@ -243,6 +244,7 @@ Panel {
   }
 
   function refresh() {
+    if (capabilitiesReady && !cliAvailable) return
     if (daemonStatusProcess.running) return
     daemonStatusProcess.running = true
   }
@@ -323,6 +325,7 @@ Panel {
   }
 
   function parseCapabilities(raw) {
+    cliAvailable = true
     try {
       var data = parseEnvelope(raw, "capabilities")
       if (!Array.isArray(data.json_commands)) throw new Error("missing JSON commands")
@@ -1529,6 +1532,7 @@ Panel {
     onExited: function(exitCode) {
       if (exitCode === 0) root.parseCapabilities(capabilityStdout.text)
       else {
+        root.cliAvailable = false
         root.capabilitiesReady = true
         root.scheduleCommandsSupported = false
         root.projectListSupported = false
@@ -1952,8 +1956,10 @@ Panel {
               Button {
                 text: "Open TUI"
                 iconText: ""
-                tooltipText: "Open the Boomux dashboard"
+                tooltipText: root.cliAvailable ? "Open the Boomux dashboard"
+                  : "Install Boomux to open the dashboard"
                 bordered: true
+                enabled: root.cliAvailable
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.body
@@ -2004,7 +2010,53 @@ Panel {
         PanelSeparator { foreground: root.foreground }
 
         Item {
-          visible: root.editing
+          visible: root.capabilitiesReady && !root.cliAvailable
+          width: parent.width
+          implicitHeight: installColumn.implicitHeight
+
+          Column {
+            id: installColumn
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "BOOMUX REQUIRED"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            Text {
+              width: parent.width
+              text: "Boomux is not installed or is unavailable on PATH. Install it to manage persistent Workspaces, Agents, and Schedules."
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+            }
+            Text {
+              width: parent.width
+              text: "https://github.com/gardnmi/boomux"
+              color: Color.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              elide: Text.ElideMiddle
+            }
+            Button {
+              width: parent.width
+              text: "Open Install Page"
+              iconText: "↗"
+              bordered: true
+              active: true
+              foreground: root.foreground
+              onClicked: Qt.openUrlExternally("https://github.com/gardnmi/boomux")
+            }
+          }
+        }
+
+        Item {
+          visible: root.cliAvailable && root.editing
           width: parent.width
           implicitHeight: formColumn.implicitHeight
 
@@ -2454,7 +2506,7 @@ Panel {
         }
 
         Item {
-          visible: root.activeTab === "agents" && !root.editing
+          visible: root.cliAvailable && root.activeTab === "agents" && !root.editing
           width: parent.width
           implicitHeight: agentColumn.implicitHeight
 
@@ -2514,7 +2566,7 @@ Panel {
         }
 
         Item {
-          visible: root.activeTab === "workspaces" && !root.editing
+          visible: root.cliAvailable && root.activeTab === "workspaces" && !root.editing
           width: parent.width
           implicitHeight: workspaceColumn.implicitHeight
 
@@ -2776,7 +2828,7 @@ Panel {
         }
 
         Item {
-          visible: root.activeTab === "schedules" && !root.editing
+          visible: root.cliAvailable && root.activeTab === "schedules" && !root.editing
           width: parent.width
           implicitHeight: scheduleColumn.implicitHeight
 

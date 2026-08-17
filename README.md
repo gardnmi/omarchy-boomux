@@ -65,6 +65,10 @@ boomux integration setup pi
 The plugin does not automatically start a stopped Boomux daemon. Launch Boomux
 or open a managed workspace before using the panel.
 
+When the `boomux` executable is unavailable on `PATH`, the panel shows a
+dedicated installation message, the repository URL, and an **Open Install Page**
+button. It does not install Boomux automatically.
+
 Global Workspace grouping activates only when the local CLI advertises the
 protocol 38 global Workspace and multi-placement capabilities and the running
 local daemon can negotiate them. Protocol 33 through 37 retain qualified
