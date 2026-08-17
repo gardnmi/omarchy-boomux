@@ -11,7 +11,7 @@ function normalized(envelope = protocol38Envelope) {
 test("keeps guided Node setup feedback visible", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain(
-    "omarchy-launch-tui --hold --app-id=org.omarchy.boomux-node-add boomux node add"
+    "omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add"
   )
 })
 

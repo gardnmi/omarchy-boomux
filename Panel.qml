@@ -1032,7 +1032,7 @@ Panel {
 
   function addNode() {
     if (!bar || !federationAvailable) return
-    bar.run("omarchy-launch-tui --hold --app-id=org.omarchy.boomux-node-add boomux node add")
+    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add")
     close()
   }
 
