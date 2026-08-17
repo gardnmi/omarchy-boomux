@@ -1,3 +1,7 @@
 [tasks.restart]
 description = "Deploy the local plugin and restart Omarchy shell"
 run = "bash deploy-local.sh"
+
+[tasks.test]
+description = "Run focused Workspace model tests"
+run = "bun test tests/workspace-model.test.js"

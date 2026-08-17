@@ -1,0 +1,39 @@
+{
+  "schema": "boomux.cli/v1",
+  "command": "node.snapshot",
+  "data": {
+    "nodes": [{
+      "node_id": "local-node",
+      "alias": "local",
+      "local": true,
+      "route": null,
+      "registration_revision": null,
+      "health": "online",
+      "current": true,
+      "stale": false,
+      "observed_at_ms": 10,
+      "observed_protocol_version": 37,
+      "observed_capabilities": ["combined_node_snapshot", "node_qualified_dashboard"],
+      "workspace_owner_eligible": false,
+      "workspace_owner_unavailable_reason": null,
+      "scheduler": {"state": "active", "max_concurrent": 4, "active_executions": 0},
+      "local_snapshot": {
+        "workspaces": [{
+          "id": {"node_id": "local-node", "inner_id": "legacy-workspace"},
+          "revision": 1,
+          "name": "legacy",
+          "default_cwd": "/tmp/legacy",
+          "shells": [],
+          "launchers": [],
+          "agents": [],
+          "schedules": []
+        }],
+        "focused_terminal": null,
+        "scheduler": {"state": "active", "max_concurrent": 4, "active_executions": 0}
+      },
+      "remote_projection": null
+    }],
+    "workspaces": [],
+    "external_workspaces": []
+  }
+}

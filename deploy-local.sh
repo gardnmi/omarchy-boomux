@@ -14,7 +14,7 @@ shell_dir="$session_omarchy_path/shell"
 while timeout 5 quickshell kill -p "$shell_dir" --any-display >/dev/null 2>&1; do :; done
 
 install -d "$plugin_dir/assets"
-install -m 644 Panel.qml README.md manifest.json "$plugin_dir/"
+install -m 644 Panel.qml WorkspaceModel.js README.md manifest.json "$plugin_dir/"
 install -m 644 assets/bomb.svg assets/bomb-spark.svg "$plugin_dir/assets/"
 
 omarchy restart shell

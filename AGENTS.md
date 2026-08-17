@@ -6,7 +6,9 @@ about operations that can start processes or take over terminals.
 
 ## Repository Map
 
-- `Panel.qml`: complete runtime implementation and UI
+- `Panel.qml`: runtime integration and UI
+- `WorkspaceModel.js`: protocol-38 grouping and qualified command construction
+- `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
 - `README.md`: user contract, dependency, safety, and lifecycle documentation
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
@@ -22,9 +24,9 @@ publication.
 
 ## Supported Contract
 
-- Minimum Boomux version: `0.18.0`
+- Planned minimum released Boomux version: `0.19.0`
 - Stable JSON envelope: `boomux.cli/v1`
-- Current tested daemon protocol: 27
+- Current branch-validated daemon protocol: 38; live installed validation remains protocol 37
 - Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations
 
 Parse JSON only from commands advertised by `boomux capabilities --json`.
@@ -32,9 +34,19 @@ Validate `schema`, `command`, and expected `data` fields. Use exact workspace,
 shell, launcher, Agent, run, and observation-revision IDs returned by Boomux;
 never infer IDs from names, terminal output, process names, or list order.
 
+Federation requires advertised `node.snapshot`, `combined_node_snapshot`,
+`node_qualified_dashboard`, and `typed_exact_node_routing` support. Global
+Workspace grouping additionally requires `global_workspaces` and
+`multi_node_workspace_placements`. Keep the
+installed CLI capability, local daemon protocol, and each remote Node's observed
+capabilities distinct. Every projected and pending resource identity is the
+structural pair `(node_id, resource_id)`; bare IDs are never globally unique.
+
 Project suggestions come only from advertised `project.list` JSON data. Keep
 project discovery passive and on-demand; do not parse Boomux configuration or
 reimplement its filesystem scanner in the plugin.
+Remote project and path suggestions must use `project list --node` on the owner.
+Never browse a remote path with `FolderListModel` or reinterpret it locally.
 
 Shell-name suggestions come only from advertised `shell.suggest-name` JSON data
 for the exact workspace ID. They are unreserved UI defaults: keep them editable,
@@ -55,6 +67,18 @@ The panel has three top-level views:
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 
+Protocol 38 adds coordinator-owned global Workspaces with explicit Node
+placements. Keep Workspace grouping task-first; show Node ownership as secondary
+metadata rather than a filter or Node-first path. Every stable health value (`unobserved`, `online`,
+`reconnecting`, `stale`, `unreachable`, `authentication_required`,
+`identity_changed`, `identity_conflict`, and `unsupported`) remains visible.
+Cached stale rows are presentation only and all owner-dependent actions are
+disabled. Scheduler health is Node-specific.
+
+Never merge owner Workspaces by name. Global membership comes only from explicit
+placements; unlinked owner Workspaces remain qualified external singletons.
+Protocol 37 and older snapshot shapes retain their owner-local presentation.
+
 Workspace items are projected as:
 
 - `agent`: a current Agent presentation over its backing shell
@@ -74,6 +98,15 @@ plugin must never fabricate an Agent registration or lifecycle observation.
 
 - Check `boomux daemon status --json` before daemon-backed polling. A stopped
   daemon must remain stopped; the widget must not resurrect it.
+- QML invokes only the local Boomux CLI and daemon for management. It must not
+  invoke SSH, contact a Node directly, store credentials, or handle remote
+  bootstrap confirmation. The sole direct network exception is a bounded,
+  read-only startup check against fixed GitHub URLs for the latest Boomux release
+  and published plugin manifest; failures remain silent. **Add Node** may only
+  launch interactive `boomux node add` in a local native terminal.
+- Consume federation through `boomux node snapshot --json`. Pass exact `--node`
+  context to every supported remote open, inspect, host service, attention,
+  Schedule, execution, and mutation command. Never queue an offline action.
 - Opening an exited shell or command starts a new run. Preserve clear status in
   the item row and document this behavior.
 - Acknowledge Agent attention only after `boomux open` succeeds, the user
@@ -106,6 +139,7 @@ plugin must never fabricate an Agent registration or lifecycle observation.
 - Keep **New Workspace** at workspace-section scope.
 - Keep **Open**, **Shell**, and **Agent** inside the selected workspace detail
   surface so their target is unambiguous.
+- Keep **Add Node** beside **Open TUI**; do not add a Node filter.
 - Do not use collapsible workspace cards unless explicitly requested.
 - Use Omarchy `qs.Ui` controls and `Style.space(...)`; follow the active bar
   foreground, urgent color, font, and accent.
@@ -127,14 +161,17 @@ an actionable message in the panel. Boomux JSON errors use `error.code` for
 program logic; messages are suitable only for display.
 
 Polling currently checks daemon status once per second and fetches Agent, shell,
-and workspace snapshots only while the daemon is running. Schedule and latest
-execution snapshots are fetched only while the Schedules tab is open. A future
-event-driven implementation should retain the passive-daemon invariant and
-handle cursor expiry by reacquiring a baseline.
+and Workspace snapshots only while the daemon is running. With protocol 38 it
+groups one combined Node snapshot by coordinator Workspace; protocol 37 uses the
+same read with owner-local grouping. It then performs live exact execution reads
+for the selected Schedule. Older daemons retain the local list polling path.
+Schedule and latest execution snapshots are fetched only while the Schedules
+tab is open. A future event-driven implementation should retain the
+passive-daemon invariant and handle cursor expiry by reacquiring a baseline.
 
-Workspace inspection must preserve selection by stable workspace ID. If a new
-selection arrives while an inspection is running, issue the latest requested
-inspection after the active process exits.
+Workspace inspection must preserve selection by structural Node/workspace key.
+If a new selection arrives while an inspection is running, issue the latest
+requested inspection after the active process exits.
 
 ## Validation
 
@@ -145,6 +182,7 @@ omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Panel.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
+bun test tests/workspace-model.test.js
 mise tasks
 git diff --check
 ```

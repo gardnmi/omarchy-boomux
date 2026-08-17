@@ -1,0 +1,146 @@
+{
+  "schema": "boomux.cli/v1",
+  "command": "node.snapshot",
+  "data": {
+    "nodes": [
+      {
+        "node_id": "node-a",
+        "alias": "local",
+        "local": true,
+        "route": null,
+        "registration_revision": null,
+        "health": "online",
+        "current": true,
+        "stale": false,
+        "observed_at_ms": 100,
+        "observed_protocol_version": 38,
+        "observed_capabilities": ["global_workspaces", "remote_pty_attachment"],
+        "workspace_owner_eligible": true,
+        "workspace_owner_unavailable_reason": null,
+        "scheduler": {"state": "active", "max_concurrent": 4, "active_executions": 0},
+        "local_snapshot": {
+          "workspaces": [{
+            "id": {"node_id": "node-a", "inner_id": "owner-shared"},
+            "revision": 2,
+            "name": "release-local",
+            "default_cwd": "/home/a/release",
+            "shells": [{
+              "id": {"node_id": "node-a", "inner_id": "resource-shared"},
+              "revision": 2,
+              "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
+              "name": "editor",
+              "cwd": "/home/a/release",
+              "command": [],
+              "owner": {"kind": "user"},
+              "status": "running",
+              "run": {"id": {"node_id": "node-a", "inner_id": "run-shared"}, "generation": 1, "started_at_ms": 10, "ended_at_ms": null, "exit_reason": null, "output_revision": 1, "environment_has_run_id": true}
+            }],
+            "launchers": [{
+              "id": {"node_id": "node-a", "inner_id": "resource-shared"},
+              "revision": 1,
+              "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
+              "name": "preview",
+              "command": ["printf", "%s", "$(not-a-shell)"],
+              "cwd": "/home/a/release"
+            }],
+            "agents": [{
+              "id": {"node_id": "node-a", "inner_id": "agent-shared"},
+              "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
+              "shell_id": {"node_id": "node-a", "inner_id": "resource-shared"},
+              "run_id": {"node_id": "node-a", "inner_id": "run-shared"},
+              "name": "local-agent",
+              "integration": "opencode",
+              "external_session_id": "session-a",
+              "cwd": "/home/a/release",
+              "started_at_ms": 10,
+              "ended_at_ms": null,
+              "observation": {"revision": 3, "state": "working", "authority": "lifecycle_integration", "evidence": "host", "confidence": 100, "observed_at_ms": 30}
+            }],
+            "schedules": [{
+              "id": {"node_id": "node-a", "inner_id": "resource-shared"},
+              "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
+              "name": "nightly",
+              "cwd": "/home/a/release",
+              "integration": "opencode",
+              "session": "fresh",
+              "trigger": {"cron": "0 1 * * *", "timezone": "UTC"},
+              "state": "enabled",
+              "overlap_policy": "skip",
+              "revision": 1,
+              "prompt_revision": 1,
+              "trigger_revision": 1,
+              "created_at_ms": 1,
+              "updated_at_ms": 1,
+              "evaluation_frontier_ms": 1,
+              "next_occurrence": {"trigger_revision": 1, "scheduled_at_ms": 1000}
+            }]
+          }],
+          "focused_terminal": null,
+          "scheduler": {"state": "active", "max_concurrent": 4, "active_executions": 0}
+        },
+        "remote_projection": null
+      },
+      {
+        "node_id": "node-b",
+        "alias": "server",
+        "local": false,
+        "route": "server.example",
+        "registration_revision": 2,
+        "health": "online",
+        "current": true,
+        "stale": false,
+        "observed_at_ms": 100,
+        "observed_protocol_version": 38,
+        "observed_capabilities": ["global_workspaces", "remote_pty_attachment", "remote_launcher_invocation", "remote_agent_schedule_management"],
+        "workspace_owner_eligible": true,
+        "workspace_owner_unavailable_reason": null,
+        "scheduler": {"state": "active", "max_concurrent": 2, "active_executions": 1},
+        "local_snapshot": null,
+        "remote_projection": {
+          "node_id": "node-b",
+          "workspaces": [{"id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "different-name", "item_count": 4, "attention_count": 0}],
+          "shells": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "tests", "owner": {"kind": "user"}, "status": "running", "run_id": {"node_id": "node-b", "inner_id": "run-shared"}, "generation": 1, "started_at_ms": 20}],
+          "launchers": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "deploy"}],
+          "agents": [{"id": {"node_id": "node-b", "inner_id": "agent-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "shell_id": {"node_id": "node-b", "inner_id": "resource-shared"}, "run_id": {"node_id": "node-b", "inner_id": "run-shared"}, "name": "remote-agent", "integration": "pi", "state": "idle", "observation_revision": 4, "observed_at_ms": 40, "started_at_ms": 20}],
+          "schedules": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "nightly", "integration": "pi", "state": "enabled", "trigger": {"cron": "0 2 * * *", "timezone": "UTC"}, "revision": 1, "prompt_revision": 1, "trigger_revision": 1, "created_at_ms": 1, "updated_at_ms": 1, "next_occurrence": {"trigger_revision": 1, "scheduled_at_ms": 2000}}],
+          "executions": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "schedule_id": {"node_id": "node-b", "inner_id": "resource-shared"}, "revision": 1, "state": "active", "dispatch_kind": "manual", "schedule_revision": 1, "prompt_revision": 1, "trigger_revision": 1, "requested_at_ms": 50, "started_at_ms": 51, "shell_id": {"node_id": "node-b", "inner_id": "resource-shared"}, "run_id": {"node_id": "node-b", "inner_id": "run-shared"}, "agent_id": {"node_id": "node-b", "inner_id": "agent-shared"}}],
+          "executions_truncated": false,
+          "scheduler": {"state": "active", "max_concurrent": 2, "active_executions": 1}
+        }
+      },
+      {
+        "node_id": "node-c",
+        "alias": "offline",
+        "local": false,
+        "route": "offline.example",
+        "registration_revision": 1,
+        "health": "unreachable",
+        "current": false,
+        "stale": true,
+        "observed_at_ms": 50,
+        "observed_protocol_version": 38,
+        "observed_capabilities": ["global_workspaces"],
+        "workspace_owner_eligible": false,
+        "workspace_owner_unavailable_reason": "Node is unreachable",
+        "scheduler": {"state": "offline", "max_concurrent": 0, "active_executions": 0},
+        "local_snapshot": null,
+        "remote_projection": null
+      }
+    ],
+    "workspaces": [{
+      "id": "global-1",
+      "revision": 4,
+      "name": "release",
+      "closing": false,
+      "placements": [
+        {"node_id": "node-a", "workspace_id": "owner-shared", "owner_workspace_name": "release-local", "owner_revision": 2, "default_cwd": "/home/a/release", "state": "active"},
+        {"node_id": "node-b", "workspace_id": "owner-shared", "owner_workspace_name": "different-name", "owner_revision": 7, "default_cwd": "/srv/release", "state": "active"},
+        {"node_id": "node-c", "workspace_id": "owner-c", "owner_workspace_name": "cached", "owner_revision": 3, "default_cwd": "/opt/release", "state": "unavailable"}
+      ]
+    }],
+    "external_workspaces": [
+      {"identity": {"node_id": "node-a", "inner_id": "global-1"}, "revision": 1, "name": "global-1", "default_cwd": "/tmp/local", "available": true},
+      {"identity": {"node_id": "node-b", "inner_id": "external-b"}, "revision": 1, "name": "global-1", "default_cwd": "/tmp/remote", "available": true}
+    ]
+  }
+}
