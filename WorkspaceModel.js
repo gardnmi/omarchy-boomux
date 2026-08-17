@@ -501,35 +501,10 @@ function defaultCreationNodeId(nodes) {
   return eligible.length === 1 ? String(eligible[0].node_id) : ""
 }
 
-function creationNodeArgs(nodes, selectedNodeId) {
-  var eligible = eligibleNodes(nodes)
-  for (var i = 0; i < eligible.length; i++)
-    if (eligible[i].node_id === selectedNodeId) return ["--node", String(selectedNodeId)]
-  return null
-}
-
-function workspaceCreateCommand(name, cwd, nodeArgs, atomicGlobal) {
-  if (!atomicGlobal) {
-    var legacy = ["boomux", "workspace", "create", String(name)]
-    if (cwd) legacy.push("--cwd", String(cwd))
-    return legacy
-  }
-  var command = ["boomux", "workspace", "create-project", String(name),
-    "--cwd", String(cwd)]
-  return command.concat(nodeArgs || []).concat(["--json"])
-}
-
-function parseProjectCreationResponse(raw, expectedNodeId) {
-  var data = parseEnvelope(raw, "workspace.create-project")
-  if (!data.workspace || typeof data.workspace.id !== "string" || !data.shell
-      || typeof data.shell.id !== "string" || typeof data.shell.workspace_id !== "string"
-      || data.node_id !== expectedNodeId) throw new Error("invalid project Workspace response")
-  var placement = (data.workspace.placements || []).filter(function(candidate) {
-    return candidate.node_id === data.node_id
-      && candidate.workspace_id === data.shell.workspace_id
-  })
-  if (placement.length !== 1) throw new Error("project Shell placement does not match")
-  return data
+function workspaceCreateCommand(name, cwd, coordinated) {
+  var command = ["boomux", "workspace", "create", String(name)]
+  if (!coordinated && cwd) command.push("--cwd", String(cwd))
+  return command
 }
 
 function workspaceCreationBlockReason(workspace, eligibleNodeCount) {
@@ -680,9 +655,7 @@ if (typeof module !== "undefined") module.exports = {
   qualifiedCommand: qualifiedCommand,
   eligibleNodes: eligibleNodes,
   defaultCreationNodeId: defaultCreationNodeId,
-  creationNodeArgs: creationNodeArgs,
   workspaceCreateCommand: workspaceCreateCommand,
-  parseProjectCreationResponse: parseProjectCreationResponse,
   workspaceCreationBlockReason: workspaceCreationBlockReason,
   suggestionIdentity: suggestionIdentity,
   suggestionResponseMatches: suggestionResponseMatches,

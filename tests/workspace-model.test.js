@@ -23,6 +23,11 @@ test("keeps guided Node setup feedback visible", () => {
   )
 })
 
+test("creates coordinated Workspaces without the removed compound command", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).not.toContain("create-project")
+})
+
 describe("CLI envelope normalization", () => {
   test("parses protocol 38 into one task-first multi-placement Workspace", () => {
     const snapshot = normalized()
@@ -149,27 +154,16 @@ describe("qualified commands and action gates", () => {
       [Object.assign({}, remoteShell, { placement_state: "active" })], true)).not.toBeNull()
   })
 
-  test("preserves metacharacters as argv boundaries for atomic project creation", () => {
-    expect(model.workspaceCreateCommand("release; rm -rf /", "/tmp/$(false)",
-      ["--node", "node-b"], true)).toEqual([
-      "boomux", "workspace", "create-project", "release; rm -rf /",
-      "--cwd", "/tmp/$(false)", "--node", "node-b", "--json"
-    ])
-    expect(model.creationNodeArgs(protocol38Envelope.data.nodes, "node-b")).toEqual([
-      "--node", "node-b"
-    ])
-    expect(model.creationNodeArgs([protocol38Envelope.data.nodes[0]], "node-a")).toEqual([
-      "--node", "node-a"
+  test("creates coordinated Workspace metadata without assigning a Node or path", () => {
+    expect(model.workspaceCreateCommand("release; rm -rf /", "/tmp/$(false)", true))
+      .toEqual(["boomux", "workspace", "create", "release; rm -rf /"])
+    expect(model.workspaceCreateCommand("legacy", "/tmp/legacy", false)).toEqual([
+      "boomux", "workspace", "create", "legacy", "--cwd", "/tmp/legacy"
     ])
     expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes)).toBe("node-a")
     expect(model.defaultCreationNodeId([protocol38Envelope.data.nodes[1]])).toBe("node-b")
     expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes.map(node =>
       Object.assign({}, node, { local: false })))).toBe("")
-    expect(model.workspaceCreateCommand("sole", "/tmp/sole",
-      model.creationNodeArgs([protocol38Envelope.data.nodes[0]], "node-a"), true)).toEqual([
-      "boomux", "workspace", "create-project", "sole", "--cwd", "/tmp/sole",
-      "--node", "node-a", "--json"
-    ])
     expect(model.qualifiedCommand(["boomux", "open"], "shell;$(false)", "node-b", false))
       .toEqual(["boomux", "open", "shell;$(false)", "--node", "node-b"])
   })
@@ -230,24 +224,6 @@ describe("request identity", () => {
       remote, false)).toBe(true)
     expect(model.suggestionResponseMatches({ node_id: "node-a", workspace_id: "owner-shared" },
       remote, false)).toBe(false)
-  })
-
-  test("validates exact IDs from atomic project creation", () => {
-    const response = {
-      schema: "boomux.cli/v1",
-      command: "workspace.create-project",
-      data: {
-        node_id: "node-b",
-        workspace: { id: "global-new", name: "new", placements: [
-          { node_id: "node-b", workspace_id: "owner-new" }
-        ] },
-        shell: { id: "shell-new", workspace_id: "owner-new" }
-      }
-    }
-    expect(model.parseProjectCreationResponse(JSON.stringify(response), "node-b").shell.id)
-      .toBe("shell-new")
-    expect(() => model.parseProjectCreationResponse(JSON.stringify(response), "node-a"))
-      .toThrow("invalid project Workspace response")
   })
 
   test("resolves a deferred Agent Shell once by exact Workspace and Node", () => {

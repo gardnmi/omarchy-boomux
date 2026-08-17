@@ -54,7 +54,6 @@ Panel {
   property var cliFeatures: []
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
-  property bool projectWorkspaceCreationSupported: false
   property bool shellNameSuggestionSupported: false
   property bool projectRootsConfigured: false
   property int daemonProtocolVersion: 0
@@ -358,7 +357,6 @@ Panel {
         return data.json_commands.indexOf(command) >= 0
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
-      projectWorkspaceCreationSupported = data.json_commands.indexOf("workspace.create-project") >= 0
       shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
       federationSupported = data.json_commands.indexOf("node.snapshot") >= 0
         && cliFeatures.indexOf("combined_node_snapshot") >= 0
@@ -370,7 +368,6 @@ Panel {
     } catch (exception) {
       scheduleCommandsSupported = false
       projectListSupported = false
-      projectWorkspaceCreationSupported = false
       shellNameSuggestionSupported = false
       federationSupported = false
       globalWorkspacesSupported = false
@@ -1304,9 +1301,7 @@ Panel {
     }
     if (globalWorkspacesAvailable && (mode === "workspace"
         || (workspaceDetail && workspaceDetail.is_global))) {
-      creationNodeId = mode === "workspace"
-        ? (eligibleCreationNodes.length === 1 ? eligibleCreationNodes[0].node_id : "")
-        : WorkspaceModel.defaultCreationNodeId(nodes)
+      creationNodeId = WorkspaceModel.defaultCreationNodeId(nodes)
       if (eligibleCreationNodes.length === 0 && mode !== "workspace") {
         actionMessage = "No Node is currently eligible for Workspace placement"
         return
@@ -1369,10 +1364,8 @@ Panel {
       ? selectedProject !== null : nameField.text.trim() !== ""
     if (!hasName) return false
     if (formMode !== "workspace" && workspaceCreationReason(workspaceDetail) !== "") return false
-    if (!globalWorkspacesAvailable) return true
-    if (formMode !== "workspace" || workspaceCreationMode === "project"
-        || cwdField.text.trim() !== "") return creationNode !== null
-    return true
+    if (!globalWorkspacesAvailable || formMode === "workspace") return true
+    return creationNode !== null
   }
 
   function cancelForm() {
@@ -1453,7 +1446,8 @@ Panel {
         return
       }
       name = String(selectedProject.name)
-      cwd = String(selectedProject.path)
+      if (globalWorkspacesAvailable) cwd = ""
+      else cwd = String(selectedProject.path)
     }
     if (name === "") {
       actionMessage = "A name is required"
@@ -1476,22 +1470,10 @@ Panel {
 
     var command
     if (formMode === "workspace") {
-      if (globalWorkspacesAvailable && cwd !== "") {
-        if (!projectWorkspaceCreationSupported) {
-          actionMessage = "This Boomux CLI lacks atomic global project creation"
-          return
-        }
-        var projectNodeArgs = WorkspaceModel.creationNodeArgs(nodes, owner.node_id)
-        pendingAction = { kind: "create-project", key: "new:" + name,
-          nodeId: owner.node_id }
-        pendingWorkspace = null
-        command = WorkspaceModel.workspaceCreateCommand(name, cwd, projectNodeArgs, true)
-      } else {
-        pendingAction = { kind: "create-workspace", key: "new:" + name,
-          nodeId: owner ? owner.node_id : "local" }
-        pendingWorkspace = { name: name, global: globalWorkspacesAvailable }
-        command = WorkspaceModel.workspaceCreateCommand(name, cwd, [], false)
-      }
+      pendingAction = { kind: "create-workspace", key: "new:" + name,
+        nodeId: owner ? owner.node_id : "local" }
+      pendingWorkspace = { name: name, global: globalWorkspacesAvailable }
+      command = WorkspaceModel.workspaceCreateCommand(name, cwd, globalWorkspacesAvailable)
     } else if (formMode === "shell" && workspaceDetail) {
       pendingAction = { kind: "create-shell", key: workspaceDetail.key + "\u001fnew:" + name,
         nodeId: owner.node_id }
@@ -1597,7 +1579,6 @@ Panel {
         root.capabilitiesReady = true
         root.scheduleCommandsSupported = false
         root.projectListSupported = false
-        root.projectWorkspaceCreationSupported = false
         root.federationSupported = false
         root.globalWorkspacesSupported = false
       }
@@ -1774,24 +1755,10 @@ Panel {
         root.actionMessage = root.processError(actionStderr.text || actionStdout.text, "Boomux action failed")
         return
       }
-      if (action === "create-project") {
-        try {
-          var created = WorkspaceModel.parseProjectCreationResponse(
-            actionStdout.text, pending.nodeId)
-          root.pendingWorkspace = { key: WorkspaceModel.globalKey(created.workspace.id),
-            name: created.workspace.name, global: true, nodeId: created.node_id,
-            shellId: created.shell.id, ownerWorkspaceId: created.shell.workspace_id }
-        } catch (exception) {
-          root.actionMessage = "Workspace created, but Boomux returned an invalid identity response"
-          root.refresh()
-          return
-        }
-      }
       if (action === "create-agent" && root.pendingShell)
         root.pendingShell = Object.assign({}, root.pendingShell, { armed: true })
       root.cancelForm()
       if (action === "create-workspace") root.actionMessage = "Workspace created"
-      else if (action === "create-project") root.actionMessage = "Workspace and first Shell created"
       else if (action === "create-shell") root.actionMessage = "Shell added"
       else if (action === "create-agent") root.actionMessage = "Starting " + root.agentHost + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
@@ -2354,8 +2321,7 @@ Panel {
 
             Column {
               visible: !root.directoryPickerOpen && root.globalWorkspacesAvailable
-                && (root.formMode === "workspace"
-                  || (root.workspaceDetail && root.workspaceDetail.is_global))
+                && (root.formMode === "shell" || root.formMode === "agent")
               width: parent.width
               spacing: Style.space(3)
 
@@ -2376,41 +2342,6 @@ Panel {
                 onChanged: function(value) { root.selectCreationNode(value) }
               }
 
-              Text {
-                visible: root.formMode === "workspace" && root.eligibleCreationNodes.length === 1
-                width: parent.width
-                text: root.creationNode ? "Placement: " + root.creationNode.alias + " · automatic" : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
-
-              ListView {
-                visible: root.formMode === "workspace" && root.eligibleCreationNodes.length !== 1
-                width: parent.width
-                implicitHeight: Math.min(contentHeight, Style.space(126))
-                model: root.nodes
-                spacing: Style.space(3)
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                delegate: Button {
-                  required property var modelData
-                  width: ListView.view.width
-                  text: String(modelData.alias) + " · "
-                    + (modelData.workspace_owner_eligible ? "available"
-                      : (modelData.workspace_owner_unavailable_reason
-                        || root.nodeHealthLabel(modelData)))
-                  selected: root.creationNodeId === modelData.node_id
-                  enabled: !!modelData.workspace_owner_eligible
-                  focusable: true
-                  bordered: true
-                  foreground: root.foreground
-                  fontSize: Style.font.caption
-                  onClicked: root.selectCreationNode(modelData.node_id)
-                }
-              }
             }
 
             Column {
@@ -2538,12 +2469,14 @@ Panel {
               placeholderText: root.formMode === "workspace" ? "Workspace name" : "Shell name"
               foreground: root.foreground
               onTextEdited: root.nameFieldEdited = true
-              onAccepted: cwdField.forceActiveFocus()
+              onAccepted: {
+                if (root.formMode === "workspace") root.submitForm()
+                else cwdField.forceActiveFocus()
+              }
               Keys.onEscapePressed: root.cancelForm()
             }
             Row {
-              visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
-                || root.workspaceCreationMode === "custom")
+              visible: !root.directoryPickerOpen && root.formMode !== "workspace"
               width: parent.width
               spacing: Style.space(6)
               TextField {

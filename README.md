@@ -14,22 +14,22 @@ Omarchy bar.
 - Highlights finished work and blocked attention in the bar
 - Keeps finished markers visible until you open the corresponding Agent
 - Groups Shells, Agents, launchers, and Schedules by global Workspace task
-- Shows resources from multiple Node placements and their placement-specific paths
+- Projects resources from multiple Node placements into one Workspace item list
 - Opens complete workspaces or individual managed items
-- Removes individual workspace items after confirming their specific impact
-- Creates workspaces from configured project suggestions or a custom directory
-- Opens an in-panel directory picker for workspace, shell, and Agent directories
+- Removes locally owned workspace items after confirming their specific impact
+- Creates empty Workspaces from configured project-name suggestions or a custom name
+- Opens an in-panel directory picker for Shell and Agent directories
 - Prefills editable shell and Agent names from Boomux suggestions
 - Starts new OpenCode or Pi command shells and lets their lifecycle integration
   register the Agent
-- Acknowledges current durable attention when you open its Agent
+- Acknowledges local durable attention when you open its Agent
 - Lists Schedules across workspaces with scheduler status and their latest run
 - Runs Schedules immediately and pauses or resumes future timed dispatch
 - Launches the full Boomux TUI in a new native terminal
 - Supports mouse and keyboard navigation and follows the active Omarchy theme
 - Polls local Boomux state once per second for responsive updates
 - Keeps Node ownership as secondary metadata instead of a Node filter or Node-first label
-- Shows every placement and Node health state without hiding cached stale resources
+- Keeps cached stale resources visible but disables owner-dependent actions
 - Keeps equal-name unlinked Node-local Workspaces as distinct external Workspaces
 - Shows scheduler health independently per Node and disables owner-dependent
   actions while its state is stale or unavailable
@@ -45,12 +45,10 @@ Omarchy bar.
 - [Boomux](https://github.com/gardnmi/boomux) `0.19.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
+- `curl` for optional passive update detection
 
-Boomux `0.19.0` is the planned first release containing protocol 38. Until that
-release is tagged, global Workspace support is branch-validated against Boomux
-PR 207 and requires a matching protocol-38 Boomux build. The currently installed
-`0.18.0` binary provides only the protocol-37 fallback and is not live evidence
-for global Workspace behavior.
+Full global Workspace support requires Boomux protocol 38. Protocol 33 through
+37 retain the qualified owner-local fallback described below.
 
 Workspace management works with Boomux alone. Agent states and Agent creation
 require the corresponding coding-agent executable and Boomux lifecycle
@@ -110,8 +108,8 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Escape | Close the panel |
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. **Add Node** remains beside it and opens local interactive `boomux node add`
-in a native terminal, where Boomux alone handles SSH authentication, remote
+window. **Add Node** remains beside it and opens Boomux's guided Node setup in a
+local native terminal, where Boomux alone handles SSH authentication, remote
 install details, and confirmation. The terminal remains open after setup so its
 success or failure is visible. Selecting a Workspace shows its items and scoped
 **Open**, **Shell**, **Agent**, and **Remove Workspace** actions below the
@@ -121,21 +119,15 @@ takes over its writable controller so the new window receives the authoritative
 terminal size and input stream. Expanded Workspace details remain inside the
 panel and scroll when their items exceed the available detail surface.
 
-**New Workspace** creates coordinator metadata and opens with the same projects Boomux discovers from configured
-`[projects].roots`. Search and select a project to use its canonical name and
-path, or choose **Custom** to enter an unrelated workspace name and optional
-default directory. **Browse** opens a bounded local directory browser and fills
-the exact selected path; manual path entry remains available. Choosing a project
-or directory does not create or start anything until **Create** is pressed.
-For a project or custom directory, the plugin calls the single atomic
-`boomux workspace create-project --json` flow, which returns the exact global
-Workspace, owner Node, owner Workspace, and first Shell identities. Boomux
-revalidates the exact sole eligible Node selected by the UI; when several are
-eligible, the form requires an explicit Node choice and passes its exact ID. The
-panel never invents a default placement. Remote paths are never opened in the
-local directory browser. Any remote project
-or path data comes from Boomux's owner-routed `project list --node` service;
-unsupported remote creation controls stay disabled.
+**New Workspace** creates empty coordinator metadata and offers the same project
+names Boomux discovers from configured `[projects].roots`. Search and select a
+project to use its canonical name, or choose **Custom** to enter another name.
+The displayed project path is a discovery hint only: creating the Workspace does
+not assign a Node, persist that path, create a Shell, or start a process. Choose
+the exact Node and directory later when adding the first Shell or Agent; that
+resource establishes the placement. The panel never invents a placement when
+several Nodes are eligible. **Browse** is available in Shell and Agent forms for
+local paths; remote paths come only from Boomux's owner-routed services.
 
 Configure the suggestions in Boomux, for example:
 
@@ -147,18 +139,21 @@ max_depth = 3
 
 ![Boomux configured project picker](assets/projects.png)
 
-Each workspace item has a **Remove** button. Removing a shell, command, or Agent
+Each locally owned workspace item has a **Remove** button. Remote item removal is
+not offered by the panel. Removing a shell, command, or Agent
 item closes its exact backing shell, terminates it if running, and deletes its
 shell definition and retained terminal state. Durable Agent history may remain
 available for acknowledgement. Removing a launcher deletes only that launcher
 definition; applications it already launched keep running. Both operations ask
 for confirmation before changing the workspace. Removing a Workspace also asks
 for confirmation and removes its managed processes, launchers, schedules and
-persisted prompts, retained state, Agent and attention records, and metadata.
+persisted prompts, retained state, Agent and attention records, and metadata. A
+coordinated close can remain visibly `closing` when an owner is unavailable or a
+placement is still `close_pending`; Boomux retains the unresolved membership
+until that owner confirms removal or the close is retried outside the panel.
 
 Opening a complete global Workspace is one Boomux fan-out request. Available
-placements start immediately while unavailable placements remain visible and
-Boomux reports per-Node failures. Boomux invokes its launchers,
+placements start immediately and unavailable owners do not block them. Boomux invokes its launchers,
 takes over active terminal controllers, and restarts exited shells. Workspace
 restore is non-transactional, so some items can open even if another item fails.
 Opening an individual exited shell or command restarts its stored process.
@@ -179,9 +174,11 @@ The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert
 is active. Use the Agent row's **Dismiss** button or press `D` to clear a local
 finished marker and acknowledge durable attention without opening the terminal.
-Durable attention is acknowledged with the exact Agent ID and observation
-revision. Blocked attention is also acknowledged when that Agent reports it is
-working again. Failed acknowledgements remain visible for manual dismissal.
+For a locally owned Agent, durable attention is acknowledged with the exact Agent
+ID and observation revision. Local blocked attention is also acknowledged when
+that Agent reports it is working again. Remote attention remains visible and
+must be handled through Boomux outside the panel; it is not cleared by opening
+the remote Agent.
 
 The **Schedules** surface activates only when the installed CLI advertises the
 required JSON commands and the running daemon supports protocol 25 or newer.
@@ -205,11 +202,12 @@ omarchy plugin update io.github.gardnmi.boomux
 ```
 
 Omarchy rescans plugins after an update; a shell restart is not normally needed.
-At shell startup, the plugin performs two bounded, read-only HTTPS checks against
-GitHub: the latest stable Boomux release and the published plugin manifest on
-`main`. Newer semantic versions add an upward-arrow badge and separate update
-buttons in the panel. Failures are silent, and the plugin never downloads or
-installs an update automatically.
+When `curl` is available, the plugin performs two bounded, read-only HTTPS checks
+against GitHub: the latest stable Boomux release and the published plugin manifest on
+`main`. Newer semantic versions add an upward-arrow badge, unless an Agent alert
+count takes precedence, and separate links to the Boomux release page and plugin
+repository. Failures are silent. These links never run the update command or
+download or install anything automatically.
 
 ## Remove
 
@@ -247,14 +245,15 @@ and data.
   projected attention after refresh; it does not derive or deliver notifications
   from health changes, execution outcomes, quiet output, or cache reseeds.
 - It does not modify Boomux or Omarchy configuration directly.
-- After an Agent terminal opens successfully, its notification is explicitly
+- After a locally owned Agent terminal opens successfully, its notification is explicitly
   dismissed, or a blocked Agent reports `working` again, the plugin can run the
   local, revision-conditional `boomux attention acknowledge` command. Attention
   for an Agent whose shell was removed can also be dismissed directly from its
   row.
 - Opening the dashboard or a managed shell launches a native terminal process.
-- Workspace actions can create or open workspaces, create or remove shells, and
-  invoke or remove existing launchers. Shell removal can terminate a running
+- Workspace actions can create or open workspaces, create shells on eligible
+  Nodes, remove local shells, and invoke remote or local launchers while removing
+  only local launchers. Shell removal can terminate a running
   process and deletes retained terminal state. Launcher removal does not stop
   applications already launched. Workspace restore can run commands, open
   native terminals, disconnect existing writable terminal controllers, and
@@ -263,9 +262,11 @@ and data.
   dispatch. Opening the latest run can attach its exact active run or launch its
   harness to resume the exact linked session. Schedule actions do not edit
   prompts, cancel executions, or remove Schedules.
-- Remote opens and mutations include the resource's structural Node identity.
-  Stale rows remain visible but cannot launch, mutate, acknowledge, inspect
-  private state, or start owner-side processes; offline writes are never queued.
+- Supported remote opens, creation, launcher invocation, and Schedule actions
+  include the resource's structural Node identity. Per-item removal and attention
+  acknowledgement remain local-only. Stale rows remain visible but cannot
+  launch, mutate, acknowledge, inspect private state, or start owner-side
+  processes; offline writes are never queued.
 - Protocol 37 and older CLIs do not expose Node context on attention acknowledgment,
   workspace/shell creation, or destructive workspace/shell/launcher mutations.
   Those controls remain disabled for remote owners rather than dropping Node
@@ -305,8 +306,8 @@ omarchy-shell shell rescanPlugins
 
 ### A remote Node is stale or unavailable
 
-Secondary status text reports Boomux's stable Node health value. `reconnecting` and `stale`
-retain the last bounded projection. `unreachable`, `authentication required`,
+Agent metadata and Schedule details report relevant owner Node health.
+`reconnecting` and `stale` retain the last bounded projection. `unreachable`, `authentication required`,
 `identity changed`, `identity conflict`, and `unsupported` require owner or route
 attention. Controls remain disabled until Boomux reports a current,
 identity-verified `online` observation. Inspect through the local CLI:
