@@ -182,6 +182,24 @@ describe("qualified commands and action gates", () => {
 })
 
 describe("request identity", () => {
+  test("retains the selected exact run until its focused refresh replaces it", () => {
+    const current = [
+      { id: "exact-local", schedule_key: "node-a\u001fschedule" },
+      { id: "old-remote", schedule_key: "node-b\u001fother" }
+    ]
+    const snapshot = [
+      { id: "stale-selected", schedule_key: "node-a\u001fschedule" },
+      { id: "fresh-remote", schedule_key: "node-b\u001fother" }
+    ]
+
+    expect(model.mergeSnapshotExecutions(current, snapshot,
+      "node-a\u001fschedule")).toEqual([
+      { id: "fresh-remote", schedule_key: "node-b\u001fother" },
+      { id: "exact-local", schedule_key: "node-a\u001fschedule" }
+    ])
+    expect(model.mergeSnapshotExecutions(current, snapshot, "")).toBe(snapshot)
+  })
+
   test("queues project discovery for the latest rapidly selected Node", () => {
     const requested = model.projectDiscoveryIdentity("node-b")
     const active = model.projectDiscoveryIdentity("node-a")

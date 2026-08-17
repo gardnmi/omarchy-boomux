@@ -376,7 +376,11 @@ Panel {
       workspaces = snapshot.workspaces
       shells = snapshot.shells
       schedules = snapshot.schedules
-      executions = snapshot.executions
+      var retainedScheduleKey = schedules.some(function(schedule) {
+        return schedule.key === selectedScheduleKey
+      }) ? selectedScheduleKey : ""
+      executions = WorkspaceModel.mergeSnapshotExecutions(
+        executions, snapshot.executions, retainedScheduleKey)
       applyAgentSnapshot(snapshot.agents)
       online = true
       if (pendingWorkspace) {

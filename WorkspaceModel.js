@@ -416,6 +416,15 @@ function normalizeNodeSnapshot(data) {
   }
 }
 
+function mergeSnapshotExecutions(current, snapshot, retainedScheduleKey) {
+  if (!retainedScheduleKey) return snapshot
+  return snapshot.filter(function(execution) {
+    return execution.schedule_key !== retainedScheduleKey
+  }).concat(current.filter(function(execution) {
+    return execution.schedule_key === retainedScheduleKey
+  }))
+}
+
 function normalizeWorkspaceDetail(source, workspace, node) {
   if (!source || !workspace || !node || resourceId(source.id) !== workspace.id)
     throw new Error("invalid Workspace detail")
@@ -647,6 +656,7 @@ if (typeof module !== "undefined") module.exports = {
   normalizeSchedule: normalizeSchedule,
   normalizeExecution: normalizeExecution,
   normalizeNodeSnapshot: normalizeNodeSnapshot,
+  mergeSnapshotExecutions: mergeSnapshotExecutions,
   normalizeWorkspaceDetail: normalizeWorkspaceDetail,
   snapshotSupportsGlobalWorkspaces: snapshotSupportsGlobalWorkspaces,
   ownerKey: ownerKey,
