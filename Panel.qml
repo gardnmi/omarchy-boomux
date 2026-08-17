@@ -1233,7 +1233,9 @@ Panel {
     }
     if (globalWorkspacesAvailable && (mode === "workspace"
         || (workspaceDetail && workspaceDetail.is_global))) {
-      creationNodeId = eligibleCreationNodes.length === 1 ? eligibleCreationNodes[0].node_id : ""
+      creationNodeId = mode === "workspace"
+        ? (eligibleCreationNodes.length === 1 ? eligibleCreationNodes[0].node_id : "")
+        : WorkspaceModel.defaultCreationNodeId(nodes)
       if (eligibleCreationNodes.length === 0 && mode !== "workspace") {
         actionMessage = "No Node is currently eligible for Workspace placement"
         return
@@ -2147,8 +2149,25 @@ Panel {
               width: parent.width
               spacing: Style.space(3)
 
+              Dropdown {
+                id: creationNodeDropdown
+                visible: root.formMode === "shell" || root.formMode === "agent"
+                width: parent.width
+                label: "Select Node"
+                value: root.creationNodeId
+                options: root.eligibleCreationNodes.map(function(node) {
+                  return {
+                    value: String(node.node_id),
+                    label: String(node.alias) + " · available"
+                  }
+                })
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.selectCreationNode(value) }
+              }
+
               Text {
-                visible: root.eligibleCreationNodes.length === 1
+                visible: root.formMode === "workspace" && root.eligibleCreationNodes.length === 1
                 width: parent.width
                 text: root.creationNode ? "Placement: " + root.creationNode.alias + " · automatic" : ""
                 color: root.dim
@@ -2158,7 +2177,7 @@ Panel {
               }
 
               ListView {
-                visible: root.eligibleCreationNodes.length !== 1
+                visible: root.formMode === "workspace" && root.eligibleCreationNodes.length !== 1
                 width: parent.width
                 implicitHeight: Math.min(contentHeight, Style.space(126))
                 model: root.nodes

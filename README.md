@@ -166,6 +166,8 @@ Shell and Agent forms request an unreserved generated name from Boomux for the
 exact selected owner placement when one already exists. The field remains editable, and typing is never
 overwritten by a delayed suggestion. Another client can claim the suggested
 name before creation; Boomux remains authoritative and reports that collision.
+Both forms expose a **Select Node** dropdown and default it to the eligible local
+Node; selecting another Node updates placement-specific name and path defaults.
 
 The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert

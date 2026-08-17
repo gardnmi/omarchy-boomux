@@ -150,6 +150,10 @@ describe("qualified commands and action gates", () => {
     expect(model.creationNodeArgs([protocol38Envelope.data.nodes[0]], "node-a")).toEqual([
       "--node", "node-a"
     ])
+    expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes)).toBe("node-a")
+    expect(model.defaultCreationNodeId([protocol38Envelope.data.nodes[1]])).toBe("node-b")
+    expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes.map(node =>
+      Object.assign({}, node, { local: false })))).toBe("")
     expect(model.workspaceCreateCommand("sole", "/tmp/sole",
       model.creationNodeArgs([protocol38Envelope.data.nodes[0]], "node-a"), true)).toEqual([
       "boomux", "workspace", "create-project", "sole", "--cwd", "/tmp/sole",

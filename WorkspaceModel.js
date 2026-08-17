@@ -470,6 +470,13 @@ function eligibleNodes(nodes) {
   return nodes.filter(function(node) { return !!node.workspace_owner_eligible })
 }
 
+function defaultCreationNodeId(nodes) {
+  var eligible = eligibleNodes(nodes)
+  for (var i = 0; i < eligible.length; i++)
+    if (eligible[i].local) return String(eligible[i].node_id)
+  return eligible.length === 1 ? String(eligible[0].node_id) : ""
+}
+
 function creationNodeArgs(nodes, selectedNodeId) {
   var eligible = eligibleNodes(nodes)
   for (var i = 0; i < eligible.length; i++)
@@ -645,6 +652,7 @@ if (typeof module !== "undefined") module.exports = {
   workspaceOpenCommand: workspaceOpenCommand,
   qualifiedCommand: qualifiedCommand,
   eligibleNodes: eligibleNodes,
+  defaultCreationNodeId: defaultCreationNodeId,
   creationNodeArgs: creationNodeArgs,
   workspaceCreateCommand: workspaceCreateCommand,
   parseProjectCreationResponse: parseProjectCreationResponse,
