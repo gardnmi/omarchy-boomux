@@ -23,6 +23,12 @@ test("keeps guided Node setup feedback visible", () => {
   )
 })
 
+test("refreshes the installed CLI version after an upgrade", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("onOpenedChanged: if (opened) {\n    refreshInstalledState()")
+  expect(panel).toContain('if (text === "r" || text === "R") root.refreshInstalledState()')
+})
+
 test("creates coordinated Workspaces without the removed compound command", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).not.toContain("create-project")
