@@ -11,6 +11,8 @@ Omarchy bar.
 - Keeps active Agents in a dedicated status tab
 - Excludes schedule-owned Agents handled by Boomux scheduling
 - Shows live `working`, `idle`, and `blocked` Agent states
+- Sorts Agents by their latest authoritative update and shows compact relative
+  times such as `5m ago`
 - Highlights finished work and blocked attention in the bar
 - Keeps finished markers visible until you open the corresponding Agent
 - Groups Shells, Agents, launchers, and Schedules by global Workspace task
@@ -180,8 +182,10 @@ Node; selecting another Node updates placement-specific name and path defaults.
 
 The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert
-is active. Use the Agent row's **Dismiss** button or press `D` to clear a local
-finished marker and acknowledge durable attention without opening the terminal.
+is active. Agent rows are ordered newest-update first; the **Updated** column uses
+the latest lifecycle observation, durable attention observation, or initial
+registration time. Use the Agent row's **Dismiss** button or press `D` to clear a
+local finished marker and acknowledge durable attention without opening the terminal.
 For a locally owned Agent, durable attention is acknowledged with the exact Agent
 ID and observation revision. Local blocked attention is also acknowledged when
 that Agent reports it is working again. Remote attention remains visible and

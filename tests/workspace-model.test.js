@@ -16,6 +16,27 @@ test("compares only valid semantic release versions", () => {
   expect(model.versionIsNewer("main", "0.18.0")).toBe(false)
 })
 
+test("sorts Agents by their latest authoritative update", () => {
+  const agents = [
+    { key: "older", started_at_ms: 100, observation: { observed_at_ms: 200 } },
+    { key: "attention", started_at_ms: 100, observation: { observed_at_ms: 250 },
+      attention: { observation: { observed_at_ms: 400 } } },
+    { key: "newer", started_at_ms: 100, observation: { observed_at_ms: 300 } }
+  ]
+  expect(model.agentsByLastUpdated(agents).map(agent => agent.key))
+    .toEqual(["attention", "newer", "older"])
+  expect(agents.map(agent => agent.key)).toEqual(["older", "attention", "newer"])
+})
+
+test("formats compact relative Agent update times", () => {
+  const now = 1_000_000_000
+  expect(model.relativeTime(now - 20_000, now)).toBe("now")
+  expect(model.relativeTime(now - 5 * 60_000, now)).toBe("5m ago")
+  expect(model.relativeTime(now - 2 * 60 * 60_000, now)).toBe("2h ago")
+  expect(model.relativeTime(now - 3 * 24 * 60 * 60_000, now)).toBe("3d ago")
+  expect(model.relativeTime(0, now)).toBe("unknown")
+})
+
 test("keeps guided Node setup feedback visible", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain(

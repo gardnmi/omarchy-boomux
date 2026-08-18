@@ -33,6 +33,7 @@ Panel {
   property string selectedWorkspaceKey: ""
   property string selectedScheduleKey: ""
   property string selectedNodeId: ""
+  property string selectedAgentKey: ""
   property string activeTab: "agents"
   property int selectedIndex: 0
   property bool online: false
@@ -101,16 +102,17 @@ Panel {
   property string executionActiveScheduleKey: ""
   property int pollEpoch: 0
   property int snapshotActiveEpoch: 0
+  property double clockNow: Date.now()
 
   readonly property var visibleWorkspaces: workspaces
   readonly property var visibleSchedules: schedules
 
-  readonly property var visibleAgents: agents.filter(function(agent) {
+  readonly property var visibleAgents: WorkspaceModel.agentsByLastUpdated(agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
     return !agentIsScheduleOwned(agent)
       && ((agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
         || attentionRevision(agent) > 0)
-  })
+  }))
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
       if (workspaces[i].key === selectedWorkspaceKey) return workspaces[i]
@@ -354,6 +356,7 @@ Panel {
     selectedWorkspaceKey = ""
     selectedScheduleKey = ""
     selectedNodeId = ""
+    selectedAgentKey = ""
     itemToRemove = null
     daemonProtocolVersion = 0
     schedulerState = "offline"
@@ -488,6 +491,7 @@ Panel {
     if (!selectedNode)
       selectedNodeId = nodes.length > 0 ? nodes[0].node_id : ""
     workspaceDetail = selectedWorkspace
+    syncAgentIndex()
     syncWorkspaceIndex()
     syncScheduleIndex()
     syncNodeIndex()
@@ -595,6 +599,7 @@ Panel {
       automaticAttentionRevisions = nextAutomaticAttentionRevisions
       agentBaselineReady = true
       agents = nextAgents
+      syncAgentIndex()
       clampSelection()
   }
 
@@ -832,7 +837,7 @@ Panel {
       syncScheduleIndex()
       refresh()
     } else if (tab === "nodes") syncNodeIndex()
-    else selectedIndex = 0
+    else syncAgentIndex()
     cancelForm()
   }
 
@@ -850,7 +855,10 @@ Panel {
   function moveSelection(offset) {
     if (editing || itemCount === 0) return
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
-    if (activeTab === "agents") agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    if (activeTab === "agents") {
+      selectedAgentKey = visibleAgents[selectedIndex].key
+      agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    }
     else if (activeTab === "workspaces") selectWorkspace(visibleWorkspaces[selectedIndex].key)
     else if (activeTab === "schedules") selectSchedule(visibleSchedules[selectedIndex].key)
     else {
@@ -911,6 +919,18 @@ Panel {
     }
     selectedIndex = nodes.length > 0 ? 0 : -1
     selectedNodeId = nodes.length > 0 ? nodes[0].node_id : ""
+  }
+
+  function syncAgentIndex() {
+    if (activeTab !== "agents") return
+    for (var i = 0; i < visibleAgents.length; i++) {
+      if (visibleAgents[i].key === selectedAgentKey) {
+        selectedIndex = i
+        return
+      }
+    }
+    selectedIndex = visibleAgents.length > 0 ? 0 : -1
+    selectedAgentKey = visibleAgents.length > 0 ? visibleAgents[0].key : ""
   }
 
   function compactPath(path) {
@@ -1939,7 +1959,10 @@ Panel {
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.refresh()
+    onTriggered: {
+      root.clockNow = Date.now()
+      root.refresh()
+    }
   }
 
   BarIconButton {
@@ -2624,11 +2647,25 @@ Panel {
             id: agentColumn
             width: parent.width
             spacing: Style.space(6)
-            PanelSectionHeader {
+            Row {
               width: parent.width
-              text: "AGENTS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
+              PanelSectionHeader {
+                width: parent.width - updatedHeader.width
+                text: "AGENTS"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+              Text {
+                id: updatedHeader
+                width: Style.space(70)
+                anchors.verticalCenter: parent.verticalCenter
+                text: "UPDATED"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+              }
             }
             Text {
               visible: root.visibleAgents.length === 0
@@ -2658,7 +2695,10 @@ Panel {
                 width: ListView.view.width
                 agent: modelData
                 selected: index === root.selectedIndex
-                onHovered: root.selectedIndex = index
+                onHovered: {
+                  root.selectedIndex = index
+                  root.selectedAgentKey = modelData.key
+                }
                 onActivated: root.openAgent(modelData)
                 onDismissed: root.dismissAgent(modelData)
               }
@@ -3505,20 +3545,34 @@ Panel {
       anchors.left: agentGlyph.right
       anchors.leftMargin: Style.space(12)
       anchors.right: parent.right
-      anchors.rightMargin: agentRow.dismissible ? Style.space(86) : Style.space(10)
+      anchors.rightMargin: Style.space(10)
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.space(2)
-      Text {
+      Row {
         width: parent.width
-        text: agent ? root.agentDisplayName(agent) : "Agent"
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        font.bold: agentRow.selected
-        elide: Text.ElideRight
+        Text {
+          width: parent.width - updatedText.width
+          text: agent ? root.agentDisplayName(agent) : "Agent"
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: agentRow.selected
+          elide: Text.ElideRight
+        }
+        Text {
+          id: updatedText
+          width: Style.space(70)
+          text: agent ? WorkspaceModel.relativeTime(
+            WorkspaceModel.agentUpdatedAt(agent), root.clockNow) : "unknown"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignRight
+          elide: Text.ElideLeft
+        }
       }
       Text {
-        width: parent.width
+        width: parent.width - (agentRow.dismissible ? Style.space(80) : 0)
         text: (agent ? "Workspace: " + String(agent.workspace_name)
           + " · Node: " + root.nodeName(agent) + " · Agent · " : "")
           + (agentRow.justCompleted ? "finished" : agentRow.state)
@@ -3550,7 +3604,8 @@ Panel {
       z: 1
       anchors.right: parent.right
       anchors.rightMargin: Style.space(8)
-      anchors.verticalCenter: parent.verticalCenter
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: Style.space(6)
       text: "Dismiss"
       tooltipText: "Dismiss Agent notification"
       bordered: true
