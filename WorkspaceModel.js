@@ -22,6 +22,35 @@ function versionIsNewer(candidate, current) {
   return false
 }
 
+function agentUpdatedAt(agent) {
+  if (!agent) return 0
+  var observation = agent.observation
+    ? Number(agent.observation.observed_at_ms || 0) : Number(agent.observed_at_ms || 0)
+  var attention = agent.attention && agent.attention.observation
+    ? Number(agent.attention.observation.observed_at_ms || 0) : 0
+  return Math.max(observation, attention, Number(agent.started_at_ms || 0))
+}
+
+function agentsByLastUpdated(agents) {
+  return agents.slice().sort(function(left, right) {
+    var difference = agentUpdatedAt(right) - agentUpdatedAt(left)
+    if (difference !== 0) return difference
+    var leftKey = String(left.key || left.id || "")
+    var rightKey = String(right.key || right.id || "")
+    return leftKey < rightKey ? -1 : (leftKey > rightKey ? 1 : 0)
+  })
+}
+
+function relativeTime(timestamp, now) {
+  var value = Number(timestamp || 0)
+  if (value <= 0) return "unknown"
+  var seconds = Math.max(0, Math.floor((Number(now || Date.now()) - value) / 1000))
+  if (seconds < 60) return "now"
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m ago"
+  if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago"
+  return Math.floor(seconds / 86400) + "d ago"
+}
+
 function qualifiedId(value, nodeId, field) {
   var id = resourceId(value)
   if (!id || resourceNode(value, nodeId) !== nodeId)
@@ -644,6 +673,9 @@ function acknowledgementResponseMatches(data, identity) {
 
 if (typeof module !== "undefined") module.exports = {
   versionIsNewer: versionIsNewer,
+  agentUpdatedAt: agentUpdatedAt,
+  agentsByLastUpdated: agentsByLastUpdated,
+  relativeTime: relativeTime,
   resourceId: resourceId,
   resourceNode: resourceNode,
   resourceKey: resourceKey,

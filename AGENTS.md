@@ -61,7 +61,8 @@ through a shell. Do not invoke Boomux private transport commands.
 The panel has four top-level views:
 
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
-  durable attention; schedule-owned Agents are excluded by shell ownership
+  durable attention, newest authoritative update first; schedule-owned Agents
+  are excluded by shell ownership
 - **Workspaces**: a flat workspace selector and a separate selected-workspace
   detail surface
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
