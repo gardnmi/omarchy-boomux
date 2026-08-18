@@ -269,6 +269,11 @@ Panel {
     daemonStatusProcess.running = true
   }
 
+  function refreshInstalledState() {
+    if (!capabilityProcess.running) capabilityProcess.running = true
+    refresh()
+  }
+
   function refreshData() {
     if (nodeSnapshotProcess.running || workspaceListProcess.running || listProcess.running
         || agentProcess.running || scheduleListProcess.running || executionListProcess.running) return
@@ -366,6 +371,7 @@ Panel {
         && cliFeatures.indexOf("global_workspaces") >= 0
         && cliFeatures.indexOf("multi_node_workspace_placements") >= 0
     } catch (exception) {
+      cliVersion = ""
       scheduleCommandsSupported = false
       projectListSupported = false
       shellNameSuggestionSupported = false
@@ -1541,7 +1547,7 @@ Panel {
   }
 
   onOpenedChanged: if (opened) {
-    refresh()
+    refreshInstalledState()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   } else {
     itemToRemove = null
@@ -1576,6 +1582,7 @@ Panel {
       if (exitCode === 0) root.parseCapabilities(capabilityStdout.text)
       else {
         root.cliAvailable = false
+        root.cliVersion = ""
         root.capabilitiesReady = true
         root.scheduleCommandsSupported = false
         root.projectListSupported = false
@@ -1906,7 +1913,7 @@ Panel {
       : "Boomux unavailable"
       )
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) root.refresh()
+      if (buttonCode === Qt.RightButton) root.refreshInstalledState()
       else root.toggle()
     }
   }
@@ -1947,7 +1954,7 @@ Panel {
       }
       onTextKey: function(text) {
         if (root.itemToRemove) return
-        if (text === "r" || text === "R") root.refresh()
+        if (text === "r" || text === "R") root.refreshInstalledState()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
         else if (text === "3") root.selectTab("schedules")
