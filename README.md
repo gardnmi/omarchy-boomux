@@ -33,11 +33,15 @@ Omarchy bar.
 - Keeps equal-name unlinked Node-local Workspaces as distinct external Workspaces
 - Shows scheduler health independently per Node and disables owner-dependent
   actions while its state is stale or unavailable
+- Lists every Node in a dedicated health table with protocol,
+  freshness, eligibility, and exact identity details
 - Opens interactive **Add Node** setup only in a local native terminal
 
 ![Boomux workspace management in the Omarchy bar](assets/workspaces.png)
 
 ![Boomux Schedule management in the Omarchy bar](assets/schedules.png)
+
+![Boomux Node health table](assets/nodes.png)
 
 ## Requirements
 
@@ -98,9 +102,9 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | --- | --- |
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
-| Tab or `1` / `2` / `3` | Switch between Agents, Workspaces, and Schedules |
-| `A` | Open interactive Add Node in a native terminal |
-| Up / Down | Select an Agent, workspace, or Schedule |
+| Tab or `1` / `2` / `3` / `4` | Switch between Agents, Workspaces, Schedules, and Nodes |
+| `A` | From Nodes, open interactive Add Node in a native terminal |
+| Up / Down | Select an Agent, workspace, Schedule, or Node |
 | Enter | Open a selected Agent or select a workspace or Schedule |
 | `D` | Dismiss the selected Agent notification |
 | `N` | Create a workspace |
@@ -108,10 +112,14 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | Escape | Close the panel |
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. **Add Node** remains beside it and opens Boomux's guided Node setup in a
-local native terminal, where Boomux alone handles SSH authentication, remote
-install details, and confirmation. The terminal remains open after setup so its
-success or failure is visible. Selecting a Workspace shows its items and scoped
+window. The Nodes tab keeps **Add Node** at section scope and opens Boomux's
+guided Node setup in a local native terminal, where Boomux alone handles SSH
+authentication, remote install details, and confirmation. The terminal remains
+open after setup so its success or failure is visible. The Node table keeps the
+full health state visible and marks stale projections as cached. Selecting a
+Node shows its exact ID, observed protocol and time, resource counts, and
+Workspace-owner eligibility. It does not display SSH routes or turn
+Nodes into a Workspace filter. Selecting a Workspace shows its items and scoped
 **Open**, **Shell**, **Agent**, and **Remove Workspace** actions below the
 Workspace dropdown. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
@@ -237,7 +245,9 @@ and data.
   command targets the local Boomux CLI; Boomux owns verified routing,
   authentication, installation confirmation, and its bounded cache.
 - The plugin does not persist Node projections, prompts, credentials, attachment
-  environments, remote terminal content, or remote paths.
+  environments, remote terminal content, remote paths, or routes. The Nodes tab
+  displays only prompt-free snapshot health, counts, observed protocol, and
+  exact Node identity.
 - The directory browser reads names of local readable subdirectories only while
   it is open; it does not read file contents or send paths elsewhere.
 - Boomux may deliver one locally deduplicated, bounded reconnect attention digest

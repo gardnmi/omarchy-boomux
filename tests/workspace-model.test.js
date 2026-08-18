@@ -29,6 +29,13 @@ test("refreshes the installed CLI version after an upgrade", () => {
   expect(panel).toContain('if (text === "r" || text === "R") root.refreshInstalledState()')
 })
 
+test("keeps Add Node inside the Nodes surface", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('text: "NODES"')
+  expect(panel).toContain('text: "Add Node"')
+  expect(panel).toContain('root.activeTab === "nodes"')
+})
+
 test("creates coordinated Workspaces without the removed compound command", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).not.toContain("create-project")
@@ -48,6 +55,12 @@ describe("CLI envelope normalization", () => {
       "release", "release"
     ])
     expect(release.placements[1].default_cwd).toBe("/srv/release")
+    expect(snapshot.nodes.map(node => [node.workspace_count, node.shell_count,
+      node.agent_count, node.launcher_count, node.schedule_count])).toEqual([
+      [1, 1, 1, 1, 1],
+      [1, 1, 1, 1, 1],
+      [0, 0, 0, 0, 0]
+    ])
     const external = snapshot.workspaces.filter(workspace => workspace.is_external)
     expect(external).toHaveLength(2)
     expect(new Set(external.map(workspace => workspace.key)).size).toBe(2)

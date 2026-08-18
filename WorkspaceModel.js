@@ -345,6 +345,11 @@ function normalizeNodeSnapshot(data) {
       workspace_owner_eligible: !!rawNode.workspace_owner_eligible,
       workspace_owner_unavailable_reason:
         String(rawNode.workspace_owner_unavailable_reason || ""),
+      workspace_count: 0,
+      shell_count: 0,
+      agent_count: 0,
+      launcher_count: 0,
+      schedule_count: 0,
       scheduler: rawNode.scheduler
         || { state: "offline", active_executions: 0, max_concurrent: 0 }
     }
@@ -404,6 +409,13 @@ function normalizeNodeSnapshot(data) {
       workspace.shell_count = workspace.shells.length
       workspace.launcher_count = workspace.launchers.length
       workspace.schedule_count = workspace.schedules.length
+      node.workspace_count++
+      node.shell_count += workspace.shells.filter(function(shell) {
+        return shell.owner !== "schedule"
+      }).length
+      node.agent_count += workspace.agents.length
+      node.launcher_count += workspace.launchers.length
+      node.schedule_count += workspace.schedules.length
       ownerWorkspaces.push(workspace)
     }
     var projectedExecutions = node.local ? [] : (projection.executions || [])

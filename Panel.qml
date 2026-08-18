@@ -32,6 +32,7 @@ Panel {
   property var workspaceDetail: null
   property string selectedWorkspaceKey: ""
   property string selectedScheduleKey: ""
+  property string selectedNodeId: ""
   property string activeTab: "agents"
   property int selectedIndex: 0
   property bool online: false
@@ -140,11 +141,18 @@ Panel {
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
   readonly property var workspaceItems: buildWorkspaceItems()
   readonly property int itemCount: activeTab === "agents" ? visibleAgents.length
-    : (activeTab === "workspaces" ? visibleWorkspaces.length : visibleSchedules.length)
+    : (activeTab === "workspaces" ? visibleWorkspaces.length
+      : (activeTab === "schedules" ? visibleSchedules.length : nodes.length))
   readonly property var selectedItem: {
     var model = activeTab === "agents" ? visibleAgents
-      : (activeTab === "workspaces" ? visibleWorkspaces : visibleSchedules)
+      : (activeTab === "workspaces" ? visibleWorkspaces
+        : (activeTab === "schedules" ? visibleSchedules : nodes))
     return selectedIndex >= 0 && selectedIndex < model.length ? model[selectedIndex] : null
+  }
+  readonly property var selectedNode: {
+    for (var i = 0; i < nodes.length; i++)
+      if (nodes[i].node_id === selectedNodeId) return nodes[i]
+    return null
   }
   readonly property int blockedCount: visibleAgents.filter(function(agent) {
     return agentNeedsAttention(agent)
@@ -253,6 +261,38 @@ Panel {
     return String(node.health).split("_").join(" ") + (node.stale ? " · stale cache" : "")
   }
 
+  function nodeHealthColor(node) {
+    if (!node) return dim
+    if (node.health === "online" && node.current && !node.stale) return Color.accent
+    if (node.health === "authentication_required" || node.health === "identity_changed"
+        || node.health === "identity_conflict" || node.health === "unsupported"
+        || node.health === "unreachable") return urgent
+    return dim
+  }
+
+  function nodeMetric(node, field, collection) {
+    if (!node) return 0
+    if (node[field] !== undefined) return Number(node[field] || 0)
+    return collection.filter(function(item) { return item.node_id === node.node_id }).length
+  }
+
+  function nodeWorkspaceCount(node) {
+    return nodeMetric(node, "workspace_count", workspaces)
+  }
+
+  function nodeShellCount(node) {
+    if (!node) return 0
+    if (node && node.shell_count !== undefined) return Number(node.shell_count || 0)
+    return shells.filter(function(shell) {
+      return shell.node_id === node.node_id && shellOwner(shell.owner) !== "schedule"
+    }).length
+  }
+
+  function nodeAgentCount(node) {
+    if (!node) return 0
+    return visibleAgents.filter(function(agent) { return agent.node_id === node.node_id }).length
+  }
+
   function shellOwner(owner) {
     if (typeof owner === "string") return owner
     return owner && owner.kind === "schedule" ? "schedule" : "user"
@@ -313,6 +353,7 @@ Panel {
     workspaceDetail = null
     selectedWorkspaceKey = ""
     selectedScheduleKey = ""
+    selectedNodeId = ""
     itemToRemove = null
     daemonProtocolVersion = 0
     schedulerState = "offline"
@@ -444,9 +485,12 @@ Panel {
       selectedWorkspaceKey = visibleWorkspaces.length > 0 ? visibleWorkspaces[0].key : ""
     if (!selectedSchedule)
       selectedScheduleKey = visibleSchedules.length > 0 ? visibleSchedules[0].key : ""
+    if (!selectedNode)
+      selectedNodeId = nodes.length > 0 ? nodes[0].node_id : ""
     workspaceDetail = selectedWorkspace
     syncWorkspaceIndex()
     syncScheduleIndex()
+    syncNodeIndex()
     clampSelection()
   }
 
@@ -458,6 +502,7 @@ Panel {
         current: true, stale: false, observed_capabilities: [],
         scheduler: { state: schedulerState, active_executions: schedulerActiveExecutions,
           max_concurrent: schedulerMaxConcurrent } }]
+      if (!selectedNode) selectedNodeId = "local"
       workspaces = data.workspaces.map(function(workspace) {
         return Object.assign({}, workspace, { key: resourceKey("local", workspace.id),
           node_id: "local", node_alias: "local", node_local: true,
@@ -786,12 +831,13 @@ Panel {
     else if (tab === "schedules") {
       syncScheduleIndex()
       refresh()
-    } else selectedIndex = 0
+    } else if (tab === "nodes") syncNodeIndex()
+    else selectedIndex = 0
     cancelForm()
   }
 
   function cycleTab(direction) {
-    var tabs = ["agents", "workspaces", "schedules"]
+    var tabs = ["agents", "workspaces", "schedules", "nodes"]
     var index = tabs.indexOf(activeTab)
     var step = direction < 0 ? -1 : 1
     selectTab(tabs[(index + step + tabs.length) % tabs.length])
@@ -806,13 +852,17 @@ Panel {
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
     if (activeTab === "agents") agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
     else if (activeTab === "workspaces") selectWorkspace(visibleWorkspaces[selectedIndex].key)
-    else selectSchedule(visibleSchedules[selectedIndex].key)
+    else if (activeTab === "schedules") selectSchedule(visibleSchedules[selectedIndex].key)
+    else {
+      selectedNodeId = nodes[selectedIndex].node_id
+      nodeList.positionViewAtIndex(selectedIndex, ListView.Contain)
+    }
   }
 
   function activateSelected() {
     if (activeTab === "agents") openAgent(selectedItem)
     else if (activeTab === "workspaces" && selectedItem) selectWorkspace(selectedItem.key)
-    else if (selectedItem) selectSchedule(selectedItem.key)
+    else if (activeTab === "schedules" && selectedItem) selectSchedule(selectedItem.key)
   }
 
   function selectWorkspace(workspaceKey) {
@@ -849,6 +899,18 @@ Panel {
       }
     }
     clampSelection()
+  }
+
+  function syncNodeIndex() {
+    if (activeTab !== "nodes") return
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].node_id === selectedNodeId) {
+        selectedIndex = i
+        return
+      }
+    }
+    selectedIndex = nodes.length > 0 ? 0 : -1
+    selectedNodeId = nodes.length > 0 ? nodes[0].node_id : ""
   }
 
   function compactPath(path) {
@@ -1958,7 +2020,9 @@ Panel {
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("workspaces")
         else if (text === "3") root.selectTab("schedules")
-        else if ((text === "a" || text === "A") && root.federationAvailable) root.addNode()
+        else if (text === "4") root.selectTab("nodes")
+        else if ((text === "a" || text === "A") && root.activeTab === "nodes"
+            && root.federationAvailable) root.addNode()
         else if (text === "n" || text === "N") root.showForm("workspace")
         else if ((text === "d" || text === "D") && root.activeTab === "agents")
           root.dismissAgent(root.selectedItem)
@@ -1984,35 +2048,20 @@ Panel {
             }
           }
           trailingControl: Component {
-            Row {
-              spacing: Style.space(4)
-              Button {
-                visible: root.federationAvailable
-                text: "Add Node"
-                iconText: "+"
-                tooltipText: "Open guided Node setup"
-                bordered: true
-                foreground: root.foreground
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(5)
-                verticalPadding: Style.space(2)
-                onClicked: root.addNode()
-              }
-              Button {
-                text: "Open TUI"
-                iconText: ""
-                tooltipText: root.cliAvailable ? "Open the Boomux dashboard"
-                  : "Install Boomux to open the dashboard"
-                bordered: true
-                enabled: root.cliAvailable
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.body
-                iconSize: Style.font.body
-                horizontalPadding: Style.space(5)
-                verticalPadding: Style.space(2)
-                onClicked: root.openDashboard()
-              }
+            Button {
+              text: "Open TUI"
+              iconText: ""
+              tooltipText: root.cliAvailable ? "Open the Boomux dashboard"
+                : "Install Boomux to open the dashboard"
+              bordered: true
+              enabled: root.cliAvailable
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.body
+              iconSize: Style.font.body
+              horizontalPadding: Style.space(5)
+              verticalPadding: Style.space(2)
+              onClicked: root.openDashboard()
             }
           }
         }
@@ -2021,7 +2070,7 @@ Panel {
           width: parent.width
           spacing: Style.space(6)
           Button {
-            width: (parent.width - parent.spacing * 2) / 3
+            width: (parent.width - parent.spacing * 3) / 4
             text: "Agents"
             iconText: ""
             selected: root.activeTab === "agents"
@@ -2031,7 +2080,7 @@ Panel {
             onClicked: root.selectTab("agents")
           }
           Button {
-            width: (parent.width - parent.spacing * 2) / 3
+            width: (parent.width - parent.spacing * 3) / 4
             text: "Workspaces"
             iconText: ""
             selected: root.activeTab === "workspaces"
@@ -2041,7 +2090,7 @@ Panel {
             onClicked: root.selectTab("workspaces")
           }
           Button {
-            width: (parent.width - parent.spacing * 2) / 3
+            width: (parent.width - parent.spacing * 3) / 4
             text: "Schedules"
             iconText: ""
             selected: root.activeTab === "schedules"
@@ -2049,6 +2098,16 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: root.selectTab("schedules")
+          }
+          Button {
+            width: (parent.width - parent.spacing * 3) / 4
+            text: "Nodes"
+            iconText: ""
+            selected: root.activeTab === "nodes"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.selectTab("nodes")
           }
         }
 
@@ -3145,6 +3204,230 @@ Panel {
               visible: root.scheduleAvailable && root.online && root.visibleSchedules.length > 0
               width: parent.width
               text: "Enter selects · Tab switches · R refreshes"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+            }
+          }
+        }
+
+        Item {
+          visible: root.cliAvailable && root.activeTab === "nodes" && !root.editing
+          width: parent.width
+          implicitHeight: nodeColumn.implicitHeight
+
+          Column {
+            id: nodeColumn
+            width: parent.width
+            spacing: Style.space(6)
+
+            Row {
+              width: parent.width
+              PanelSectionHeader {
+                width: parent.width - (addNodeButton.visible ? addNodeButton.width : 0)
+                anchors.verticalCenter: parent.verticalCenter
+                text: "NODES"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+              Button {
+                id: addNodeButton
+                visible: root.federationAvailable
+                text: "Add Node"
+                iconText: "+"
+                tooltipText: "Open guided Node setup"
+                bordered: true
+                foreground: root.foreground
+                fontSize: Style.font.caption
+                iconSize: Style.font.body
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(2)
+                onClicked: root.addNode()
+              }
+            }
+
+            Text {
+              visible: root.nodes.length === 0
+              width: parent.width
+              text: root.error !== "" ? root.error : "No Boomux Nodes"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              topPadding: Style.space(24)
+              bottomPadding: Style.space(24)
+            }
+
+            Row {
+              visible: root.nodes.length > 0
+              width: parent.width
+              height: Style.space(22)
+              Text {
+                width: parent.width * 0.45
+                text: "NODE"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              Text {
+                width: parent.width * 0.55
+                text: "HEALTH"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+            }
+
+            ListView {
+              id: nodeList
+              visible: root.nodes.length > 0
+              width: parent.width
+              implicitHeight: Math.min(contentHeight, Style.space(190))
+              model: root.nodes
+              spacing: Style.space(3)
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              currentIndex: root.activeTab === "nodes" ? root.selectedIndex : -1
+              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+              delegate: Rectangle {
+                required property var modelData
+                required property int index
+                width: ListView.view.width
+                height: Style.space(48)
+                radius: Style.cornerRadius
+                color: index === root.selectedIndex
+                  ? Style.selectedFillFor(root.foreground, Color.accent)
+                  : (nodeMouse.containsMouse ? Util.alpha(root.foreground, 0.06) : "transparent")
+                opacity: modelData.stale ? 0.72 : 1
+
+                Row {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  Text {
+                    width: parent.width * 0.45
+                    text: String(modelData.alias) + (modelData.local
+                      && String(modelData.alias).toLowerCase() !== "local" ? " · local" : "")
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: index === root.selectedIndex
+                    elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width * 0.55
+                    text: root.nodeHealthLabel(modelData)
+                    color: root.nodeHealthColor(modelData)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+                MouseArea {
+                  id: nodeMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onEntered: {
+                    root.selectedIndex = index
+                    root.selectedNodeId = modelData.node_id
+                  }
+                  onClicked: {
+                    root.selectedIndex = index
+                    root.selectedNodeId = modelData.node_id
+                  }
+                }
+              }
+            }
+
+            BorderSurface {
+              visible: root.selectedNode !== null
+              width: parent.width
+              implicitHeight: nodeDetailColumn.implicitHeight + Style.space(18)
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.025)
+              borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+              radius: Style.cornerRadius
+
+              Column {
+                id: nodeDetailColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(9)
+                spacing: Style.space(4)
+
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? String(root.selectedNode.alias)
+                    + (root.selectedNode.local ? " · Local Node" : " · Remote Node") : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? "ID: " + String(root.selectedNode.node_id) : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideMiddle
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? "Health: " + root.nodeHealthLabel(root.selectedNode)
+                    + " · Protocol " + Number(root.selectedNode.observed_protocol_version || 0)
+                    + " · observed " + root.formatTimestamp(root.selectedNode.observed_at_ms) : ""
+                  color: root.nodeHealthColor(root.selectedNode)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? "Workload: " + root.nodeWorkspaceCount(root.selectedNode)
+                    + " Workspaces · " + root.nodeShellCount(root.selectedNode) + " Shells · "
+                    + root.nodeAgentCount(root.selectedNode) + " Agents" : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? "Definitions: "
+                    + Number(root.selectedNode.launcher_count || 0) + " launchers · "
+                    + Number(root.selectedNode.schedule_count || 0) + " Schedules" : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode && root.selectedNode.workspace_owner_eligible
+                    ? "Workspace owner: eligible"
+                    : "Workspace owner: " + (root.selectedNode
+                      && root.selectedNode.workspace_owner_unavailable_reason
+                      ? String(root.selectedNode.workspace_owner_unavailable_reason) : "unavailable")
+                  color: root.selectedNode && root.selectedNode.workspace_owner_eligible
+                    ? root.dim : root.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+              }
+            }
+
+            Text {
+              visible: root.nodes.length > 0
+              width: parent.width
+              text: "Up/Down selects · A adds a Node · Tab switches · R refreshes"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
