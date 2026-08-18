@@ -15,7 +15,7 @@ about operations that can start processes or take over terminals.
 - `assets/bomb-spark.svg`: fixed yellow attention spark
 - `preview.png`: root marketplace preview
 - `assets/agents.png`, `assets/workspaces.png`, `assets/projects.png`,
-  `assets/schedules.png`: README screenshots
+  `assets/schedules.png`, `assets/nodes.png`: README screenshots
 - `deploy-local.sh`: development-only deployment helper
 - `THIRD_PARTY_NOTICES.md`: Font Awesome attribution
 
@@ -58,7 +58,7 @@ through a shell. Do not invoke Boomux private transport commands.
 
 ## Runtime Model
 
-The panel has three top-level views:
+The panel has four top-level views:
 
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
   durable attention; schedule-owned Agents are excluded by shell ownership
@@ -66,6 +66,8 @@ The panel has three top-level views:
   detail surface
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
+- **Nodes**: a read-only health table with selected-Node protocol,
+  freshness, eligibility, and exact identity details
 
 Protocol 38 adds coordinator-owned global Workspaces with explicit Node
 placements. Keep Workspace grouping task-first; show Node ownership as secondary
@@ -139,7 +141,7 @@ plugin must never fabricate an Agent registration or lifecycle observation.
 - Keep **New Workspace** at workspace-section scope.
 - Keep **Open**, **Shell**, and **Agent** inside the selected workspace detail
   surface so their target is unambiguous.
-- Keep **Add Node** beside **Open TUI**; do not add a Node filter.
+- Keep **Add Node** at Nodes-section scope; do not add a Node filter.
 - Do not use collapsible workspace cards unless explicitly requested.
 - Use Omarchy `qs.Ui` controls and `Style.space(...)`; follow the active bar
   foreground, urgent color, font, and accent.
@@ -213,7 +215,7 @@ work here.
 - `preview.png` is the marketplace image; keep it in the repository root.
 - README image URLs should use stable files under `assets/`. Use a new filename
   if GitHub serves stale image content for an unchanged path.
-- Show Agents, Workspaces, and Schedules views after meaningful UI changes.
+- Show Agents, Workspaces, Schedules, and Nodes views after meaningful UI changes.
 - Do not expose personal absolute paths, secrets, private session titles, or
   terminal contents.
 - To demonstrate the yellow spark, temporarily force the **deployed test copy**
