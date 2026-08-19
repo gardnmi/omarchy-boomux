@@ -9,6 +9,7 @@ Omarchy bar.
 ## Features
 
 - Keeps active Agents in a dedicated status tab
+- Starts, opens, and stops Boomux Web with explicit Tailscale Serve exposure
 - Excludes schedule-owned Agents handled by Boomux scheduling
 - Shows live `working`, `idle`, and `blocked` Agent states
 - Sorts Agents by their latest authoritative update and shows compact relative
@@ -69,6 +70,11 @@ boomux integration setup pi
 The plugin does not automatically start a stopped Boomux daemon. Launch Boomux
 or open a managed workspace before using the panel.
 
+The Agents-tab Web controls require a Boomux CLI that advertises `web.start`,
+`web.status`, and `web.stop`. Older compatible Boomux versions hide these
+controls. **Serve Web via Tailscale** requires a connected Tailscale installation
+with MagicDNS; Boomux owns conflict detection and exact Serve-route cleanup.
+
 When the `boomux` executable is unavailable on `PATH`, the panel shows a
 dedicated installation message, the repository URL, and an **Open Install Page**
 button. It does not install Boomux automatically.
@@ -128,6 +134,13 @@ clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
 terminal size and input stream. Expanded Workspace details remain inside the
 panel and scroll when their items exceed the available detail surface.
+
+The Agents tab shows **Serve Web via Tailscale** when the gateway is stopped.
+Boomux starts it as a detached process only while the daemon is already running,
+publishes the dashboard and enabled OpenCode runtime through Tailscale, and
+returns the exact MagicDNS URL. **Open Boomux Web** launches that URL in the
+default browser. **Stop** shuts down only the gateway and removes only
+Boomux-owned Serve routes; unrelated routes and the daemon remain running.
 
 **New Workspace** creates empty coordinator metadata and offers the same project
 names Boomux discovers from configured `[projects].roots`. Search and select a
@@ -248,6 +261,9 @@ and data.
   Boomux GitHub release API and plugin `main` manifest URLs. Every management
   command targets the local Boomux CLI; Boomux owns verified routing,
   authentication, installation confirmation, and its bounded cache.
+- QML never invokes Tailscale directly. Capability-gated Web controls call only
+  Boomux's JSON lifecycle commands; Boomux owns MagicDNS discovery, Serve
+  conflicts, background process readiness, and exact route cleanup.
 - The plugin does not persist Node projections, prompts, credentials, attachment
   environments, remote terminal content, remote paths, or routes. The Nodes tab
   displays only prompt-free snapshot health, counts, observed protocol, and
