@@ -69,6 +69,18 @@ function parseEnvelope(raw, command) {
   return response.data
 }
 
+function normalizeWebStatus(data) {
+  if (!data || typeof data.running !== "boolean")
+    throw new Error("invalid Boomux web status")
+  return {
+    running: data.running,
+    port: Number(data.port || 3737),
+    tailscale: data.running && data.tailscale === true,
+    dashboard_url: data.running ? String(data.dashboard_url || "") : "",
+    opencode_url: data.running ? String(data.opencode_url || "") : ""
+  }
+}
+
 function shellOwner(owner) {
   if (typeof owner === "string") return owner
   return owner && owner.kind === "schedule" ? "schedule" : "user"
@@ -681,6 +693,7 @@ if (typeof module !== "undefined") module.exports = {
   resourceKey: resourceKey,
   qualifiedMatches: qualifiedMatches,
   parseEnvelope: parseEnvelope,
+  normalizeWebStatus: normalizeWebStatus,
   normalizeAgent: normalizeAgent,
   normalizeShell: normalizeShell,
   normalizeLauncher: normalizeLauncher,

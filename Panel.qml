@@ -57,6 +57,11 @@ Panel {
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
   property bool shellNameSuggestionSupported: false
+  property bool webLifecycleSupported: false
+  property bool webRunning: false
+  property bool webTailscale: false
+  property string webDashboardUrl: ""
+  property string webOpencodeUrl: ""
   property bool projectRootsConfigured: false
   property int daemonProtocolVersion: 0
   property string schedulerState: "offline"
@@ -307,6 +312,9 @@ Panel {
 
   function refresh() {
     if (capabilitiesReady && !cliAvailable) return
+    if (opened && activeTab === "agents" && webLifecycleSupported
+        && !webStatusProcess.running && !webStartProcess.running && !webStopProcess.running)
+      webStatusProcess.running = true
     if (daemonStatusProcess.running) return
     daemonStatusProcess.running = true
   }
@@ -407,6 +415,9 @@ Panel {
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
       shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
+      webLifecycleSupported = ["web.start", "web.status", "web.stop"].every(function(command) {
+        return data.json_commands.indexOf(command) >= 0
+      })
       federationSupported = data.json_commands.indexOf("node.snapshot") >= 0
         && cliFeatures.indexOf("combined_node_snapshot") >= 0
         && cliFeatures.indexOf("node_qualified_dashboard") >= 0
@@ -419,6 +430,11 @@ Panel {
       scheduleCommandsSupported = false
       projectListSupported = false
       shellNameSuggestionSupported = false
+      webLifecycleSupported = false
+      webRunning = false
+      webTailscale = false
+      webDashboardUrl = ""
+      webOpencodeUrl = ""
       federationSupported = false
       globalWorkspacesSupported = false
       cliFeatures = []
@@ -1186,6 +1202,32 @@ Panel {
     close()
   }
 
+  function applyWebStatus(raw, command) {
+    var status = WorkspaceModel.normalizeWebStatus(parseEnvelope(raw, command))
+    webRunning = status.running
+    webTailscale = status.tailscale
+    webDashboardUrl = status.dashboard_url
+    webOpencodeUrl = status.opencode_url
+  }
+
+  function startWeb() {
+    if (!webLifecycleSupported || !online || webStartProcess.running
+        || webStopProcess.running) return
+    actionMessage = "Publishing Boomux Web through Tailscale..."
+    webStartProcess.running = true
+  }
+
+  function stopWeb() {
+    if (!webLifecycleSupported || !webRunning || webStartProcess.running
+        || webStopProcess.running) return
+    actionMessage = "Stopping Boomux Web..."
+    webStopProcess.running = true
+  }
+
+  function openWeb() {
+    if (webRunning && webDashboardUrl !== "") Qt.openUrlExternally(webDashboardUrl)
+  }
+
   function addNode() {
     if (!bar || !federationAvailable) return
     bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add")
@@ -1672,6 +1714,61 @@ Panel {
         root.globalWorkspacesSupported = false
       }
       if (root.opened && root.activeTab === "schedules") root.refresh()
+    }
+  }
+
+  Process {
+    id: webStatusProcess
+    command: ["boomux", "web", "status", "--json"]
+    stdout: StdioCollector { id: webStatusStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      try {
+        root.applyWebStatus(webStatusStdout.text, "web.status")
+      } catch (exception) {
+        console.warn("io.github.gardnmi.boomux:", exception)
+      }
+    }
+  }
+
+  Process {
+    id: webStartProcess
+    command: ["boomux", "web", "start", "--tailscale", "--json"]
+    stdout: StdioCollector { id: webStartStdout; waitForEnd: true }
+    stderr: StdioCollector { id: webStartStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        try {
+          root.applyWebStatus(webStartStdout.text, "web.start")
+          root.actionMessage = "Boomux Web is available through Tailscale"
+        } catch (exception) {
+          root.actionMessage = "Could not validate Boomux Web startup"
+        }
+      } else {
+        root.actionMessage = root.processError(webStartStderr.text || webStartStdout.text,
+          "Could not publish Boomux Web through Tailscale")
+      }
+      if (!webStatusProcess.running) webStatusProcess.running = true
+    }
+  }
+
+  Process {
+    id: webStopProcess
+    command: ["boomux", "web", "stop", "--json"]
+    stdout: StdioCollector { id: webStopStdout; waitForEnd: true }
+    stderr: StdioCollector { id: webStopStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.webRunning = false
+        root.webTailscale = false
+        root.webDashboardUrl = ""
+        root.webOpencodeUrl = ""
+        root.actionMessage = "Boomux Web stopped"
+      } else {
+        root.actionMessage = root.processError(webStopStderr.text || webStopStdout.text,
+          "Could not stop Boomux Web")
+      }
+      if (!webStatusProcess.running) webStatusProcess.running = true
     }
   }
 
@@ -2647,6 +2744,82 @@ Panel {
             id: agentColumn
             width: parent.width
             spacing: Style.space(6)
+            Column {
+              visible: root.webLifecycleSupported
+              width: parent.width
+              spacing: Style.space(6)
+              Row {
+                width: parent.width
+                PanelSectionHeader {
+                  width: parent.width - webStatusLabel.width
+                  text: "TAILNET WEB"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+                Text {
+                  id: webStatusLabel
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: webStartProcess.running ? "STARTING"
+                    : (webStopProcess.running ? "STOPPING"
+                      : (root.webRunning ? "LIVE" : "OFF"))
+                  color: root.webRunning ? Color.accent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+                Text {
+                  width: parent.width - webActions.width - parent.spacing
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Access agents through Tailnet."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+                Row {
+                  id: webActions
+                  width: root.webRunning ? Style.space(142) : Style.space(86)
+                  spacing: Style.space(5)
+                  Button {
+                    width: root.webRunning ? Style.space(76) : Style.space(86)
+                    height: Style.space(30)
+                    text: webStartProcess.running ? "Starting"
+                      : (root.webRunning ? "Open" : "Start Web")
+                    iconText: root.webRunning ? "↗" : ""
+                    tooltipText: root.webRunning
+                      ? root.webDashboardUrl
+                      : "Publish the dashboard and OpenCode through Tailscale"
+                    bordered: true
+                    active: root.webRunning
+                    enabled: root.webRunning || (root.online && !webStartProcess.running
+                      && !webStopProcess.running)
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(4)
+                    verticalPadding: Style.space(1)
+                    onClicked: root.webRunning ? root.openWeb() : root.startWeb()
+                  }
+                  Button {
+                    visible: root.webRunning
+                    width: Style.space(61)
+                    height: Style.space(30)
+                    text: webStopProcess.running ? "Stopping" : "Stop"
+                    tooltipText: "Stop Web and remove only Boomux-owned Tailscale routes"
+                    bordered: true
+                    enabled: !webStartProcess.running && !webStopProcess.running
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(4)
+                    verticalPadding: Style.space(1)
+                    onClicked: root.stopWeb()
+                  }
+                }
+              }
+            }
             Row {
               width: parent.width
               PanelSectionHeader {

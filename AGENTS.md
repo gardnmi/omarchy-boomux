@@ -62,7 +62,8 @@ The panel has four top-level views:
 
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
   durable attention, newest authoritative update first; schedule-owned Agents
-  are excluded by shell ownership
+  are excluded by shell ownership; capability-gated section controls can start,
+  open, and stop Boomux Web through Boomux-owned Tailscale exposure
 - **Workspaces**: a flat workspace selector and a separate selected-workspace
   detail surface
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
@@ -125,6 +126,10 @@ plugin must never fabricate an Agent registration or lifecycle observation.
   that does not pretend the shell is retained.
 - Never overwrite user configuration or install/replace Boomux integrations
   from the widget.
+- Never invoke Tailscale directly. Gate Web controls on advertised `web.start`,
+  `web.status`, and `web.stop`; use only those exact Boomux JSON commands.
+  Starting Web is allowed only while the passive daemon check is currently
+  online.
 - Gate Schedule polling and actions on advertised JSON commands plus daemon
   protocol 25 or newer. Poll only after the passive daemon-status check.
 - Treat **Run Now** as explicit authorization to start Agent and tool activity.

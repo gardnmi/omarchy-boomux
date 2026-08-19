@@ -37,6 +37,44 @@ test("formats compact relative Agent update times", () => {
   expect(model.relativeTime(0, now)).toBe("unknown")
 })
 
+test("normalizes bounded Boomux Web lifecycle state", () => {
+  expect(model.normalizeWebStatus({ running: false, port: 3737 })).toEqual({
+    running: false,
+    port: 3737,
+    tailscale: false,
+    dashboard_url: "",
+    opencode_url: ""
+  })
+  expect(model.normalizeWebStatus({
+    running: true,
+    port: 3737,
+    tailscale: true,
+    dashboard_url: "https://host.example.ts.net",
+    opencode_url: "https://host.example.ts.net:4097"
+  })).toEqual({
+    running: true,
+    port: 3737,
+    tailscale: true,
+    dashboard_url: "https://host.example.ts.net",
+    opencode_url: "https://host.example.ts.net:4097"
+  })
+  expect(() => model.normalizeWebStatus({ port: 3737 })).toThrow()
+})
+
+test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('["boomux", "web", "start", "--tailscale", "--json"]')
+  expect(panel).toContain('["boomux", "web", "status", "--json"]')
+  expect(panel).toContain('["boomux", "web", "stop", "--json"]')
+  expect(panel).not.toContain('["tailscale"')
+  expect(panel).not.toContain("root.webStartProcess")
+  expect(panel).not.toContain("root.webStopProcess")
+  expect(panel).toContain('text: "TAILNET WEB"')
+  expect(panel).toContain('text: "Access agents through Tailnet."')
+  expect(panel).toContain('root.webRunning ? "Open" : "Start Web"')
+  expect(panel.indexOf('text: "TAILNET WEB"')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
+})
+
 test("keeps guided Node setup feedback visible", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain(
