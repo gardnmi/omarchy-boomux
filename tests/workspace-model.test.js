@@ -37,6 +37,18 @@ test("formats compact relative Agent update times", () => {
   expect(model.relativeTime(0, now)).toBe("unknown")
 })
 
+test("normalizes the exact qualified focused terminal", () => {
+  expect(model.normalizeFocusedTerminal({
+    revision: 42,
+    shell: { node_id: "node-a", inner_id: "shell-a" }
+  })).toEqual({ revision: 42, node_id: "node-a", shell_id: "shell-a" })
+  expect(model.normalizeFocusedTerminal(null)).toBeNull()
+  expect(() => model.normalizeFocusedTerminal({
+    revision: 0,
+    shell: { node_id: "node-a", inner_id: "shell-a" }
+  })).toThrow()
+})
+
 test("normalizes bounded Boomux Web lifecycle state", () => {
   expect(model.normalizeWebStatus({ running: false, port: 3737 })).toEqual({
     running: false,
@@ -61,6 +73,33 @@ test("normalizes bounded Boomux Web lifecycle state", () => {
   expect(() => model.normalizeWebStatus({ port: 3737 })).toThrow()
 })
 
+test("keeps only available Agent hosts with current lifecycle assets", () => {
+  expect(model.availableAgentHosts({ integrations: [
+    { name: "opencode", display_name: "OpenCode",
+      host: { state: "available", executable: "/bin/opencode" },
+      asset: { state: "current" } },
+    { name: "kiro", display_name: "Kiro CLI",
+      host: { state: "available", executable: "/bin/kiro-cli" },
+      asset: { state: "current" } },
+    { name: "claude", display_name: "Claude Code",
+      host: { state: "missing", executable: null }, asset: { state: "current" } },
+    { name: "codex", display_name: "Codex",
+      host: { state: "available", executable: "/bin/codex" },
+      asset: { state: "missing" } }
+  ] })).toEqual([
+    { name: "opencode", label: "OpenCode", command: ["/bin/opencode"] },
+    { name: "kiro", label: "Kiro CLI", command: ["/bin/kiro-cli"] }
+  ])
+})
+
+test("discovers Agent hosts instead of hard-coding host buttons", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('["boomux", "integration", "status", "--json"]')
+  expect(panel).toContain('label: "Select Agent"')
+  expect(panel).not.toContain('text: "OpenCode"')
+  expect(panel).not.toContain('text: "Pi"')
+})
+
 test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('["boomux", "web", "start", "--tailscale", "--json"]')
@@ -73,6 +112,42 @@ test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   expect(panel).toContain('text: "Access agents through Tailnet."')
   expect(panel).toContain('root.webRunning ? "Open" : "Start Web"')
   expect(panel.indexOf('text: "TAILNET WEB"')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
+})
+
+test("uses Boomux events to refresh focused terminal state promptly", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('["boomux", "events", "--json"]')
+  expect(panel).toContain('"focused_terminal_presentation_changed"')
+  expect(panel).toContain("root.requestFocusedTerminalRefresh()")
+})
+
+test("persists the explicitly selected coordinator Workspace", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('["boomux", "workspace", "select", workspaceSelectionActive.id]')
+  expect(panel).toContain('["boomux", "workspace", "clear"]')
+  expect(panel).toContain('cliFeatures.indexOf("persistent_workspace_selection") >= 0')
+  expect(panel).toContain('cliFeatures.indexOf("create_and_open_shell") >= 0')
+  expect(panel).toContain('requestWorkspaceSelection(selectedWorkspace)')
+  expect(panel).toContain('resolvePendingWorkspace(workspaces[p])')
+})
+
+test("offers explicit Workspace creation choices and one consistent action", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('text: "Create from Existing Project"')
+  expect(panel).toContain('text: "Create New"')
+  expect(panel).not.toContain('text: "Create from Project"')
+  expect(panel).not.toContain('text: "Custom"')
+  expect(panel).toContain('initialShell: globalWorkspacesAvailable')
+  expect(panel).toContain('kind: "create-workspace-shell"')
+})
+
+test("preserves the Workspace item viewport across polling snapshots", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("var itemScrollY = itemList ? itemList.contentY : 0")
+  expect(panel).toContain("restoreWorkspaceItemScroll(itemScrollY)")
+  expect(panel).toContain("itemList.contentY = Math.max(0")
+  expect(panel).toContain("if (signature === workspaceItemsSignature) return")
+  expect(panel).toContain("onWorkspaceDetailChanged: syncWorkspaceItems()")
 })
 
 test("keeps guided Node setup feedback visible", () => {
@@ -237,6 +312,11 @@ describe("qualified commands and action gates", () => {
       .toEqual(["boomux", "workspace", "create", "release; rm -rf /"])
     expect(model.workspaceCreateCommand("legacy", "/tmp/legacy", false)).toEqual([
       "boomux", "workspace", "create", "legacy", "--cwd", "/tmp/legacy"
+    ])
+    expect(model.initialWorkspaceShellCommand(
+      { id: "global-1" }, "/tmp/project", "node-a")).toEqual([
+      "boomux", "shell", "create", "global-1", "--node", "node-a",
+      "--cwd", "/tmp/project"
     ])
     expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes)).toBe("node-a")
     expect(model.defaultCreationNodeId([protocol38Envelope.data.nodes[1]])).toBe("node-b")

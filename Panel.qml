@@ -4,6 +4,7 @@ import QtQuick.Effects
 import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "WorkspaceModel.js" as WorkspaceModel
@@ -56,8 +57,11 @@ Panel {
   property var cliFeatures: []
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
+  property bool integrationStatusSupported: false
   property bool shellNameSuggestionSupported: false
   property bool webLifecycleSupported: false
+  property bool focusEventsSupported: false
+  property bool workspaceSelectionSupported: false
   property bool webRunning: false
   property bool webTailscale: false
   property string webDashboardUrl: ""
@@ -85,7 +89,7 @@ Panel {
   property string executionError: ""
   property string actionMessage: ""
   property string formMode: ""
-  property string workspaceCreationMode: "custom"
+  property string workspaceCreationMode: "choice"
   property string projectQuery: ""
   property int selectedProjectIndex: 0
   property string projectError: ""
@@ -96,7 +100,12 @@ Panel {
   property bool directoryPickerOpen: false
   property string directoryPickerPath: ""
   property int directoryPickerIndex: 0
-  property string agentHost: "opencode"
+  property var agentHosts: []
+  property string agentHostName: ""
+  property var agentHostCommand: []
+  property string agentHostError: ""
+  property string agentHostRequestedNodeId: ""
+  property string agentHostActiveNodeId: ""
   property var pendingAction: null
   property var pendingWorkspace: null
   property var pendingShell: null
@@ -108,6 +117,20 @@ Panel {
   property int pollEpoch: 0
   property int snapshotActiveEpoch: 0
   property double clockNow: Date.now()
+  property double focusedTerminalRevision: 0
+  property string focusedTerminalKey: ""
+  property string terminalNoticeWorkspace: ""
+  property string terminalNoticeName: ""
+  property var terminalNoticeScreen: null
+  property bool terminalNoticeVisible: false
+  property string eventCursor: ""
+  property bool focusRefreshPending: false
+  property var workspaceSelectionRequested: null
+  property var workspaceSelectionActive: null
+  property string workspaceSelectionAppliedId: ""
+  property var workspaceItems: []
+  property string workspaceItemsSignature: ""
+  property int workspaceItemsRevision: 0
 
   readonly property var visibleWorkspaces: workspaces
   readonly property var visibleSchedules: schedules
@@ -146,7 +169,6 @@ Panel {
   readonly property var visibleProjects: filterProjects()
   readonly property var selectedProject: selectedProjectIndex >= 0
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
-  readonly property var workspaceItems: buildWorkspaceItems()
   readonly property int itemCount: activeTab === "agents" ? visibleAgents.length
     : (activeTab === "workspaces" ? visibleWorkspaces.length
       : (activeTab === "schedules" ? visibleSchedules.length : nodes.length))
@@ -180,6 +202,11 @@ Panel {
 
   onSelectedScheduleKeyChanged: if (scheduleDropdown)
     scheduleDropdown.value = selectedScheduleKey
+
+  onAgentHostNameChanged: if (agentHostDropdown)
+    agentHostDropdown.value = agentHostName
+
+  onWorkspaceDetailChanged: syncWorkspaceItems()
 
   visible: true
   implicitWidth: button.implicitWidth
@@ -352,6 +379,9 @@ Panel {
 
   function setOffline(message) {
     pollEpoch++
+    eventCursor = ""
+    focusRefreshPending = false
+    if (eventProcess.running) eventProcess.running = false
     online = false
     refreshing = false
     workspaces = []
@@ -392,6 +422,7 @@ Panel {
       schedulerMaxConcurrent = data.scheduler
         ? Number(data.scheduler.max_concurrent || 0) : 0
       refreshData()
+      startEventWait()
     } catch (exception) {
       setOffline("Boomux daemon is stopped")
     }
@@ -414,10 +445,15 @@ Panel {
         return data.json_commands.indexOf(command) >= 0
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
+      integrationStatusSupported = data.json_commands.indexOf("integration.status") >= 0
       shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
       webLifecycleSupported = ["web.start", "web.status", "web.stop"].every(function(command) {
         return data.json_commands.indexOf(command) >= 0
       })
+      focusEventsSupported = data.json_commands.indexOf("events") >= 0
+        && cliFeatures.indexOf("qualified_focused_terminal") >= 0
+      workspaceSelectionSupported = cliFeatures.indexOf("persistent_workspace_selection") >= 0
+        && cliFeatures.indexOf("create_and_open_shell") >= 0
       federationSupported = data.json_commands.indexOf("node.snapshot") >= 0
         && cliFeatures.indexOf("combined_node_snapshot") >= 0
         && cliFeatures.indexOf("node_qualified_dashboard") >= 0
@@ -429,8 +465,11 @@ Panel {
       cliVersion = ""
       scheduleCommandsSupported = false
       projectListSupported = false
+      integrationStatusSupported = false
       shellNameSuggestionSupported = false
       webLifecycleSupported = false
+      focusEventsSupported = false
+      workspaceSelectionSupported = false
       webRunning = false
       webTailscale = false
       webDashboardUrl = ""
@@ -466,12 +505,15 @@ Panel {
   function parseNodeSnapshot(raw) {
     try {
       if (snapshotActiveEpoch !== pollEpoch) return
+      var itemScrollY = itemList ? itemList.contentY : 0
+      var itemModelRevision = workspaceItemsRevision
       var data = parseEnvelope(raw, "node.snapshot")
       var snapshot = WorkspaceModel.normalizeNodeSnapshot(data)
       nodes = snapshot.nodes
       workspaces = snapshot.workspaces
       shells = snapshot.shells
       schedules = snapshot.schedules
+      updateFocusedTerminal(snapshot.focused_terminal)
       var retainedScheduleKey = schedules.some(function(schedule) {
         return schedule.key === selectedScheduleKey
       }) ? selectedScheduleKey : ""
@@ -484,19 +526,87 @@ Panel {
           if ((!pendingWorkspace.key || workspaces[p].key === pendingWorkspace.key)
               && workspaces[p].name === pendingWorkspace.name
               && (!pendingWorkspace.global || workspaces[p].is_global)) {
-            selectedWorkspaceKey = workspaces[p].key
-            pendingWorkspace = null
+            resolvePendingWorkspace(workspaces[p])
             break
           }
         }
       }
       preserveSelections()
+      if (workspaceItemsRevision !== itemModelRevision)
+        restoreWorkspaceItemScroll(itemScrollY)
       openPendingShellIfPresent()
       if (activeTab === "schedules" && selectedSchedule) requestExecutions(selectedSchedule)
     } catch (exception) {
       error = "Could not read federated Boomux state"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
+  }
+
+  function restoreWorkspaceItemScroll(contentY) {
+    if (!itemList || activeTab !== "workspaces") return
+    Qt.callLater(function() {
+      var maximum = Math.max(0, itemList.contentHeight - itemList.height)
+      itemList.contentY = Math.max(0, Math.min(Number(contentY || 0), maximum))
+    })
+  }
+
+  function updateFocusedTerminal(focused) {
+    if (!focused) return
+    var key = resourceKey(focused.node_id, focused.shell_id)
+    if (focused.revision === focusedTerminalRevision && key === focusedTerminalKey) return
+    focusedTerminalRevision = focused.revision
+    focusedTerminalKey = key
+
+    var shell = null
+    for (var i = 0; i < shells.length; i++) {
+      if (shells[i].key === key) {
+        shell = shells[i]
+        break
+      }
+    }
+    if (!shell || shell.owner === "schedule") return
+
+    var toplevel = ToplevelManager.activeToplevel
+    var screen = toplevel && toplevel.screens.length > 0 ? toplevel.screens[0] : null
+    var ownWindow = root.QsWindow ? root.QsWindow.window : null
+    if (!screen || !ownWindow || ownWindow.screen !== screen) return
+
+    terminalNoticeWorkspace = String(shell.workspace_name)
+    terminalNoticeName = String(shell.name)
+    terminalNoticeScreen = screen
+    terminalNoticeVisible = true
+    terminalNoticeTimer.restart()
+  }
+
+  function startEventWait() {
+    if (!focusEventsSupported || daemonProtocolVersion < 39 || eventProcess.running) return
+    eventProcess.command = eventCursor === ""
+      ? ["boomux", "events", "--json"]
+      : ["boomux", "events", "--after", eventCursor, "--wait-ms", "30000", "--json"]
+    eventProcess.running = true
+  }
+
+  function parseEvents(raw) {
+    var data = parseEnvelope(raw, "events")
+    if (typeof data.cursor !== "string" || !Array.isArray(data.events))
+      throw new Error("invalid event batch")
+    eventCursor = data.cursor
+    for (var i = 0; i < data.events.length; i++) {
+      if (data.events[i] && data.events[i].event === "focused_terminal_presentation_changed") {
+        requestFocusedTerminalRefresh()
+        break
+      }
+    }
+  }
+
+  function requestFocusedTerminalRefresh() {
+    if (!federationAvailable || daemonProtocolVersion < 39) return
+    if (nodeSnapshotProcess.running) {
+      focusRefreshPending = true
+      return
+    }
+    snapshotActiveEpoch = pollEpoch
+    nodeSnapshotProcess.running = true
   }
 
   function preserveSelections() {
@@ -535,8 +645,7 @@ Panel {
         for (var i = 0; i < workspaces.length; i++) {
           if (workspaces[i].node_id === pendingWorkspace.nodeId
               && workspaces[i].name === pendingWorkspace.name) {
-            selectedWorkspaceKey = workspaces[i].key
-            pendingWorkspace = null
+            resolvePendingWorkspace(workspaces[i])
             break
           }
         }
@@ -570,6 +679,21 @@ Panel {
       shells = []
       console.warn("io.github.gardnmi.boomux:", exception)
     }
+  }
+
+  function resolvePendingWorkspace(workspace) {
+    var initialShell = pendingWorkspace ? pendingWorkspace.initialShell : null
+    selectedWorkspaceKey = workspace.key
+    requestWorkspaceSelection(workspace)
+    if (initialShell && workspace.is_global && actionProcess.running) return
+    pendingWorkspace = null
+    if (!initialShell || !workspace.is_global) return
+    pendingAction = { kind: "create-workspace-shell",
+      key: workspace.key + "\u001fnew", nodeId: initialShell.nodeId }
+    actionMessage = "Setting default directory..."
+    actionProcess.command = WorkspaceModel.initialWorkspaceShellCommand(
+      workspace, initialShell.cwd, initialShell.nodeId)
+    actionProcess.running = true
   }
 
   function parseAgents(raw) {
@@ -685,13 +809,77 @@ Panel {
       projectError = data.warnings.length > 0 ? data.warnings.join(" · ") : ""
       clampProjectSelection()
       if (formMode === "workspace" && workspaceCreationMode === "project"
-          && !projectRootsConfigured) selectWorkspaceCreationMode("custom")
+          && !projectRootsConfigured) selectWorkspaceCreationMode("new")
     } catch (exception) {
       projects = []
       projectRootsConfigured = false
       projectError = "Could not discover configured projects"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
+  }
+
+  function selectedAgentHost() {
+    for (var i = 0; i < agentHosts.length; i++)
+      if (agentHosts[i].name === agentHostName) return agentHosts[i]
+    return null
+  }
+
+  function selectAgentHost(name) {
+    for (var i = 0; i < agentHosts.length; i++) {
+      if (agentHosts[i].name === name) {
+        agentHostName = agentHosts[i].name
+        agentHostCommand = agentHosts[i].command.slice()
+        return
+      }
+    }
+  }
+
+  function loadAgentHosts() {
+    agentHosts = []
+    agentHostName = ""
+    agentHostCommand = []
+    agentHostError = ""
+    if (!integrationStatusSupported) {
+      agentHostError = "Upgrade Boomux to discover Agent hosts"
+      return
+    }
+    var node = creationNode
+    if (!node) {
+      agentHostError = "Select a Node to discover Agent hosts"
+      return
+    }
+    var args = nodeArgs(node.node_id, "remote_integration_management")
+    if (args === null) {
+      agentHostError = "Agent host discovery is unavailable for this Node"
+      return
+    }
+    agentHostRequestedNodeId = node.node_id
+    if (!integrationStatusProcess.running) startAgentHostDiscovery()
+  }
+
+  function startAgentHostDiscovery() {
+    if (agentHostRequestedNodeId === "") return
+    var node = nodeFor(agentHostRequestedNodeId)
+    if (!node) return
+    var args = nodeArgs(node.node_id, "remote_integration_management")
+    if (args === null) return
+    agentHostActiveNodeId = node.node_id
+    integrationStatusProcess.command = ["boomux", "integration", "status", "--json"].concat(args)
+    integrationStatusProcess.running = true
+  }
+
+  function parseAgentHosts(raw) {
+    if (formMode !== "agent" || agentHostActiveNodeId !== agentHostRequestedNodeId) return
+    var hosts = WorkspaceModel.availableAgentHosts(parseEnvelope(raw, "integration.status"))
+    agentHosts = hosts
+    if (hosts.length === 0) {
+      agentHostError = "No available Agent hosts have a current Boomux integration"
+      agentHostName = ""
+      agentHostCommand = []
+      return
+    }
+    agentHostError = ""
+    selectAgentHost(hosts[0].name)
   }
 
   function loadProjects() {
@@ -848,7 +1036,10 @@ Panel {
   function selectTab(tab) {
     if (activeTab === tab) return
     activeTab = tab
-    if (tab === "workspaces") syncWorkspaceIndex()
+    if (tab === "workspaces") {
+      syncWorkspaceIndex()
+      requestWorkspaceSelection(selectedWorkspace)
+    }
     else if (tab === "schedules") {
       syncScheduleIndex()
       refresh()
@@ -894,6 +1085,29 @@ Panel {
     syncWorkspaceIndex()
     workspaceDetail = null
     inspectWorkspace(selectedWorkspaceKey)
+    requestWorkspaceSelection(selectedWorkspace)
+  }
+
+  function requestWorkspaceSelection(workspace) {
+    if (!workspaceSelectionSupported) {
+      actionMessage = "Boomux 0.27.0 or newer is required for a default Workspace"
+      return
+    }
+    var request = workspace && workspace.is_global && !workspace.closing
+      ? { id: String(workspace.id), name: String(workspace.name) }
+      : { id: "", name: "" }
+    workspaceSelectionRequested = request
+    startWorkspaceSelection()
+  }
+
+  function startWorkspaceSelection() {
+    if (!workspaceSelectionRequested || workspaceSelectionProcess.running) return
+    if (workspaceSelectionRequested.id === workspaceSelectionAppliedId) return
+    workspaceSelectionActive = workspaceSelectionRequested
+    workspaceSelectionProcess.command = workspaceSelectionActive.id === ""
+      ? ["boomux", "workspace", "clear"]
+      : ["boomux", "workspace", "select", workspaceSelectionActive.id]
+    workspaceSelectionProcess.running = true
   }
 
   function syncWorkspaceIndex() {
@@ -1014,6 +1228,36 @@ Panel {
       })
     }
     return items
+  }
+
+  function syncWorkspaceItems() {
+    var nextItems = buildWorkspaceItems()
+    var signature = JSON.stringify({
+      workspace: workspaceDetail ? workspaceDetail.key : "",
+      items: nextItems.map(function(item) {
+        var shell = item.shell || null
+        var agent = item.agent || null
+        var launcher = item.launcher || null
+        return {
+          key: item.key,
+          kind: item.kind,
+          name: item.name,
+          status: item.status,
+          detail: item.detail,
+          node_id: item.node_id,
+          placement_state: shell ? shell.placement_state : (launcher ? launcher.placement_state : ""),
+          run_id: shell && shell.run ? shell.run.id : "",
+          agent_id: agent ? agent.id : "",
+          agent_revision: agent && agent.observation ? agent.observation.revision : 0,
+          attention_revision: agent ? attentionRevision(agent) : 0,
+          launcher_revision: launcher ? Number(launcher.revision || 0) : 0
+        }
+      })
+    })
+    if (signature === workspaceItemsSignature) return
+    workspaceItemsSignature = signature
+    workspaceItems = nextItems
+    workspaceItemsRevision++
   }
 
   function workspaceCanOpen(workspace) {
@@ -1453,11 +1697,13 @@ Panel {
       projectSearchField.text = ""
       projectQuery = ""
       selectedProjectIndex = 0
-      workspaceCreationMode = projectListSupported && creationNode ? "project" : "custom"
-      if (projectListSupported && creationNode) loadProjects()
-    } else requestShellNameSuggestion()
+      workspaceCreationMode = "choice"
+    } else {
+      requestShellNameSuggestion()
+      if (mode === "agent") loadAgentHosts()
+    }
     Qt.callLater(function() {
-      if (mode === "workspace" && workspaceCreationMode === "project") projectSearchField.forceActiveFocus()
+      if (mode === "workspace") existingProjectModeButton.forceActiveFocus()
       else nameField.forceActiveFocus()
     })
   }
@@ -1486,21 +1732,33 @@ Panel {
     nameFieldEdited = false
     applyCreationNodeDefaults()
     if (formMode === "workspace" && projectListSupported) loadProjects()
-    else requestShellNameSuggestion()
+    else {
+      requestShellNameSuggestion()
+      if (formMode === "agent") loadAgentHosts()
+    }
   }
 
   function formCanSubmit() {
+    if (formMode === "workspace" && workspaceCreationMode === "choice") return false
     var hasName = formMode === "workspace" && workspaceCreationMode === "project"
       ? selectedProject !== null : nameField.text.trim() !== ""
     if (!hasName) return false
+    if (formMode === "workspace" && workspaceCreationMode === "new"
+        && cwdField.text.trim() === "") return false
+    if (formMode === "agent" && agentHostCommand.length === 0) return false
     if (formMode !== "workspace" && workspaceCreationReason(workspaceDetail) !== "") return false
-    if (!globalWorkspacesAvailable || formMode === "workspace") return true
+    if (!globalWorkspacesAvailable) return true
     return creationNode !== null
   }
 
   function cancelForm() {
     directoryPickerOpen = false
     projectRequestedNodeId = ""
+    agentHostRequestedNodeId = ""
+    agentHosts = []
+    agentHostName = ""
+    agentHostCommand = []
+    agentHostError = ""
     suggestedNameRequestedIdentity = null
     formMode = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -1510,7 +1768,11 @@ Panel {
     workspaceCreationMode = mode
     actionMessage = ""
     Qt.callLater(function() {
-      if (mode === "project") projectSearchField.forceActiveFocus()
+      if (mode === "choice") existingProjectModeButton.forceActiveFocus()
+      else if (mode === "project") {
+        loadProjects()
+        projectSearchField.forceActiveFocus()
+      }
       else nameField.forceActiveFocus()
     })
   }
@@ -1557,7 +1819,7 @@ Panel {
     var path = directoryPickerPath
     cwdField.text = path
     cwdIsExact = true
-    if (formMode === "workspace" && workspaceCreationMode === "custom"
+    if (formMode === "workspace" && workspaceCreationMode === "new"
         && nameField.text.trim() === "") {
       var parts = path.replace(/\/+$/, "").split("/")
       nameField.text = parts.length > 0 ? parts[parts.length - 1] : ""
@@ -1576,8 +1838,7 @@ Panel {
         return
       }
       name = String(selectedProject.name)
-      if (globalWorkspacesAvailable) cwd = ""
-      else cwd = String(selectedProject.path)
+      cwd = String(selectedProject.path)
     }
     if (name === "") {
       actionMessage = "A name is required"
@@ -1602,7 +1863,9 @@ Panel {
     if (formMode === "workspace") {
       pendingAction = { kind: "create-workspace", key: "new:" + name,
         nodeId: owner ? owner.node_id : "local" }
-      pendingWorkspace = { name: name, global: globalWorkspacesAvailable }
+      pendingWorkspace = { name: name, global: globalWorkspacesAvailable,
+        initialShell: globalWorkspacesAvailable
+          ? { nodeId: owner.node_id, cwd: cwd } : null }
       command = WorkspaceModel.workspaceCreateCommand(name, cwd, globalWorkspacesAvailable)
     } else if (formMode === "shell" && workspaceDetail) {
       pendingAction = { kind: "create-shell", key: workspaceDetail.key + "\u001fnew:" + name,
@@ -1610,12 +1873,17 @@ Panel {
       command = WorkspaceModel.shellCreateCommand(
         workspaceDetail, name, cwd, owner.node_id, [])
     } else if (formMode === "agent" && workspaceDetail) {
+      var host = selectedAgentHost()
+      if (!host) {
+        actionMessage = "Select an available Agent host"
+        return
+      }
       pendingAction = { kind: "create-agent", key: workspaceDetail.key + "\u001fnew:" + name,
-        nodeId: owner.node_id }
+        nodeId: owner.node_id, hostName: host.label }
       pendingShell = { workspaceKey: workspaceDetail.key, nodeId: owner.node_id,
         name: name, armed: false }
       command = WorkspaceModel.shellCreateCommand(
-        workspaceDetail, name, cwd, owner.node_id, [agentHost])
+        workspaceDetail, name, cwd, owner.node_id, agentHostCommand)
     } else {
       return
     }
@@ -1794,6 +2062,34 @@ Panel {
   }
 
   Process {
+    id: integrationStatusProcess
+    stdout: StdioCollector { id: integrationStatusStdout; waitForEnd: true }
+    stderr: StdioCollector { id: integrationStatusStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var current = root.formMode === "agent"
+        && root.agentHostActiveNodeId === root.agentHostRequestedNodeId
+      if (exitCode === 0 && current) {
+        try {
+          root.parseAgentHosts(integrationStatusStdout.text)
+        } catch (exception) {
+          root.agentHosts = []
+          root.agentHostName = ""
+          root.agentHostCommand = []
+          root.agentHostError = "Could not validate available Agent hosts"
+          console.warn("io.github.gardnmi.boomux:", exception)
+        }
+      } else if (exitCode !== 0 && current) {
+        root.agentHostError = root.processError(
+          integrationStatusStderr.text || integrationStatusStdout.text,
+          "Could not discover available Agent hosts")
+      }
+      if (root.agentHostRequestedNodeId !== ""
+          && root.agentHostRequestedNodeId !== root.agentHostActiveNodeId)
+        Qt.callLater(function() { root.startAgentHostDiscovery() })
+    }
+  }
+
+  Process {
     id: shellNameSuggestionProcess
     stdout: StdioCollector { id: shellNameSuggestionStdout; waitForEnd: true }
     stderr: StdioCollector { id: shellNameSuggestionStderr; waitForEnd: true }
@@ -1829,6 +2125,28 @@ Panel {
       else {
         root.error = root.processError(nodeSnapshotStderr.text || nodeSnapshotStdout.text,
           "Could not read federated Boomux state")
+      }
+      if (root.focusRefreshPending) {
+        root.focusRefreshPending = false
+        Qt.callLater(function() { root.requestFocusedTerminalRefresh() })
+      }
+    }
+  }
+
+  Process {
+    id: eventProcess
+    stdout: StdioCollector { id: eventStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        try {
+          root.parseEvents(eventStdout.text)
+        } catch (exception) {
+          root.eventCursor = ""
+          console.warn("io.github.gardnmi.boomux:", exception)
+        }
+        Qt.callLater(function() { root.startEventWait() })
+      } else {
+        root.eventCursor = ""
       }
     }
   }
@@ -1928,6 +2246,29 @@ Panel {
   }
 
   Process {
+    id: workspaceSelectionProcess
+    stdout: StdioCollector { id: workspaceSelectionStdout; waitForEnd: true }
+    stderr: StdioCollector { id: workspaceSelectionStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var active = root.workspaceSelectionActive
+      if (exitCode === 0 && active) {
+        root.workspaceSelectionAppliedId = active.id
+        root.actionMessage = active.id === ""
+          ? "Default Workspace cleared"
+          : "Default Workspace: " + active.name
+      } else if (exitCode !== 0) {
+        root.actionMessage = root.processError(
+          workspaceSelectionStderr.text || workspaceSelectionStdout.text,
+          "Could not select the default Workspace")
+      }
+      root.workspaceSelectionActive = null
+      if (root.workspaceSelectionRequested
+          && root.workspaceSelectionRequested.id !== root.workspaceSelectionAppliedId)
+        Qt.callLater(function() { root.startWorkspaceSelection() })
+    }
+  }
+
+  Process {
     id: actionProcess
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
@@ -1945,8 +2286,11 @@ Panel {
         root.pendingShell = Object.assign({}, root.pendingShell, { armed: true })
       root.cancelForm()
       if (action === "create-workspace") root.actionMessage = "Workspace created"
+      else if (action === "create-workspace-shell")
+        root.actionMessage = "Workspace created with default directory"
       else if (action === "create-shell") root.actionMessage = "Shell added"
-      else if (action === "create-agent") root.actionMessage = "Starting " + root.agentHost + "..."
+      else if (action === "create-agent")
+        root.actionMessage = "Starting " + String(pending.hostName || "Agent") + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
       else if (action === "remove-launcher") root.actionMessage = "Launcher removed"
       else if (action === "remove-shell") root.actionMessage = "Workspace item removed"
@@ -2059,6 +2403,66 @@ Panel {
     onTriggered: {
       root.clockNow = Date.now()
       root.refresh()
+    }
+  }
+
+  Timer {
+    id: terminalNoticeTimer
+    interval: 2200
+    onTriggered: root.terminalNoticeVisible = false
+  }
+
+  PanelWindow {
+    id: terminalNoticeWindow
+    screen: root.terminalNoticeScreen
+    visible: root.terminalNoticeVisible && root.terminalNoticeScreen !== null
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "omarchy-boomux-terminal-notice"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+    mask: Region {}
+
+    BorderSurface {
+      width: Style.space(250)
+      implicitHeight: noticeColumn.implicitHeight + Style.space(20)
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.rightMargin: Style.space(18)
+      anchors.bottomMargin: Style.space(18)
+      color: Util.alpha(Color.background, 0.97)
+      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border,
+        Math.max(1, Style.normalBorderWidth))
+      radius: Style.cornerRadius
+
+      Column {
+        id: noticeColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: Style.space(12)
+        anchors.rightMargin: Style.space(12)
+        spacing: Style.space(3)
+
+        Text {
+          width: parent.width
+          text: root.terminalNoticeWorkspace
+          color: Color.popups.text
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+          elide: Text.ElideRight
+        }
+        Text {
+          width: parent.width
+          text: root.terminalNoticeName
+          color: Util.alpha(Color.popups.text, 0.72)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
     }
   }
 
@@ -2202,7 +2606,9 @@ Panel {
           Button {
             width: (parent.width - parent.spacing * 3) / 4
             text: "Workspaces"
-            iconText: ""
+            iconText: ">"
+            iconSize: Style.font.icon
+            horizontalPadding: Style.space(4)
             selected: root.activeTab === "workspaces"
             bordered: true
             foreground: root.foreground
@@ -2478,42 +2884,90 @@ Panel {
               }
             }
 
-            Row {
+            Column {
               visible: !root.directoryPickerOpen && root.formMode === "workspace"
-                && root.projectListSupported
+                && root.workspaceCreationMode === "choice"
               width: parent.width
               spacing: Style.space(6)
+
+              Text {
+                width: parent.width
+                text: "How do you want to create this Workspace?"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                bottomPadding: Style.space(4)
+              }
+
               Button {
-                width: (parent.width - parent.spacing) / 2
-                text: "Projects"
-                selected: root.workspaceCreationMode === "project"
+                id: existingProjectModeButton
+                width: parent.width
+                text: "Create from Existing Project"
+                tooltipText: root.projectListSupported
+                  ? "Use a configured Boomux project and its canonical path"
+                  : "Configure Boomux project roots to discover existing projects"
                 focusable: true
                 bordered: true
-                enabled: !root.globalWorkspacesAvailable || root.creationNode !== null
+                enabled: root.projectListSupported
                 foreground: root.foreground
                 onClicked: root.selectWorkspaceCreationMode("project")
               }
               Button {
-                id: customModeButton
-                width: (parent.width - parent.spacing) / 2
-                text: "Custom"
-                selected: root.workspaceCreationMode === "custom"
+                width: parent.width
+                text: "Create New"
+                tooltipText: "Choose a name and default directory"
+                focusable: true
+                bordered: true
+                active: true
+                foreground: root.foreground
+                onClicked: root.selectWorkspaceCreationMode("new")
+              }
+            }
+
+            Row {
+              visible: !root.directoryPickerOpen && root.formMode === "workspace"
+                && root.workspaceCreationMode !== "choice"
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                id: creationModeBackButton
+                text: "Back"
+                iconText: "‹"
+                tooltipText: "Choose another creation method"
                 focusable: true
                 bordered: true
                 foreground: root.foreground
-                onClicked: root.selectWorkspaceCreationMode("custom")
+                onClicked: root.selectWorkspaceCreationMode("choice")
+              }
+              Text {
+                width: parent.width - creationModeBackButton.width - parent.spacing
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.workspaceCreationMode === "project"
+                  ? "Existing Project" : "Create New"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
               }
             }
 
             Column {
               visible: !root.directoryPickerOpen && root.globalWorkspacesAvailable
-                && (root.formMode === "shell" || root.formMode === "agent")
+                && (root.formMode === "shell" || root.formMode === "agent"
+                  || (root.formMode === "workspace"
+                    && root.workspaceCreationMode !== "choice"))
               width: parent.width
               spacing: Style.space(3)
 
               Dropdown {
                 id: creationNodeDropdown
                 visible: root.formMode === "shell" || root.formMode === "agent"
+                  || (root.formMode === "workspace"
+                    && root.workspaceCreationMode !== "choice")
                 width: parent.width
                 label: "Select Node"
                 value: root.creationNodeId
@@ -2552,7 +3006,7 @@ Panel {
                   event.accepted = true
                 }
                 Keys.onTabPressed: function(event) {
-                  customModeButton.forceActiveFocus()
+                    creationModeBackButton.forceActiveFocus()
                   event.accepted = true
                 }
                 Keys.onEscapePressed: root.cancelForm()
@@ -2564,7 +3018,7 @@ Panel {
                 text: projectListProcess.running ? "Discovering projects..."
                   : (root.projectError !== "" ? root.projectError
                     : (root.projectRootsConfigured ? "No projects match"
-                      : "No project roots configured · use Custom"))
+                      : "No project roots configured · create a new Workspace"))
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -2650,25 +3104,29 @@ Panel {
             TextField {
               id: nameField
               visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
-                || root.workspaceCreationMode === "custom")
+                || root.workspaceCreationMode === "new")
               width: parent.width
               placeholderText: root.formMode === "workspace" ? "Workspace name" : "Shell name"
               foreground: root.foreground
               onTextEdited: root.nameFieldEdited = true
               onAccepted: {
-                if (root.formMode === "workspace") root.submitForm()
+                if (root.formMode === "workspace"
+                    && root.workspaceCreationMode === "new") cwdField.forceActiveFocus()
+                else if (root.formMode === "workspace") root.submitForm()
                 else cwdField.forceActiveFocus()
               }
               Keys.onEscapePressed: root.cancelForm()
             }
             Row {
-              visible: !root.directoryPickerOpen && root.formMode !== "workspace"
+              visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
+                || root.workspaceCreationMode === "new")
               width: parent.width
               spacing: Style.space(6)
               TextField {
                 id: cwdField
                 width: parent.width - browseButton.width - parent.spacing
-                placeholderText: root.formMode === "workspace" ? "Default directory (optional)" : "Directory (optional)"
+                placeholderText: root.formMode === "workspace"
+                  ? "Default directory" : "Directory (optional)"
                 foreground: root.foreground
                 onTextEdited: root.cwdIsExact = false
                 onAccepted: root.submitForm()
@@ -2686,29 +3144,40 @@ Panel {
                 enabled: root.creationNode && root.creationNode.local
               }
             }
-            Row {
+            Column {
               visible: !root.directoryPickerOpen && root.formMode === "agent"
               width: parent.width
               spacing: Style.space(6)
-              Button {
-                width: (parent.width - parent.spacing) / 2
-                text: "OpenCode"
-                selected: root.agentHost === "opencode"
-                bordered: true
+
+              Dropdown {
+                id: agentHostDropdown
+                width: parent.width
+                label: "Select Agent"
+                value: root.agentHostName
+                options: root.agentHosts.map(function(host) {
+                  return { value: host.name, label: host.label + " · available" }
+                })
                 foreground: root.foreground
-                onClicked: root.agentHost = "opencode"
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.selectAgentHost(value) }
               }
-              Button {
-                width: (parent.width - parent.spacing) / 2
-                text: "Pi"
-                selected: root.agentHost === "pi"
-                bordered: true
-                foreground: root.foreground
-                onClicked: root.agentHost = "pi"
+
+              Text {
+                visible: root.agentHosts.length === 0
+                width: parent.width
+                text: integrationStatusProcess.running
+                  ? "Discovering available Agent hosts..." : root.agentHostError
+                color: root.agentHostError !== "" ? root.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
               }
             }
             Row {
               visible: !root.directoryPickerOpen
+                && (root.formMode !== "workspace"
+                  || root.workspaceCreationMode !== "choice")
               width: parent.width
               spacing: Style.space(6)
               Button {
@@ -2721,9 +3190,7 @@ Panel {
               }
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: root.formMode === "agent" ? "Create & Open"
-                  : (root.formMode === "workspace" && root.workspaceCreationMode === "project"
-                    ? "Create from Project" : "Create")
+                text: root.formMode === "agent" ? "Create & Open" : "Create"
                 bordered: true
                 focusable: true
                 active: true
@@ -3062,12 +3529,15 @@ Panel {
                 ListView {
                   id: itemList
                   width: parent.width
-                  implicitHeight: Math.min(contentHeight, Style.space(112))
+                  implicitHeight: Math.min(contentHeight, Style.space(170))
                   model: root.workspaceItems
                   spacing: Style.space(3)
                   clip: true
                   boundsBehavior: Flickable.StopAtBounds
-                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                  ScrollBar.vertical: ScrollBar {
+                    policy: itemList.contentHeight > itemList.height
+                      ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                  }
                   delegate: Rectangle {
                     required property var modelData
                     width: ListView.view.width

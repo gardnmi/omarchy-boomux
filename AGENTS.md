@@ -24,10 +24,11 @@ publication.
 
 ## Supported Contract
 
-- Planned minimum released Boomux version: `0.19.0`
+- Planned minimum released Boomux version: `0.27.0`
 - Stable JSON envelope: `boomux.cli/v1`
 - Current branch-validated daemon protocol: 38; live installed validation remains protocol 37
-- Supported Agent hosts: OpenCode and Pi through Boomux lifecycle integrations
+- Supported Agent hosts come from `integration.status`; currently OpenCode, Pi,
+  Claude Code, Codex, and Kiro CLI through Boomux lifecycle integrations
 
 Parse JSON only from commands advertised by `boomux capabilities --json`.
 Validate `schema`, `command`, and expected `data` fields. Use exact workspace,
@@ -94,9 +95,11 @@ Schedule-owned shells are private runner infrastructure. Exclude them from
 ordinary workspace items and exclude their Agents from the Agents view. Keep
 Schedule, execution, shell, run, and Agent IDs distinct.
 
-Agent creation means creating and opening an `opencode` or `pi` command-backed
-shell. The lifecycle integration registers the authoritative Agent later. The
-plugin must never fabricate an Agent registration or lifecycle observation.
+Agent creation means creating and opening a command-backed shell with the exact
+available executable returned by `integration.status` for the selected Node.
+Require a current lifecycle asset. The lifecycle integration registers the
+authoritative Agent later. The plugin must never fabricate an Agent registration
+or lifecycle observation.
 
 ## Safety Invariants
 
