@@ -40,7 +40,7 @@ Omarchy bar.
   actions while its state is stale or unavailable
 - Lists every Node in a dedicated health table with protocol,
   freshness, eligibility, and exact identity details
-- Opens interactive **Add Node** setup only in a local native terminal
+- Opens interactive **Create Node** setup only in a local native terminal
 
 ![Boomux workspace management in the Omarchy bar](assets/workspaces.png)
 
@@ -116,14 +116,55 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | --- | --- |
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
+| **Palette** button | Open the command palette from the panel |
 | Tab or `1` / `2` / `3` / `4` | Switch between Agents, Workspaces, Schedules, and Nodes |
-| `A` | From Nodes, open interactive Add Node in a native terminal |
+| `A` | From Nodes, open interactive Create Node in a native terminal |
 | Up / Down | Select an Agent, workspace, Schedule, or Node |
 | Enter | Open a selected Agent or select a workspace or Schedule |
 | `D` | Dismiss the selected Agent notification |
 | `N` | Create a workspace |
+| `/` | Open the command palette |
 | `R` | Refresh immediately |
 | Escape | Close the panel |
+
+For direct keyboard access, bind the currently unused `Super+B` shortcut to the
+palette IPC method:
+
+```lua
+o.bind("SUPER + B", "Boomux Palette",
+  "omarchy-shell io.github.gardnmi.boomux palette")
+```
+
+The palette opens on the selected Workspace with grouped **Open Agent**, **Open
+Shell**, **Invoke Launcher**, and **View Schedule** commands. Each command opens
+a searchable picker for that resource type across every Node. **View Schedule**
+navigates to the existing prompt-free Schedule details without running it or
+opening an execution. Search by item name, kind, status, path, or Node alias. Its
+header shows the authoritative **Active
+Workspace** for the focused managed terminal. When that differs, it separately
+labels the **Palette** Workspace whose items are listed. **Open Workspace**
+performs the explicit Boomux fan-out action, while opening one item targets only
+that qualified resource.
+**Switch Workspace** changes the persisted coordinated Workspace default without
+opening anything. **Create Workspace** starts the existing project/directory
+flow. **Switch Node** changes only where **Create Shell** and **Start Agent**
+create their item; it does not hide items on other Nodes. **Create Node** opens
+guided registration in a native terminal. Choosing a Workspace or Node closes
+the palette and confirms the new default or creation Node in the same lower-right notice used for focused
+terminals. Workspace confirmation appears only after Boomux accepts the durable
+selection. Opening a Workspace from the palette also closes it and reports the
+open result in that notice. Because Workspace restore is non-transactional, a
+known unavailable placement is reported as **Workspace open warning** with the
+unavailable placement count and a note that available items were attempted.
+Other nonzero results use the same warning because the current human-only
+command cannot distinguish partial from total resource failure.
+Escape returns from Workspace or Node selection before closing the palette.
+
+**Remove Workspace** uses the existing full-scope confirmation before removing
+the selected Workspace and its managed resources. Agent and Shell picker rows
+offer **Remove** only for locally owned backing Shells and use the same exact-ID
+confirmation flow. Schedule picker rows remain view-only; Schedule removal is
+not exposed until its public exact-ID confirmation flow is implemented.
 
 Selecting a coordinated Workspace in the **Workspaces** section also stores its
 exact ID as Boomux's local CLI default. Selecting an external owner Workspace
@@ -167,7 +208,7 @@ o.bind("SUPER + CTRL + RETURN", "New Boomux Shell", "boomux shell create --open"
 ```
 
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. The Nodes tab keeps **Add Node** at section scope and opens Boomux's
+window. The Nodes tab keeps **Create Node** at section scope and opens Boomux's
 guided Node setup in a local native terminal, where Boomux alone handles SSH
 authentication, remote install details, and confirmation. The terminal remains
 open after setup so its success or failure is visible. The Node table keeps the
@@ -191,7 +232,7 @@ returns the exact MagicDNS URL. **Open Boomux Web** launches that URL in the
 default browser. **Stop** shuts down only the gateway and removes only
 Boomux-owned Serve routes; unrelated routes and the daemon remain running.
 
-**New Workspace** first asks whether to use an **Existing Project** or **Create
+**Create Workspace** first asks whether to use an **Existing Project** or **Create
 New**. Existing Project lists the same canonical project names and paths Boomux
 discovers from configured `[projects].roots`. Create New requires a Workspace
 name and default directory and provides the same local **Browse** surface used by
@@ -284,11 +325,12 @@ omarchy plugin update io.github.gardnmi.boomux
 
 Omarchy rescans plugins after an update; a shell restart is not normally needed.
 When `curl` is available, the plugin performs two bounded, read-only HTTPS checks
-against GitHub: the latest stable Boomux release and the published plugin manifest on
-`main`. Newer semantic versions add an upward-arrow badge, unless an Agent alert
-count takes precedence, and separate links to the Boomux release page and plugin
-repository. Failures are silent. These links never run the update command or
-download or install anything automatically.
+against fixed GitHub URLs: the latest stable Boomux release and the published
+plugin manifest on `main`. Each response has a 64 KiB transfer limit, a five-second
+deadline, and redirects are not followed. Newer semantic versions add an
+upward-arrow badge, unless an Agent alert count takes precedence, and separate
+links to the Boomux release page and plugin repository. Failures are silent. These
+links never run the update command or download or install anything automatically.
 
 ## Remove
 
@@ -404,7 +446,7 @@ boomux node snapshot --json
 boomux doctor
 ```
 
-Use **Add Node** for a new registration so authentication and bootstrap
+Use **Create Node** for a new registration so authentication and bootstrap
 confirmation stay in the native terminal rather than the panel.
 
 ## Development

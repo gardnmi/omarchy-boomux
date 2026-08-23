@@ -710,6 +710,215 @@ function resourceActionable(resource, nodeActionable) {
     && resource.placement_state !== "close_pending" && !!nodeActionable
 }
 
+function paletteItemEntry(item, workspace) {
+  var targetType = item.kind === "launcher" ? "launcher" : "terminal"
+  return {
+    id: "item:" + targetType + ":" + item.key,
+    action: "open-item",
+    item_key: item.key,
+    target_type: targetType,
+    title: String(item.name),
+    subtitle: String(item.kind) + " · " + String(item.node_alias || "local")
+      + " · " + String(item.status || "unknown"),
+    search_text: [item.name, item.kind, item.node_alias, item.status, item.detail,
+      workspace ? workspace.name : "", "open"].join(" ")
+  }
+}
+
+function paletteEntries(mode, workspace, items, workspaces, nodes, selectedNodeId, schedules) {
+  var entries = []
+  var scheduleModels = schedules || []
+  if (mode === "workspaces") {
+    for (var w = 0; w < workspaces.length; w++) {
+      var candidate = workspaces[w]
+      if (!candidate || !candidate.is_global || candidate.closing) continue
+      entries.push({
+        id: "workspace:" + candidate.key,
+        action: "switch-workspace",
+        workspace_key: candidate.key,
+        title: String(candidate.name),
+        subtitle: candidate.key === (workspace ? workspace.key : "")
+          ? "Palette Workspace" : "Make this the default Workspace",
+        search_text: [candidate.name, "workspace", "switch", "default"].join(" "),
+        selected: candidate.key === (workspace ? workspace.key : "")
+      })
+    }
+    return entries
+  }
+
+  if (mode === "nodes") {
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n]
+      if (!node || !node.workspace_owner_eligible) continue
+      entries.push({
+        id: "node:" + node.node_id,
+        action: "select-node",
+        node_id: String(node.node_id),
+        title: String(node.alias),
+        subtitle: node.node_id === selectedNodeId
+          ? "Current creation Node" : "Create new items on this Node",
+        search_text: [node.alias, node.node_id, "node", "switch", "create"].join(" "),
+        selected: node.node_id === selectedNodeId
+      })
+    }
+    return entries
+  }
+
+  if (mode === "agents" || mode === "shells" || mode === "launchers") {
+    for (var r = 0; r < items.length; r++) {
+      var resource = items[r]
+      var matches = mode === "agents" ? resource.kind === "agent"
+        : (mode === "launchers" ? resource.kind === "launcher"
+          : (resource.kind === "shell" || resource.kind === "command"))
+      if (matches) entries.push(paletteItemEntry(resource, workspace))
+    }
+    return entries
+  }
+
+  if (mode === "schedules") {
+    for (var s = 0; s < scheduleModels.length; s++) {
+      var schedule = scheduleModels[s]
+      if (!workspace || schedule.workspace_key !== workspace.key) continue
+      entries.push({
+        id: "schedule:" + schedule.key,
+        action: "view-schedule",
+        schedule_key: schedule.key,
+        title: String(schedule.name),
+        subtitle: String(schedule.state || "unknown") + " · "
+          + String(schedule.node_alias || "local") + " · "
+          + String(schedule.integration || "Agent"),
+        search_text: [schedule.name, schedule.state, schedule.node_alias,
+          schedule.integration, schedule.workspace_name, "view schedule"].join(" ")
+      })
+    }
+    return entries
+  }
+
+  var selectedNode = null
+  for (var i = 0; i < nodes.length; i++)
+    if (nodes[i].node_id === selectedNodeId) selectedNode = nodes[i]
+  var nodeLabel = selectedNode ? String(selectedNode.alias) : "switch Node first"
+  entries.push({
+    id: "action:choose-workspace",
+    action: "choose-workspace",
+    title: "Switch Workspace...",
+    subtitle: "Change the persisted Boomux default",
+    search_text: "Switch Workspace choose change default"
+  })
+  entries.push({
+    id: "action:create-workspace",
+    action: "create-workspace",
+    title: "Create Workspace",
+    subtitle: "Create from a project or directory",
+    search_text: "Create Workspace new project directory"
+  })
+  if (!workspace) {
+    entries.push({
+      id: "action:create-node",
+      action: "create-node",
+      title: "Create Node",
+      subtitle: "Open guided Node setup in a native terminal",
+      search_text: "Create Node new register guided setup"
+    })
+    return entries
+  }
+  entries.push({
+    id: "action:open-workspace:" + workspace.key,
+    action: "open-workspace",
+    workspace_key: workspace.key,
+    title: "Open Workspace",
+    subtitle: "Open all available items in " + String(workspace.name),
+    search_text: [workspace.name, "open", "workspace", "all", "items"].join(" ")
+  })
+  var agentCount = items.filter(function(item) { return item.kind === "agent" }).length
+  var shellCount = items.filter(function(item) {
+    return item.kind === "shell" || item.kind === "command"
+  }).length
+  var launcherCount = items.filter(function(item) { return item.kind === "launcher" }).length
+  var scheduleCount = scheduleModels.filter(function(schedule) {
+    return schedule.workspace_key === workspace.key
+  }).length
+  entries.push({
+    id: "action:open-agents",
+    action: "open-agents",
+    title: "Open Agent...",
+    subtitle: agentCount + " Agent" + (agentCount === 1 ? "" : "s") + " in this Workspace",
+    search_text: "Open Agent select choose"
+  })
+  entries.push({
+    id: "action:open-shells",
+    action: "open-shells",
+    title: "Open Shell...",
+    subtitle: shellCount + " Shell" + (shellCount === 1 ? "" : "s") + " in this Workspace",
+    search_text: "Open Shell command terminal select choose"
+  })
+  entries.push({
+    id: "action:invoke-launchers",
+    action: "invoke-launchers",
+    title: "Invoke Launcher...",
+    subtitle: launcherCount + " Launcher" + (launcherCount === 1 ? "" : "s")
+      + " in this Workspace",
+    search_text: "Invoke Launcher open run select choose"
+  })
+  entries.push({
+    id: "action:view-schedules",
+    action: "view-schedules",
+    title: "View Schedule...",
+    subtitle: scheduleCount + " Schedule" + (scheduleCount === 1 ? "" : "s")
+      + " in this Workspace",
+    search_text: "View Schedule open select choose"
+  })
+  entries.push({
+    id: "action:create-shell:" + workspace.key,
+    action: "create-shell",
+    workspace_key: workspace.key,
+    title: "Create Shell",
+    subtitle: "Create on " + nodeLabel,
+    search_text: [workspace.name, nodeLabel, "Create Shell", "new"].join(" ")
+  })
+  entries.push({
+    id: "action:start-agent:" + workspace.key,
+    action: "start-agent",
+    workspace_key: workspace.key,
+    title: "Start Agent",
+    subtitle: "Create on " + nodeLabel,
+    search_text: [workspace.name, nodeLabel, "add", "new", "start", "agent"].join(" ")
+  })
+
+  if (workspace.is_global) entries.push({
+    id: "action:switch-node",
+    action: "switch-node",
+    title: "Switch Node...",
+    subtitle: "Change where new Shells and Agents are created",
+    search_text: [nodeLabel, "Switch Node", "create target shell agent"].join(" ")
+  })
+  entries.push({
+    id: "action:create-node",
+    action: "create-node",
+    title: "Create Node",
+    subtitle: "Open guided Node setup in a native terminal",
+    search_text: "Create Node new register guided setup"
+  })
+  entries.push({
+    id: "action:remove-workspace:" + workspace.key,
+    action: "remove-workspace",
+    workspace_key: workspace.key,
+    title: "Remove Workspace",
+    subtitle: "Remove " + String(workspace.name) + " and its managed resources",
+    search_text: [workspace.name, "Remove Workspace delete close"].join(" ")
+  })
+
+  return entries
+}
+
+function filterPaletteEntries(entries, query) {
+  var needle = String(query || "").trim().toLowerCase()
+  if (needle === "") return entries.slice()
+  return entries.filter(function(entry) {
+    return String(entry.search_text || "").toLowerCase().indexOf(needle) >= 0
+  })
+}
+
 function acknowledgementIdentity(agent, revision) {
   return {
     agentKey: resourceKey(agent.node_id, agent.id),
@@ -769,6 +978,8 @@ if (typeof module !== "undefined") module.exports = {
   resolvePendingShell: resolvePendingShell,
   consumePendingShell: consumePendingShell,
   resourceActionable: resourceActionable,
+  paletteEntries: paletteEntries,
+  filterPaletteEntries: filterPaletteEntries,
   acknowledgementIdentity: acknowledgementIdentity,
   acknowledgementResponseMatches: acknowledgementResponseMatches
 }
