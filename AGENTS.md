@@ -72,6 +72,19 @@ The panel has four top-level views:
 - **Nodes**: a read-only health table with selected-Node protocol,
   freshness, eligibility, and exact identity details
 
+The keyboard command palette is an alternate panel surface over the selected
+Workspace. Its root commands open type-specific Agent, Shell, launcher, and
+Schedule pickers instead of mixing raw resources with actions. Schedule choice
+navigates to prompt-free details and never dispatches or opens an execution. It
+can open that Workspace or one exact item, switch the persisted coordinator
+Workspace default without opening it, and switch the eligible Node used by its
+Shell and Agent creation actions. Node choice is a creation target, not a
+resource filter; items from every placement remain visible. A Workspace or
+Node choice exits the palette and uses the passive lower-right notice for
+confirmation; durable Workspace selection is confirmed only after CLI success.
+Workspace and local backing-Shell removal reuse the existing modal exact-ID
+confirmation. Schedule removal remains unavailable.
+
 Protocol 38 adds coordinator-owned global Workspaces with explicit Node
 placements. Keep Workspace grouping task-first; show Node ownership as secondary
 metadata rather than a filter or Node-first path. Every stable health value (`unobserved`, `online`,
@@ -109,7 +122,8 @@ or lifecycle observation.
   invoke SSH, contact a Node directly, store credentials, or handle remote
   bootstrap confirmation. The sole direct network exception is a bounded,
   read-only startup check against fixed GitHub URLs for the latest Boomux release
-  and published plugin manifest; failures remain silent. **Add Node** may only
+  and published plugin manifest. Cap each response before collecting stdout and
+  do not follow redirects; failures remain silent. **Create Node** may only
   launch interactive `boomux node add` in a local native terminal.
 - Consume federation through `boomux node snapshot --json`. Pass exact `--node`
   context to every supported remote open, inspect, host service, attention,
@@ -147,16 +161,18 @@ or lifecycle observation.
 
 ## UI Conventions
 
-- Keep **New Workspace** at workspace-section scope.
+- Keep **Create Workspace** at workspace-section scope.
 - Keep **Open**, **Shell**, and **Agent** inside the selected workspace detail
   surface so their target is unambiguous.
-- Keep **Add Node** at Nodes-section scope; do not add a Node filter.
+- Keep **Create Node** at Nodes-section scope; do not add a Node filter.
 - Do not use collapsible workspace cards unless explicitly requested.
 - Use Omarchy `qs.Ui` controls and `Style.space(...)`; follow the active bar
   foreground, urgent color, font, and accent.
 - Set `PanelKeyCatcher.blocked` while text fields own keyboard input.
 - Modal confirmations must consume or explicitly handle Enter, Escape, Tab,
   arrows, and text shortcuts instead of leaking input to the panel below.
+- The command palette follows the same rule, re-resolves structural identities
+  before activation, and keeps Workspace opening distinct from default selection.
 - Bound every dynamic list with clipping and a scrollbar. The panel content
   height is capped, so unbounded repeaters can make actions inaccessible.
 - Display paths under `$HOME` with `~` to reduce noise and avoid exposing a

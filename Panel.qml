@@ -14,6 +14,7 @@ Panel {
 
   moduleName: "io.github.gardnmi.boomux"
   ipcTarget: "io.github.gardnmi.boomux"
+  manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -89,6 +90,7 @@ Panel {
   property string executionError: ""
   property string actionMessage: ""
   property string formMode: ""
+  property bool formFromPalette: false
   property string workspaceCreationMode: "choice"
   property string projectQuery: ""
   property int selectedProjectIndex: 0
@@ -119,21 +121,37 @@ Panel {
   property double clockNow: Date.now()
   property double focusedTerminalRevision: 0
   property string focusedTerminalKey: ""
-  property string terminalNoticeWorkspace: ""
-  property string terminalNoticeName: ""
-  property var terminalNoticeScreen: null
-  property bool terminalNoticeVisible: false
+  property string noticeTitle: ""
+  property string noticeDetail: ""
+  property var noticeScreen: null
+  property bool noticeVisible: false
+  property double noticeProtectedUntil: 0
   property string eventCursor: ""
   property bool focusRefreshPending: false
   property var workspaceSelectionRequested: null
   property var workspaceSelectionActive: null
   property string workspaceSelectionAppliedId: ""
+  property string workspaceSelectionNoticeId: ""
+  property var workspaceSelectionNoticeScreen: null
   property var workspaceItems: []
   property string workspaceItemsSignature: ""
   property int workspaceItemsRevision: 0
+  property bool paletteOpen: false
+  property bool paletteReturnToPanel: false
+  property string paletteMode: "items"
+  property string paletteQuery: ""
+  property int paletteSelectedIndex: 0
+  property string paletteNodeId: ""
 
   readonly property var visibleWorkspaces: workspaces
   readonly property var visibleSchedules: schedules
+  readonly property var paletteEntries: WorkspaceModel.paletteEntries(
+    paletteMode, selectedWorkspace, workspaceItems, workspaces, nodes, paletteNodeId,
+    schedules)
+  readonly property var paletteResults: WorkspaceModel.filterPaletteEntries(
+    paletteEntries, paletteQuery)
+  readonly property var selectedPaletteEntry: paletteSelectedIndex >= 0
+    && paletteSelectedIndex < paletteResults.length ? paletteResults[paletteSelectedIndex] : null
 
   readonly property var visibleAgents: WorkspaceModel.agentsByLastUpdated(agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
@@ -144,6 +162,14 @@ Panel {
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
       if (workspaces[i].key === selectedWorkspaceKey) return workspaces[i]
+    return null
+  }
+  readonly property var focusedWorkspace: {
+    var workspaceKey = ""
+    for (var i = 0; i < shells.length; i++)
+      if (shells[i].key === focusedTerminalKey) workspaceKey = shells[i].workspace_key
+    for (var j = 0; j < workspaces.length; j++)
+      if (workspaces[j].key === workspaceKey) return workspaces[j]
     return null
   }
   readonly property bool scheduleAvailable: scheduleCommandsSupported && daemonProtocolVersion >= 25
@@ -197,8 +223,10 @@ Panel {
     clampProjectSelection()
   }
 
-  onSelectedWorkspaceKeyChanged: if (workspaceDropdown)
-    workspaceDropdown.value = selectedWorkspaceKey
+  onSelectedWorkspaceKeyChanged: {
+    if (workspaceDropdown) workspaceDropdown.value = selectedWorkspaceKey
+    if (paletteOpen) ensurePaletteNode()
+  }
 
   onSelectedScheduleKeyChanged: if (scheduleDropdown)
     scheduleDropdown.value = selectedScheduleKey
@@ -207,6 +235,21 @@ Panel {
     agentHostDropdown.value = agentHostName
 
   onWorkspaceDetailChanged: syncWorkspaceItems()
+
+  onNodesChanged: if (paletteOpen) ensurePaletteNode()
+
+  onPaletteQueryChanged: {
+    paletteSelectedIndex = 0
+    clampPaletteSelection()
+  }
+
+  onPaletteResultsChanged: clampPaletteSelection()
+
+  onItemToRemoveChanged: Qt.callLater(function() {
+    if (itemToRemove) removeDialogKeyHandler.forceActiveFocus()
+    else if (paletteOpen) paletteSearchField.forceActiveFocus()
+    else if (opened) keyCatcher.forceActiveFocus()
+  })
 
   visible: true
   implicitWidth: button.implicitWidth
@@ -362,7 +405,8 @@ Panel {
       nodeSnapshotProcess.running = true
       return
     }
-    var loadSchedules = opened && activeTab === "schedules" && scheduleAvailable
+    var loadSchedules = opened && scheduleAvailable
+      && (activeTab === "schedules" || paletteOpen)
     refreshing = true
     refreshPending = loadSchedules ? 5 : 3
     error = ""
@@ -571,11 +615,26 @@ Panel {
     var ownWindow = root.QsWindow ? root.QsWindow.window : null
     if (!screen || !ownWindow || ownWindow.screen !== screen) return
 
-    terminalNoticeWorkspace = String(shell.workspace_name)
-    terminalNoticeName = String(shell.name)
-    terminalNoticeScreen = screen
-    terminalNoticeVisible = true
-    terminalNoticeTimer.restart()
+    if (Date.now() < noticeProtectedUntil) return
+    showNotice(String(shell.workspace_name), String(shell.name), screen, false)
+  }
+
+  function currentNoticeScreen() {
+    var ownWindow = root.QsWindow ? root.QsWindow.window : null
+    if (ownWindow && ownWindow.screen) return ownWindow.screen
+    var toplevel = ToplevelManager.activeToplevel
+    return toplevel && toplevel.screens.length > 0 ? toplevel.screens[0] : null
+  }
+
+  function showNotice(title, detail, screen, protectedNotice) {
+    var targetScreen = screen || currentNoticeScreen()
+    if (!targetScreen) return
+    noticeTitle = String(title || "")
+    noticeDetail = String(detail || "")
+    noticeScreen = targetScreen
+    noticeVisible = true
+    noticeProtectedUntil = protectedNotice ? Date.now() + noticeTimer.interval : 0
+    noticeTimer.restart()
   }
 
   function startEventWait() {
@@ -1055,6 +1114,273 @@ Panel {
     selectTab(tabs[(index + step + tabs.length) % tabs.length])
   }
 
+  function workspaceForKey(workspaceKey) {
+    for (var i = 0; i < workspaces.length; i++)
+      if (workspaces[i].key === workspaceKey) return workspaces[i]
+    return null
+  }
+
+  function scheduleForKey(scheduleKey) {
+    for (var i = 0; i < schedules.length; i++)
+      if (schedules[i].key === scheduleKey) return schedules[i]
+    return null
+  }
+
+  function paletteItem(entry) {
+    if (!entry || entry.action !== "open-item") return null
+    for (var i = 0; i < workspaceItems.length; i++) {
+      var item = workspaceItems[i]
+      var targetType = item.kind === "launcher" ? "launcher" : "terminal"
+      if (item.key === entry.item_key && targetType === entry.target_type) return item
+    }
+    return null
+  }
+
+  function paletteItemCanRemove(entry) {
+    if (paletteMode !== "agents" && paletteMode !== "shells") return false
+    var item = paletteItem(entry)
+    var node = item ? nodeFor(item.node_id) : null
+    return !!item && !!node && node.local && !actionProcess.running
+      && !openProcess.running && !executionOpenProcess.running
+  }
+
+  function paletteTargetNode() {
+    var node = nodeFor(paletteNodeId)
+    return node && node.workspace_owner_eligible ? node : null
+  }
+
+  function activeWorkspaceLabel() {
+    if (focusedWorkspace) return "Active Workspace: " + String(focusedWorkspace.name)
+    return selectedWorkspace ? "Palette Workspace: " + String(selectedWorkspace.name)
+      : "No Workspace selected"
+  }
+
+  function paletteSelectionLabel() {
+    if (!selectedWorkspace) return ""
+    var addTarget = paletteMode === "items" && paletteTargetNode()
+      ? " · create on " + String(paletteTargetNode().alias) : ""
+    if (focusedWorkspace && focusedWorkspace.key !== selectedWorkspace.key)
+      return "Palette: " + String(selectedWorkspace.name) + addTarget
+    return addTarget === "" ? "" : "Creation Node: " + String(paletteTargetNode().alias)
+  }
+
+  function ensurePaletteNode() {
+    var workspace = selectedWorkspace
+    if (!workspace) {
+      paletteNodeId = ""
+      return
+    }
+    if (!workspace.is_global) {
+      paletteNodeId = String(workspace.node_id || "")
+      return
+    }
+    if (paletteTargetNode()) return
+    paletteNodeId = WorkspaceModel.defaultCreationNodeId(nodes)
+  }
+
+  function setPaletteMode(mode) {
+    paletteMode = mode
+    paletteQuery = ""
+    paletteSearchField.text = ""
+    paletteSelectedIndex = 0
+    Qt.callLater(function() { paletteSearchField.forceActiveFocus() })
+  }
+
+  function showPalette() {
+    if (paletteOpen) return
+    paletteReturnToPanel = opened
+    cancelForm()
+    itemToRemove = null
+    paletteOpen = true
+    paletteMode = "items"
+    paletteQuery = ""
+    paletteSearchField.text = ""
+    paletteSelectedIndex = 0
+    if (selectedWorkspaceKey !== "") inspectWorkspace(selectedWorkspaceKey)
+    ensurePaletteNode()
+    if (!opened) open()
+    else if (!federationAvailable && scheduleAvailable) refresh()
+    Qt.callLater(function() { paletteSearchField.forceActiveFocus() })
+  }
+
+  function leavePalette() {
+    paletteOpen = false
+    paletteMode = "items"
+    paletteQuery = ""
+    paletteSearchField.text = ""
+    paletteSelectedIndex = 0
+    if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function closePaletteAfterSelection() {
+    leavePalette()
+    paletteReturnToPanel = false
+    close()
+  }
+
+  function dismissPalette() {
+    if (paletteMode !== "items") {
+      setPaletteMode("items")
+      return
+    }
+    var returnToPanel = paletteReturnToPanel
+    leavePalette()
+    paletteReturnToPanel = false
+    if (!returnToPanel) close()
+  }
+
+  function togglePalette() {
+    if (paletteOpen) dismissPalette()
+    else showPalette()
+  }
+
+  function clampPaletteSelection() {
+    paletteSelectedIndex = paletteResults.length === 0 ? -1
+      : Math.max(0, Math.min(paletteSelectedIndex, paletteResults.length - 1))
+  }
+
+  function movePaletteSelection(offset) {
+    if (paletteResults.length === 0) return
+    paletteSelectedIndex = Math.max(0,
+      Math.min(paletteSelectedIndex + offset, paletteResults.length - 1))
+    paletteList.positionViewAtIndex(paletteSelectedIndex, ListView.Contain)
+  }
+
+  function paletteEntryEnabled(entry) {
+    if (!entry) return false
+    if (entry.action === "open-workspace")
+      return workspaceCanOpen(workspaceForKey(entry.workspace_key)) && !actionProcess.running
+        && !openProcess.running && !executionOpenProcess.running
+    if (entry.action === "open-item") {
+      var item = paletteItem(entry)
+      return !actionProcess.running && !openProcess.running && !executionOpenProcess.running && !!item
+        && resourceIsActionable(item, item.kind === "launcher"
+          ? "remote_launcher_invocation" : "remote_pty_attachment")
+    }
+    if (entry.action === "open-agents" || entry.action === "open-shells"
+        || entry.action === "invoke-launchers" || entry.action === "view-schedules") {
+      var mode = entry.action === "open-agents" ? "agents"
+        : (entry.action === "open-shells" ? "shells"
+          : (entry.action === "invoke-launchers" ? "launchers" : "schedules"))
+      return (mode !== "schedules" || scheduleAvailable) && WorkspaceModel.paletteEntries(
+        mode, selectedWorkspace, workspaceItems, workspaces, nodes, paletteNodeId,
+        schedules).length > 0
+    }
+    if (entry.action === "view-schedule") return !!scheduleForKey(entry.schedule_key)
+    if (entry.action === "create-workspace")
+      return cliAvailable && !actionProcess.running && !openProcess.running
+        && !executionOpenProcess.running
+    if (entry.action === "create-shell" || entry.action === "start-agent")
+      return !actionProcess.running && !openProcess.running && !executionOpenProcess.running
+        && workspaceDetail
+        && workspaceDetail.key === entry.workspace_key
+        && workspaceCreationReason(workspaceDetail) === ""
+        && (!workspaceDetail.is_global || paletteTargetNode() !== null)
+    if (entry.action === "choose-workspace")
+      return workspaceSelectionSupported && WorkspaceModel.paletteEntries(
+        "workspaces", selectedWorkspace, [], workspaces, nodes, paletteNodeId).length > 0
+    if (entry.action === "switch-workspace")
+      return workspaceSelectionSupported && !!workspaceForKey(entry.workspace_key)
+    if (entry.action === "switch-node") return eligibleCreationNodes.length > 0
+    if (entry.action === "select-node") return !!nodeFor(entry.node_id)
+    if (entry.action === "create-node") return federationAvailable && !!bar
+    if (entry.action === "remove-workspace")
+      return workspaceCanRemove(workspaceForKey(entry.workspace_key))
+    return false
+  }
+
+  function activatePaletteEntry(entry) {
+    if (!paletteEntryEnabled(entry)) return
+    if (entry.action === "choose-workspace") {
+      setPaletteMode("workspaces")
+      return
+    }
+    if (entry.action === "switch-node") {
+      setPaletteMode("nodes")
+      return
+    }
+    if (entry.action === "open-agents") {
+      setPaletteMode("agents")
+      return
+    }
+    if (entry.action === "open-shells") {
+      setPaletteMode("shells")
+      return
+    }
+    if (entry.action === "invoke-launchers") {
+      setPaletteMode("launchers")
+      return
+    }
+    if (entry.action === "view-schedules") {
+      setPaletteMode("schedules")
+      return
+    }
+    if (entry.action === "create-workspace") {
+      var workspaceNodeId = paletteNodeId
+      leavePalette()
+      showForm("workspace", workspaceNodeId, true)
+      return
+    }
+    if (entry.action === "create-node") {
+      createNode()
+      return
+    }
+    if (entry.action === "remove-workspace") {
+      requestRemoveWorkspace(workspaceForKey(entry.workspace_key))
+      return
+    }
+    if (entry.action === "switch-workspace") {
+      var workspace = workspaceForKey(entry.workspace_key)
+      if (!workspace) return
+      var selectionScreen = currentNoticeScreen()
+      workspaceSelectionNoticeId = workspace.id
+      workspaceSelectionNoticeScreen = selectionScreen
+      selectWorkspace(workspace.key)
+      ensurePaletteNode()
+      closePaletteAfterSelection()
+      return
+    }
+    if (entry.action === "select-node") {
+      var node = nodeFor(entry.node_id)
+      if (!node || !node.workspace_owner_eligible) return
+      var nodeScreen = currentNoticeScreen()
+      paletteNodeId = node.node_id
+      closePaletteAfterSelection()
+      showNotice("Creation Node", String(node.alias), nodeScreen, true)
+      return
+    }
+    if (entry.action === "open-workspace") {
+      var targetWorkspace = workspaceForKey(entry.workspace_key)
+      var openScreen = currentNoticeScreen()
+      closePaletteAfterSelection()
+      openWorkspace(targetWorkspace, openScreen)
+      return
+    }
+    if (entry.action === "open-item") {
+      var targetItem = paletteItem(entry)
+      leavePalette()
+      openWorkspaceItem(targetItem)
+      return
+    }
+    if (entry.action === "view-schedule") {
+      var targetSchedule = scheduleForKey(entry.schedule_key)
+      if (!targetSchedule) return
+      leavePalette()
+      selectTab("schedules")
+      selectSchedule(targetSchedule.key)
+      return
+    }
+    if (entry.action === "create-shell" || entry.action === "start-agent") {
+      var targetNodeId = paletteNodeId
+      leavePalette()
+      showForm(entry.action === "create-shell" ? "shell" : "agent", targetNodeId, true)
+    }
+  }
+
+  function activatePaletteSelection() {
+    activatePaletteEntry(selectedPaletteEntry)
+  }
+
   function clampSelection() {
     selectedIndex = Math.max(0, Math.min(selectedIndex, itemCount - 1))
   }
@@ -1102,7 +1428,15 @@ Panel {
 
   function startWorkspaceSelection() {
     if (!workspaceSelectionRequested || workspaceSelectionProcess.running) return
-    if (workspaceSelectionRequested.id === workspaceSelectionAppliedId) return
+    if (workspaceSelectionRequested.id === workspaceSelectionAppliedId) {
+      if (workspaceSelectionNoticeId === workspaceSelectionAppliedId) {
+        showNotice("Default Workspace", workspaceSelectionRequested.name,
+          workspaceSelectionNoticeScreen, true)
+        workspaceSelectionNoticeId = ""
+        workspaceSelectionNoticeScreen = null
+      }
+      return
+    }
     workspaceSelectionActive = workspaceSelectionRequested
     workspaceSelectionProcess.command = workspaceSelectionActive.id === ""
       ? ["boomux", "workspace", "clear"]
@@ -1272,10 +1606,17 @@ Panel {
       workspace, eligibleCreationNodes.length)
   }
 
-  function openWorkspace(workspace) {
+  function openWorkspace(workspace, noticeScreen) {
     if (!workspaceCanOpen(workspace) || actionProcess.running) return
+    var availablePlacements = workspace.is_global ? workspace.placements.filter(function(placement) {
+      return placement.available
+    }).length : 1
+    var unavailablePlacements = workspace.is_global
+      ? Math.max(0, workspace.placements.length - availablePlacements) : 0
     pendingAction = { kind: "open-workspace", key: workspace.key,
-      nodeId: workspace.node_id || "" }
+      nodeId: workspace.node_id || "", name: String(workspace.name),
+      noticeScreen: noticeScreen || null, availablePlacements: availablePlacements,
+      unavailablePlacements: unavailablePlacements }
     actionMessage = "Opening " + String(workspace.name) + "..."
     actionProcess.command = WorkspaceModel.workspaceOpenCommand(workspace)
     actionProcess.running = true
@@ -1472,7 +1813,7 @@ Panel {
     if (webRunning && webDashboardUrl !== "") Qt.openUrlExternally(webDashboardUrl)
   }
 
-  function addNode() {
+  function createNode() {
     if (!bar || !federationAvailable) return
     bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add")
     close()
@@ -1664,7 +2005,7 @@ Panel {
     completedAgents = nextCompleted
   }
 
-  function showForm(mode) {
+  function showForm(mode, preferredNodeId, fromPalette) {
     if (mode !== "workspace") {
       var blocked = WorkspaceModel.workspaceCreationBlockReason(
         workspaceDetail, eligibleCreationNodes.length)
@@ -1675,7 +2016,9 @@ Panel {
     }
     if (globalWorkspacesAvailable && (mode === "workspace"
         || (workspaceDetail && workspaceDetail.is_global))) {
-      creationNodeId = WorkspaceModel.defaultCreationNodeId(nodes)
+      var preferredNode = nodeFor(preferredNodeId)
+      creationNodeId = preferredNode && preferredNode.workspace_owner_eligible
+        ? preferredNode.node_id : WorkspaceModel.defaultCreationNodeId(nodes)
       if (eligibleCreationNodes.length === 0 && mode !== "workspace") {
         actionMessage = "No Node is currently eligible for Workspace placement"
         return
@@ -1688,6 +2031,7 @@ Panel {
         return
       }
     }
+    formFromPalette = !!fromPalette
     formMode = mode
     actionMessage = ""
     nameFieldEdited = false
@@ -1760,6 +2104,7 @@ Panel {
     agentHostCommand = []
     agentHostError = ""
     suggestedNameRequestedIdentity = null
+    formFromPalette = false
     formMode = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -1940,15 +2285,35 @@ Panel {
 
   onOpenedChanged: if (opened) {
     refreshInstalledState()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function() {
+      if (paletteOpen) paletteSearchField.forceActiveFocus()
+      else keyCatcher.forceActiveFocus()
+    })
   } else {
+    paletteOpen = false
+    paletteReturnToPanel = false
+    paletteMode = "items"
+    paletteQuery = ""
+    paletteSelectedIndex = 0
     itemToRemove = null
     cancelForm()
   }
 
+  IpcHandler {
+    target: root.ipcTarget
+
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function palette(): void { root.togglePalette() }
+  }
+
   Process {
     id: boomuxUpdateProcess
-    command: ["curl", "--fail", "--silent", "--location", "--max-time", "5",
+    command: ["curl", "--fail", "--silent", "--max-time", "5",
+      "--max-filesize", "65536",
       "https://api.github.com/repos/gardnmi/boomux/releases/latest"]
     stdout: StdioCollector { id: boomuxUpdateStdout; waitForEnd: true }
     onExited: function(exitCode) {
@@ -1958,7 +2323,8 @@ Panel {
 
   Process {
     id: pluginUpdateProcess
-    command: ["curl", "--fail", "--silent", "--location", "--max-time", "5",
+    command: ["curl", "--fail", "--silent", "--max-time", "5",
+      "--max-filesize", "65536",
       "https://raw.githubusercontent.com/gardnmi/omarchy-boomux/main/manifest.json"]
     stdout: StdioCollector { id: pluginUpdateStdout; waitForEnd: true }
     onExited: function(exitCode) {
@@ -2196,10 +2562,10 @@ Panel {
       root.finishRefresh()
       if (exitCode === 0) {
         root.parseSchedules(scheduleListStdout.text)
-        if (root.selectedSchedule) {
+        if (root.activeTab === "schedules" && root.selectedSchedule) {
           root.requestExecutions(root.selectedSchedule)
         } else {
-          root.executions = []
+          if (root.activeTab === "schedules") root.executions = []
           root.finishRefresh()
         }
       } else {
@@ -2256,14 +2622,27 @@ Panel {
         root.actionMessage = active.id === ""
           ? "Default Workspace cleared"
           : "Default Workspace: " + active.name
+        if (active.id === root.workspaceSelectionNoticeId) {
+          root.showNotice("Default Workspace", active.name,
+            root.workspaceSelectionNoticeScreen, true)
+          root.workspaceSelectionNoticeId = ""
+          root.workspaceSelectionNoticeScreen = null
+        }
       } else if (exitCode !== 0) {
         root.actionMessage = root.processError(
           workspaceSelectionStderr.text || workspaceSelectionStdout.text,
           "Could not select the default Workspace")
+        if (active && active.id === root.workspaceSelectionNoticeId) {
+          root.showNotice("Workspace selection failed", root.actionMessage,
+            root.workspaceSelectionNoticeScreen, true)
+          root.workspaceSelectionNoticeId = ""
+          root.workspaceSelectionNoticeScreen = null
+        }
       }
       root.workspaceSelectionActive = null
       if (root.workspaceSelectionRequested
-          && root.workspaceSelectionRequested.id !== root.workspaceSelectionAppliedId)
+          && (root.workspaceSelectionRequested.id !== root.workspaceSelectionAppliedId
+            || root.workspaceSelectionNoticeId === root.workspaceSelectionRequested.id))
         Qt.callLater(function() { root.startWorkspaceSelection() })
     }
   }
@@ -2279,7 +2658,17 @@ Panel {
       if (exitCode !== 0) {
         root.pendingShell = null
         root.pendingWorkspace = null
-        root.actionMessage = root.processError(actionStderr.text || actionStdout.text, "Boomux action failed")
+        root.actionMessage = root.processError(actionStderr.text || actionStdout.text,
+          action === "open-workspace" ? "Workspace open reported a warning"
+            : "Boomux action failed")
+        if (action === "open-workspace" && pending.noticeScreen) {
+          if (pending.availablePlacements > 0 && pending.unavailablePlacements > 0)
+            root.showNotice("Workspace open warning", pending.unavailablePlacements + " placement"
+              + (pending.unavailablePlacements === 1 ? "" : "s")
+              + " unavailable; available items were attempted", pending.noticeScreen, true)
+          else root.showNotice("Workspace open warning", root.actionMessage,
+            pending.noticeScreen, true)
+        }
         return
       }
       if (action === "create-agent" && root.pendingShell)
@@ -2288,7 +2677,7 @@ Panel {
       if (action === "create-workspace") root.actionMessage = "Workspace created"
       else if (action === "create-workspace-shell")
         root.actionMessage = "Workspace created with default directory"
-      else if (action === "create-shell") root.actionMessage = "Shell added"
+      else if (action === "create-shell") root.actionMessage = "Shell created"
       else if (action === "create-agent")
         root.actionMessage = "Starting " + String(pending.hostName || "Agent") + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
@@ -2298,7 +2687,12 @@ Panel {
       else if (action === "run-schedule") root.actionMessage = "Schedule execution started"
       else if (action === "pause-schedule") root.actionMessage = "Schedule paused"
       else if (action === "resume-schedule") root.actionMessage = "Schedule resumed"
-      else root.actionMessage = "Workspace opened"
+      else {
+        root.actionMessage = "Workspace opened"
+        if (pending && pending.noticeScreen)
+          root.showNotice("Workspace opened", pending.name,
+            pending.noticeScreen, true)
+      }
       root.refresh()
     }
   }
@@ -2407,19 +2801,22 @@ Panel {
   }
 
   Timer {
-    id: terminalNoticeTimer
+    id: noticeTimer
     interval: 2200
-    onTriggered: root.terminalNoticeVisible = false
+    onTriggered: {
+      root.noticeVisible = false
+      root.noticeProtectedUntil = 0
+    }
   }
 
   PanelWindow {
-    id: terminalNoticeWindow
-    screen: root.terminalNoticeScreen
-    visible: root.terminalNoticeVisible && root.terminalNoticeScreen !== null
+    id: noticeWindow
+    screen: root.noticeScreen
+    visible: root.noticeVisible && root.noticeScreen !== null
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omarchy-boomux-terminal-notice"
+    WlrLayershell.namespace: "omarchy-boomux-notice"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     mask: Region {}
@@ -2447,7 +2844,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: root.terminalNoticeWorkspace
+          text: root.noticeTitle
           color: Color.popups.text
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -2456,7 +2853,7 @@ Panel {
         }
         Text {
           width: parent.width
-          text: root.terminalNoticeName
+          text: root.noticeDetail
           color: Util.alpha(Color.popups.text, 0.72)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -2510,14 +2907,16 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: root.paletteOpen ? paletteSearchField : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
-    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, Style.space(650))
+    contentHeight: panel.fittedContentHeight(root.paletteOpen
+      ? paletteColumn.implicitHeight : contentColumn.implicitHeight, Style.space(650))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editing || workspaceDropdown.popupOpen || scheduleDropdown.popupOpen
+      blocked: root.paletteOpen || root.editing || workspaceDropdown.popupOpen
+        || scheduleDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
         if (root.itemToRemove && (dx !== 0 || dy !== 0))
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
@@ -2546,18 +2945,228 @@ Panel {
         else if (text === "3") root.selectTab("schedules")
         else if (text === "4") root.selectTab("nodes")
         else if ((text === "a" || text === "A") && root.activeTab === "nodes"
-            && root.federationAvailable) root.addNode()
+            && root.federationAvailable) root.createNode()
         else if (text === "n" || text === "N") root.showForm("workspace")
+        else if (text === "/") root.showPalette()
         else if ((text === "d" || text === "D") && root.activeTab === "agents")
           root.dismissAgent(root.selectedItem)
       }
 
       Column {
+        id: paletteColumn
+        visible: root.paletteOpen
+        width: parent.width
+        spacing: Style.space(8)
+
+        Row {
+          width: parent.width
+          spacing: Style.space(8)
+          Column {
+            width: parent.width - paletteCloseButton.width - parent.spacing
+            spacing: Style.space(2)
+            Text {
+              width: parent.width
+              text: root.paletteMode === "workspaces" ? "Switch Workspace"
+                : (root.paletteMode === "nodes" ? "Switch Node"
+                  : (root.paletteMode === "agents" ? "Open Agent"
+                    : (root.paletteMode === "shells" ? "Open Shell"
+                      : (root.paletteMode === "launchers" ? "Invoke Launcher"
+                        : (root.paletteMode === "schedules" ? "View Schedule"
+                          : "Boomux Palette")))))
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
+            }
+            Text {
+              width: parent.width
+              text: root.activeWorkspaceLabel()
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideMiddle
+            }
+            Text {
+              visible: root.paletteSelectionLabel() !== ""
+              width: parent.width
+              text: root.paletteSelectionLabel()
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideMiddle
+            }
+          }
+          Button {
+            id: paletteCloseButton
+            width: Style.space(34)
+            height: Style.space(30)
+            text: "×"
+            tooltipText: root.paletteMode === "items" ? "Close palette" : "Back"
+            bordered: true
+            foreground: root.foreground
+            horizontalPadding: Style.space(4)
+            verticalPadding: Style.space(1)
+            onClicked: root.dismissPalette()
+          }
+        }
+
+        TextField {
+          id: paletteSearchField
+          width: parent.width
+          placeholderText: root.paletteMode === "workspaces" ? "Search Workspaces"
+            : (root.paletteMode === "nodes" ? "Search Nodes"
+              : (root.paletteMode === "agents" ? "Search Agents"
+                : (root.paletteMode === "shells" ? "Search Shells"
+                  : (root.paletteMode === "launchers" ? "Search Launchers"
+                    : (root.paletteMode === "schedules" ? "Search Schedules"
+                      : "Search actions")))))
+          foreground: root.foreground
+          onTextChanged: root.paletteQuery = text
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Down || event.key === Qt.Key_Tab) {
+              root.movePaletteSelection(1)
+            } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Backtab) {
+              root.movePaletteSelection(-1)
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              root.activatePaletteSelection()
+            } else if (event.key === Qt.Key_Escape) {
+              root.dismissPalette()
+            } else {
+              return
+            }
+            event.accepted = true
+          }
+        }
+
+        Text {
+          visible: root.paletteResults.length === 0
+          width: parent.width
+          text: root.selectedWorkspace ? "No matching commands or items" : "No Boomux Workspaces"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          horizontalAlignment: Text.AlignHCenter
+          topPadding: Style.space(24)
+          bottomPadding: Style.space(24)
+        }
+
+        ListView {
+          id: paletteList
+          visible: root.paletteResults.length > 0
+          width: parent.width
+          implicitHeight: Math.min(contentHeight, Style.space(450))
+          model: root.paletteResults
+          spacing: Style.space(3)
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          currentIndex: root.paletteSelectedIndex
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+          delegate: Rectangle {
+            required property var modelData
+            required property int index
+            readonly property bool entryEnabled: root.paletteEntryEnabled(modelData)
+            width: ListView.view.width
+            height: Style.space(58)
+            radius: Style.cornerRadius
+            opacity: entryEnabled ? 1 : 0.48
+            color: index === root.paletteSelectedIndex
+              ? Style.selectedFillFor(root.foreground, Color.accent)
+              : (paletteEntryMouse.containsMouse
+                ? Util.alpha(root.foreground, 0.06) : "transparent")
+
+            Text {
+              id: paletteEntryGlyph
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              text: modelData.action === "open-workspace" ? "▶"
+                : (modelData.action === "open-item" ? "↗"
+                  : (modelData.action === "create-workspace"
+                    || modelData.action === "create-shell"
+                    || modelData.action === "start-agent"
+                    || modelData.action === "create-node" ? "+"
+                    : (modelData.action === "choose-workspace"
+                      || modelData.action === "switch-workspace" ? ">" : "◆")))
+              color: modelData.action === "remove-workspace" ? root.urgent
+                : (modelData.selected ? Color.accent : root.dim)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+            Column {
+              anchors.left: paletteEntryGlyph.right
+              anchors.leftMargin: Style.space(10)
+              anchors.right: paletteRemoveButton.visible ? paletteRemoveButton.left : parent.right
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: String(modelData.title)
+                color: modelData.action === "remove-workspace" ? root.urgent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: index === root.paletteSelectedIndex
+                elide: Text.ElideRight
+              }
+              Text {
+                width: parent.width
+                text: String(modelData.subtitle || "")
+                  + (parent.parent.entryEnabled ? "" : " · unavailable")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideMiddle
+              }
+            }
+            MouseArea {
+              id: paletteEntryMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: parent.entryEnabled
+              onEntered: root.paletteSelectedIndex = index
+              onClicked: root.activatePaletteEntry(modelData)
+            }
+            Button {
+              id: paletteRemoveButton
+              visible: root.paletteItemCanRemove(modelData)
+              z: 1
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Remove"
+              tooltipText: modelData.target_type === "terminal"
+                ? "Close and remove the exact backing Shell" : "Remove item"
+              bordered: true
+              enabled: root.paletteItemCanRemove(modelData)
+              foreground: root.urgent
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(6)
+              verticalPadding: Style.space(2)
+              onClicked: root.requestRemoveItem(root.paletteItem(modelData))
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: "Type to filter · ↑/↓ select · Enter run · Esc back"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
+        }
+      }
+
+      Column {
         id: contentColumn
+        visible: !root.paletteOpen
         width: parent.width
         spacing: Style.space(10)
 
         PanelHero {
+          visible: !root.formFromPalette
           width: parent.width
           title: "Boomux"
           foreground: root.foreground
@@ -2572,25 +3181,44 @@ Panel {
             }
           }
           trailingControl: Component {
-            Button {
-              text: "Open TUI"
-              iconText: ""
-              tooltipText: root.cliAvailable ? "Open the Boomux dashboard"
-                : "Install Boomux to open the dashboard"
-              bordered: true
-              enabled: root.cliAvailable
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.body
-              iconSize: Style.font.body
-              horizontalPadding: Style.space(5)
-              verticalPadding: Style.space(2)
-              onClicked: root.openDashboard()
+            Row {
+              spacing: Style.space(5)
+              Button {
+                text: "Palette"
+                iconText: ""
+                tooltipText: root.cliAvailable ? "Open the Boomux command palette"
+                  : "Install Boomux to open the palette"
+                bordered: true
+                enabled: root.cliAvailable
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                iconSize: Style.font.body
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: root.showPalette()
+              }
+              Button {
+                text: "Open TUI"
+                iconText: ""
+                tooltipText: root.cliAvailable ? "Open the Boomux dashboard"
+                  : "Install Boomux to open the dashboard"
+                bordered: true
+                enabled: root.cliAvailable
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                iconSize: Style.font.body
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: root.openDashboard()
+              }
             }
           }
         }
 
         Row {
+          visible: !root.formFromPalette
           width: parent.width
           spacing: Style.space(6)
           Button {
@@ -2637,10 +3265,13 @@ Panel {
           }
         }
 
-        PanelSeparator { foreground: root.foreground }
+        PanelSeparator {
+          visible: !root.formFromPalette
+          foreground: root.foreground
+        }
 
         Item {
-          visible: root.updateAvailable
+          visible: root.updateAvailable && !root.formFromPalette
           width: parent.width
           implicitHeight: updateColumn.implicitHeight
 
@@ -2680,7 +3311,7 @@ Panel {
         }
 
         Item {
-          visible: root.capabilitiesReady && !root.cliAvailable
+          visible: root.capabilitiesReady && !root.cliAvailable && !root.formFromPalette
           width: parent.width
           implicitHeight: installColumn.implicitHeight
 
@@ -2737,8 +3368,8 @@ Panel {
             PanelSectionHeader {
               width: parent.width
               text: root.directoryPickerOpen ? "CHOOSE DIRECTORY"
-                : (root.formMode === "workspace" ? "NEW WORKSPACE"
-                  : (root.formMode === "shell" ? "ADD SHELL" : "START AGENT"))
+                : (root.formMode === "workspace" ? "CREATE WORKSPACE"
+                  : (root.formMode === "shell" ? "CREATE SHELL" : "START AGENT"))
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -3375,7 +4006,7 @@ Panel {
               }
               Button {
                 id: newWorkspaceButton
-                text: "New Workspace"
+                text: "Create Workspace"
                 iconText: "+"
                 tooltipText: "Create workspace"
                 bordered: true
@@ -3470,10 +4101,10 @@ Panel {
                   }
                   Button {
                     width: (parent.width - parent.spacing * 2) / 3
-                    text: "Shell"
+                    text: "Create Shell"
                     iconText: "+"
                      tooltipText: root.workspaceCreationReason(root.workspaceDetail)
-                       || "Add shell to selected Workspace"
+                       || "Create Shell in selected Workspace"
                     bordered: true
                      enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
                     foreground: root.foreground
@@ -3483,7 +4114,7 @@ Panel {
                   }
                   Button {
                     width: (parent.width - parent.spacing * 2) / 3
-                    text: "Agent"
+                    text: "Start Agent"
                     iconText: "+"
                      tooltipText: root.workspaceCreationReason(root.workspaceDetail)
                        || "Start Agent in selected Workspace"
@@ -3517,7 +4148,7 @@ Panel {
                 Text {
                   visible: root.workspaceItems.length === 0
                   width: parent.width
-                  text: "Empty workspace · add a shell or Agent"
+                  text: "Empty workspace · create a Shell or start an Agent"
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -3908,16 +4539,16 @@ Panel {
             Row {
               width: parent.width
               PanelSectionHeader {
-                width: parent.width - (addNodeButton.visible ? addNodeButton.width : 0)
+                width: parent.width - (createNodeButton.visible ? createNodeButton.width : 0)
                 anchors.verticalCenter: parent.verticalCenter
                 text: "NODES"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
               Button {
-                id: addNodeButton
+                id: createNodeButton
                 visible: root.federationAvailable
-                text: "Add Node"
+                text: "Create Node"
                 iconText: "+"
                 tooltipText: "Open guided Node setup"
                 bordered: true
@@ -3926,7 +4557,7 @@ Panel {
                 iconSize: Style.font.body
                 horizontalPadding: Style.space(6)
                 verticalPadding: Style.space(2)
-                onClicked: root.addNode()
+                onClicked: root.createNode()
               }
             }
 
@@ -4110,7 +4741,7 @@ Panel {
             Text {
               visible: root.nodes.length > 0
               width: parent.width
-              text: "Up/Down selects · A adds a Node · Tab switches · R refreshes"
+              text: "Up/Down selects · A creates a Node · Tab switches · R refreshes"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -4147,6 +4778,19 @@ Panel {
         cornerRadius: Style.cornerRadius
         onCanceled: root.cancelRemoveItem()
         onConfirmed: root.confirmRemoveItem()
+      }
+      Item {
+        id: removeDialogKeyHandler
+        width: 1
+        height: 1
+        focus: root.itemToRemove !== null
+        Keys.onPressed: function(event) {
+          if (!root.itemToRemove) return
+          if (event.key === Qt.Key_Up || event.key === Qt.Key_Down)
+            removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
+          else removeItemDialog.handleKey(event)
+          event.accepted = true
+        }
       }
     }
   }

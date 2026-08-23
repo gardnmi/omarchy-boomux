@@ -37,6 +37,68 @@ test("formats compact relative Agent update times", () => {
   expect(model.relativeTime(0, now)).toBe("unknown")
 })
 
+test("builds qualified command palette entries and filters their metadata", () => {
+  const workspace = { key: "global\u001fworkspace", id: "workspace", name: "Release",
+    is_global: true }
+  const items = [
+    { key: "node-a\u001fshared", kind: "agent", name: "review", node_alias: "local",
+      status: "working", detail: "opencode" },
+    { key: "node-a\u001fshared", kind: "launcher", name: "server", node_alias: "local",
+      status: "on workspace open", detail: "bun run dev" }
+  ]
+  const nodes = [
+    { node_id: "node-a", alias: "local", workspace_owner_eligible: true },
+    { node_id: "node-b", alias: "build", workspace_owner_eligible: true }
+  ]
+  const schedules = [{ key: "node-a\u001fschedule", workspace_key: workspace.key,
+    name: "nightly", state: "enabled", node_alias: "local", integration: "opencode" }]
+  const entries = model.paletteEntries("items", workspace, items, [workspace], nodes,
+    "node-b", schedules)
+  expect(entries.map(entry => entry.action)).toEqual([
+    "choose-workspace", "create-workspace", "open-workspace", "open-agents",
+    "open-shells", "invoke-launchers", "view-schedules", "create-shell",
+    "start-agent", "switch-node", "create-node", "remove-workspace"
+  ])
+  expect(entries.find(entry => entry.action === "create-shell").subtitle).toContain("build")
+  const agentEntries = model.paletteEntries("agents", workspace, items, [workspace], nodes,
+    "node-b", schedules)
+  const launcherEntries = model.paletteEntries("launchers", workspace, items, [workspace],
+    nodes, "node-b", schedules)
+  expect(agentEntries.concat(launcherEntries).map(entry => entry.id)).toEqual([
+    "item:terminal:node-a\u001fshared", "item:launcher:node-a\u001fshared"
+  ])
+  expect(model.filterPaletteEntries(launcherEntries, "BUN RUN").map(entry => entry.title))
+    .toEqual(["server"])
+  expect(model.filterPaletteEntries(agentEntries.concat(launcherEntries), "local")
+    .map(entry => entry.title))
+    .toEqual(["review", "server"])
+  expect(model.filterPaletteEntries(entries, "switch node").map(entry => entry.title))
+    .toEqual(["Switch Node..."])
+  expect(model.paletteEntries("schedules", workspace, items, [workspace], nodes, "node-b",
+    schedules)).toEqual([expect.objectContaining({
+    action: "view-schedule", schedule_key: "node-a\u001fschedule", title: "nightly"
+  })])
+})
+
+test("limits palette switching to coordinated Workspaces and eligible Nodes", () => {
+  const current = { key: "global\u001fone", name: "one", is_global: true }
+  const next = { key: "global\u001ftwo", name: "two", is_global: true }
+  const closing = { key: "global\u001fclosing", name: "closing", is_global: true,
+    closing: true }
+  const external = { key: "external\u001fnode\u001fowner", name: "owner",
+    is_global: false, is_external: true }
+  expect(model.paletteEntries("workspaces", current, [],
+    [current, next, closing, external], [], "").map(entry => entry.workspace_key)).toEqual([
+    current.key, next.key
+  ])
+  expect(model.paletteEntries("nodes", current, [], [], [
+    { node_id: "node-a", alias: "local", workspace_owner_eligible: true },
+    { node_id: "node-b", alias: "offline", workspace_owner_eligible: false }
+  ], "node-a")).toEqual([expect.objectContaining({
+    node_id: "node-a", selected: true, action: "select-node"
+  })])
+})
+
 test("normalizes the exact qualified focused terminal", () => {
   expect(model.normalizeFocusedTerminal({
     revision: 42,
@@ -100,6 +162,46 @@ test("discovers Agent hosts instead of hard-coding host buttons", () => {
   expect(panel).not.toContain('text: "Pi"')
 })
 
+test("opens a keyboard-owned palette through plugin IPC", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("function palette(): void { root.togglePalette() }")
+  expect(panel).toContain('text: "Palette"')
+  expect(panel).toContain("onClicked: root.showPalette()")
+  expect(panel).toContain("focusTarget: root.paletteOpen ? paletteSearchField : keyCatcher")
+  expect(panel).toContain('showForm(entry.action === "create-shell" ? "shell" : "agent", targetNodeId, true)')
+  expect(panel).toContain("function paletteItem(entry)")
+  expect(panel).toContain("!openProcess.running && !executionOpenProcess.running")
+  expect(panel).toContain("visible: !root.formFromPalette")
+  expect(panel).toContain('setPaletteMode("agents")')
+  expect(panel).toContain('setPaletteMode("shells")')
+  expect(panel).toContain('setPaletteMode("launchers")')
+  expect(panel).toContain('setPaletteMode("schedules")')
+  expect(panel).toContain('selectSchedule(targetSchedule.key)')
+  expect(panel).toContain("function paletteItemCanRemove(entry)")
+  expect(panel).toContain("onClicked: root.requestRemoveItem(root.paletteItem(modelData))")
+  expect(panel).toContain('entry.action === "remove-workspace"')
+  expect(panel).not.toContain('action: "remove-schedule"')
+  expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
+  expect(panel).toContain("removeItemDialog.handleKey(event)")
+  expect(panel).toContain('(activeTab === "schedules" || paletteOpen)')
+  expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
+})
+
+test("exits the palette and confirms Workspace and Node selections", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel.match(/closePaletteAfterSelection\(\)/g)).toHaveLength(4)
+  expect(panel).toContain('showNotice("Creation Node", String(node.alias), nodeScreen, true)')
+  expect(panel).toContain('showNotice("Default Workspace", active.name,')
+  expect(panel).toContain('showNotice("Workspace selection failed", root.actionMessage,')
+  expect(panel).toContain('WlrLayershell.namespace: "omarchy-boomux-notice"')
+  expect(panel).toContain("if (Date.now() < noticeProtectedUntil) return")
+  expect(panel).toContain('showNotice("Workspace opened", pending.name,')
+  expect(panel).toContain('showNotice("Workspace open warning", pending.unavailablePlacements + " placement"')
+  expect(panel).toContain('showNotice("Workspace open warning", root.actionMessage,')
+  expect(panel).toContain('return "Active Workspace: " + String(focusedWorkspace.name)')
+  expect(panel).toContain('return "Palette: " + String(selectedWorkspace.name) + addTarget')
+})
+
 test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('["boomux", "web", "start", "--tailscale", "--json"]')
@@ -112,6 +214,12 @@ test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   expect(panel).toContain('text: "Access agents through Tailnet."')
   expect(panel).toContain('root.webRunning ? "Open" : "Start Web"')
   expect(panel.indexOf('text: "TAILNET WEB"')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
+})
+
+test("bounds passive update responses before collecting stdout", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel.match(/"--max-filesize", "65536"/g)).toHaveLength(2)
+  expect(panel).not.toContain('"--location"')
 })
 
 test("uses Boomux events to refresh focused terminal state promptly", () => {
@@ -163,10 +271,10 @@ test("refreshes the installed CLI version after an upgrade", () => {
   expect(panel).toContain('if (text === "r" || text === "R") root.refreshInstalledState()')
 })
 
-test("keeps Add Node inside the Nodes surface", () => {
+test("keeps Create Node inside the Nodes surface", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('text: "NODES"')
-  expect(panel).toContain('text: "Add Node"')
+  expect(panel).toContain('text: "Create Node"')
   expect(panel).toContain('root.activeTab === "nodes"')
 })
 
