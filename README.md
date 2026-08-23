@@ -19,12 +19,14 @@ Omarchy bar.
 - Groups Shells, Agents, launchers, and Schedules by global Workspace task
 - Projects resources from multiple Node placements into one Workspace item list
 - Opens complete workspaces or individual managed items
+- Makes the explicitly selected coordinated Workspace the default for later CLI creation
+- Shows the Workspace and terminal name when focus follows the pointer into a managed terminal
 - Removes locally owned workspace items after confirming their specific impact
-- Creates empty Workspaces from configured project-name suggestions or a custom name
-- Opens an in-panel directory picker for Shell and Agent directories
+- Creates Workspaces from an existing project or a new name and directory
+- Opens an in-panel directory picker for Workspace, Shell, and Agent directories
 - Prefills editable shell and Agent names from Boomux suggestions
-- Starts new OpenCode or Pi command shells and lets their lifecycle integration
-  register the Agent
+- Discovers available integrated Agent hosts on the selected Node and starts the
+  selected host with its exact advertised executable
 - Acknowledges local durable attention when you open its Agent
 - Lists Schedules across workspaces with scheduler status and their latest run
 - Runs Schedules immediately and pauses or resumes future timed dispatch
@@ -49,7 +51,7 @@ Omarchy bar.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system
-- [Boomux](https://github.com/gardnmi/boomux) `0.19.0` or newer available on
+- [Boomux](https://github.com/gardnmi/boomux) `0.27.0` or newer available on
   `PATH`
 - A configured native terminal supported by `xdg-terminal-exec`
 - `curl` for optional passive update detection
@@ -58,14 +60,18 @@ Full global Workspace support requires Boomux protocol 38. Protocol 33 through
 37 retain the qualified owner-local fallback described below.
 
 Workspace management works with Boomux alone. Agent states and Agent creation
-require the corresponding coding-agent executable and Boomux lifecycle
-integration. For OpenCode or Pi, run:
+require a coding-agent executable and its current Boomux lifecycle integration.
+List the supported hosts and configure one with:
 
 ```bash
-boomux integration setup opencode
-# or
-boomux integration setup pi
+boomux integration list
+boomux integration setup <name>
 ```
+
+The Agent form queries `boomux integration status --json` on the selected Node
+and lists only hosts whose executable is available and whose Boomux lifecycle
+asset is current. The available catalog can include OpenCode, Pi, Claude Code,
+Codex, Kiro CLI, and later hosts advertised by Boomux without a plugin update.
 
 The plugin does not automatically start a stopped Boomux daemon. Launch Boomux
 or open a managed workspace before using the panel.
@@ -119,6 +125,47 @@ omarchy plugin enable io.github.gardnmi.boomux --section right
 | `R` | Refresh immediately |
 | Escape | Close the panel |
 
+Selecting a coordinated Workspace in the **Workspaces** section also stores its
+exact ID as Boomux's local CLI default. Selecting an external owner Workspace
+clears that default so later commands cannot silently target the previous
+Workspace. Boomux resolves explicit Workspace arguments before this selection.
+
+Manage the same selection directly:
+
+```console
+# Select a Workspace
+boomux workspace select <NAME_OR_ID>
+
+# Show the selected Workspace
+boomux workspace current
+
+# Clear the selection
+boomux workspace clear
+```
+
+After selecting, omit the Workspace from context-required commands:
+
+```console
+boomux shell create --name dev --cwd .
+boomux shell suggest-name
+boomux launcher list
+boomux schedule create ...
+```
+
+An explicitly supplied Workspace still overrides the selection:
+
+```console
+boomux shell create other-workspace --name dev --cwd .
+```
+
+To create a randomly named Shell in the selected Workspace and immediately open
+that exact Shell in a native terminal, bind `Ctrl+Super+Enter` to:
+
+```lua
+hl.unbind("SUPER + CTRL + RETURN")
+o.bind("SUPER + CTRL + RETURN", "New Boomux Shell", "boomux shell create --open")
+```
+
 The **Open TUI** button launches the Boomux dashboard in a new native terminal
 window. The Nodes tab keeps **Add Node** at section scope and opens Boomux's
 guided Node setup in a local native terminal, where Boomux alone handles SSH
@@ -132,8 +179,10 @@ Nodes into a Workspace filter. Selecting a Workspace shows its items and scoped
 Workspace dropdown. Clicking a shell, command, or Agent opens its managed terminal;
 clicking a launcher invokes that detached command. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
-terminal size and input stream. Expanded Workspace details remain inside the
-panel and scroll when their items exceed the available detail surface.
+terminal size and input stream. When Hyprland focus follows the pointer into a
+managed terminal, a passive lower-right popup briefly shows its authoritative
+Workspace and terminal names. Expanded Workspace details remain inside the panel
+and scroll when their items exceed the available detail surface.
 
 The Agents tab shows **Serve Web via Tailscale** when the gateway is stopped.
 Boomux starts it as a detached process only while the daemon is already running,
@@ -142,15 +191,22 @@ returns the exact MagicDNS URL. **Open Boomux Web** launches that URL in the
 default browser. **Stop** shuts down only the gateway and removes only
 Boomux-owned Serve routes; unrelated routes and the daemon remain running.
 
-**New Workspace** creates empty coordinator metadata and offers the same project
-names Boomux discovers from configured `[projects].roots`. Search and select a
-project to use its canonical name, or choose **Custom** to enter another name.
-The displayed project path is a discovery hint only: creating the Workspace does
-not assign a Node, persist that path, create a Shell, or start a process. Choose
-the exact Node and directory later when adding the first Shell or Agent; that
-resource establishes the placement. The panel never invents a placement when
-several Nodes are eligible. **Browse** is available in Shell and Agent forms for
-local paths; remote paths come only from Boomux's owner-routed services.
+**New Workspace** first asks whether to use an **Existing Project** or **Create
+New**. Existing Project lists the same canonical project names and paths Boomux
+discovers from configured `[projects].roots`. Create New requires a Workspace
+name and default directory and provides the same local **Browse** surface used by
+Shell and Agent forms. Both flows require an explicit eligible Node when Boomux
+cannot choose one unambiguously.
+
+For a coordinated Workspace, creation first records the coordinator metadata and
+then creates one randomly named pending Shell at the selected path. That Shell
+does not start a process, but it establishes the exact Node placement and makes
+the directory durable as that placement's default for later Shells. A failure in
+the second step leaves the empty Workspace visible and reports the error instead
+of inventing or retrying a placement. Remote project paths come only from
+Boomux's owner-routed project service; the file browser never interprets them
+locally. Legacy local Workspace creation continues to store its default directory
+without creating an initial Shell.
 
 Configure the suggestions in Boomux, for example:
 
@@ -181,10 +237,10 @@ takes over active terminal controllers, and restarts exited shells. Workspace
 restore is non-transactional, so some items can open even if another item fails.
 Opening an individual exited shell or command restarts its stored process.
 
-Agent creation records and opens a command-backed shell whose exact command is
-`opencode` or `pi`. The installed lifecycle integration creates the authoritative
-Agent record after the coding-agent host starts; the plugin does not fabricate
-Agent lifecycle state.
+Agent creation records and opens a command-backed shell using the exact
+executable returned by the selected Node's Boomux integration status. The
+installed lifecycle integration creates the authoritative Agent record after the
+coding-agent host starts; the plugin does not fabricate Agent lifecycle state.
 
 Shell and Agent forms request an unreserved generated name from Boomux for the
 exact selected owner placement when one already exists. The field remains editable, and typing is never

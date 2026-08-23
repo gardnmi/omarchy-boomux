@@ -81,6 +81,27 @@ function normalizeWebStatus(data) {
   }
 }
 
+function availableAgentHosts(data) {
+  if (!data || !Array.isArray(data.integrations)) throw new Error("missing integrations")
+  var hosts = []
+  for (var i = 0; i < data.integrations.length; i++) {
+    var integration = data.integrations[i]
+    if (!integration || typeof integration.name !== "string"
+        || typeof integration.display_name !== "string"
+        || !integration.host || !integration.asset)
+      throw new Error("invalid integration status")
+    if (integration.host.state !== "available" || integration.asset.state !== "current") continue
+    var executable = String(integration.host.executable || "")
+    if (executable === "") continue
+    hosts.push({
+      name: String(integration.name),
+      label: String(integration.display_name),
+      command: [executable]
+    })
+  }
+  return hosts
+}
+
 function shellOwner(owner) {
   if (typeof owner === "string") return owner
   return owner && owner.kind === "schedule" ? "schedule" : "user"
@@ -476,7 +497,21 @@ function normalizeNodeSnapshot(data) {
     shells: shells,
     agents: agents,
     schedules: schedules,
-    executions: executions
+    executions: executions,
+    focused_terminal: normalizeFocusedTerminal(data.focused_terminal)
+  }
+}
+
+function normalizeFocusedTerminal(source) {
+  if (source === undefined || source === null) return null
+  if (!source.shell || typeof source.shell.node_id !== "string"
+      || typeof source.shell.inner_id !== "string"
+      || !Number.isFinite(Number(source.revision)) || Number(source.revision) <= 0)
+    throw new Error("invalid focused terminal")
+  return {
+    revision: Number(source.revision),
+    node_id: String(source.shell.node_id),
+    shell_id: String(source.shell.inner_id)
   }
 }
 
@@ -558,6 +593,11 @@ function workspaceCreateCommand(name, cwd, coordinated) {
   var command = ["boomux", "workspace", "create", String(name)]
   if (!coordinated && cwd) command.push("--cwd", String(cwd))
   return command
+}
+
+function initialWorkspaceShellCommand(workspace, cwd, nodeId) {
+  return ["boomux", "shell", "create", String(workspace.id),
+    "--node", String(nodeId), "--cwd", String(cwd)]
 }
 
 function workspaceCreationBlockReason(workspace, eligibleNodeCount) {
@@ -694,11 +734,13 @@ if (typeof module !== "undefined") module.exports = {
   qualifiedMatches: qualifiedMatches,
   parseEnvelope: parseEnvelope,
   normalizeWebStatus: normalizeWebStatus,
+  availableAgentHosts: availableAgentHosts,
   normalizeAgent: normalizeAgent,
   normalizeShell: normalizeShell,
   normalizeLauncher: normalizeLauncher,
   normalizeSchedule: normalizeSchedule,
   normalizeExecution: normalizeExecution,
+  normalizeFocusedTerminal: normalizeFocusedTerminal,
   normalizeNodeSnapshot: normalizeNodeSnapshot,
   mergeSnapshotExecutions: mergeSnapshotExecutions,
   normalizeWorkspaceDetail: normalizeWorkspaceDetail,
@@ -713,6 +755,7 @@ if (typeof module !== "undefined") module.exports = {
   eligibleNodes: eligibleNodes,
   defaultCreationNodeId: defaultCreationNodeId,
   workspaceCreateCommand: workspaceCreateCommand,
+  initialWorkspaceShellCommand: initialWorkspaceShellCommand,
   workspaceCreationBlockReason: workspaceCreationBlockReason,
   suggestionIdentity: suggestionIdentity,
   suggestionResponseMatches: suggestionResponseMatches,
