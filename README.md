@@ -1,26 +1,39 @@
 # Boomux for Omarchy
 
-Monitor interactive Boomux Agents, manage coordinator-owned global Workspaces
-across federated Nodes, and operate recurring Agent Schedules without leaving the
-Omarchy bar.
+Navigate coordinator-owned global Workspaces, monitor interactive Boomux Agents,
+and operate recurring Agent Schedules from a full-height Omarchy side pane.
 
 ![Boomux Agent status in the Omarchy bar](assets/agents.png)
 
 ## Features
 
 - Keeps active Agents in a dedicated status tab
+- Slides out from the left or right screen edge, with a configurable width
+- Reserves its open screen edge so Hyprland reflows tiled windows beside it
+- Keeps an expandable Workspace tree visible above the Agent, Schedule, and Node tabs
+- Highlights the Boomux special Workspace currently presented by Hyprland
 - Starts, opens, and stops Boomux Web with explicit Tailscale Serve exposure
 - Excludes schedule-owned Agents handled by Boomux scheduling
 - Shows live `working`, `idle`, and `blocked` Agent states
 - Sorts Agents by their latest authoritative update and shows compact relative
   times such as `5m ago`
 - Highlights finished work and blocked attention in the bar
+- Shows the active Boomux special Workspace name persistently beside the bomb
+- Opens the Workspaces panel on the exact Workspace when its persistent
+  Workspace or Shell identity label is clicked
+- Shows the active Boomux Shell name and its Workspace affiliation, including
+  when its terminal window has been moved outside the Boomux Workspace layer
 - Keeps finished markers visible until you open the corresponding Agent
 - Groups Shells, Agents, launchers, and Schedules by global Workspace task
 - Projects resources from multiple Node placements into one Workspace item list
 - Opens complete workspaces or individual managed items
+- Opens Agent and Shell terminals directly in their owning Boomux Workspace
+  layer when the CLI advertises coordinated desktop placement
+- Restores every Workspace item and reveals its desktop layer from the
+  Workspaces panel's **Open** action
 - Makes the explicitly selected coordinated Workspace the default for later CLI creation
-- Shows the Workspace and terminal name when focus follows the pointer into a managed terminal
+- Shows a transient Workspace and Shell notice when focus follows the pointer
+  into a managed terminal
 - Removes locally owned workspace items after confirming their specific impact
 - Creates Workspaces from an existing project or a new name and directory
 - Opens an in-panel directory picker for Workspace, Shell, and Agent directories
@@ -53,6 +66,8 @@ Omarchy bar.
 - Omarchy with the Quattro shell plugin system
 - [Boomux](https://github.com/gardnmi/boomux) `0.27.0` or newer available on
   `PATH`
+- The active-Workspace bar label requires a Boomux build advertising
+  `hyprland_special_workspaces` with `[desktop] workspace_layer = "hyprland-special"`
 - A configured native terminal supported by `xdg-terminal-exec`
 - `curl` for optional passive update detection
 
@@ -110,66 +125,69 @@ The widget defaults to the right bar section. If you installed it without
 omarchy plugin enable io.github.gardnmi.boomux --section right
 ```
 
+The pane itself opens from the left edge by default. Use the in-pane **Settings**
+button to change its edge and width. Omarchy persists those inline plugin
+settings in `~/.config/omarchy/shell.json`; the equivalent entry is:
+
+```json
+{
+  "id": "io.github.gardnmi.boomux",
+  "side": "right",
+  "paneWidth": 400
+}
+```
+
+`side` accepts `left` or `right`. `paneWidth` is clamped to a usable range.
+While the pane is open, its output's usable area excludes the pane width; tiled
+windows reflow into the remaining space. Clicking those windows transfers focus
+without closing the pane. Opening another Omarchy plugin leaves the Boomux pane
+and its reservation in place; ordinary plugin popouts continue using Omarchy's
+single-popout behavior among themselves. Closing Boomux explicitly releases its
+reservation.
+
 ## Use
 
 | Input | Action |
 | --- | --- |
 | Left click | Open or close the panel |
 | Right click | Refresh immediately |
-| **Palette** button | Open the command palette from the panel |
-| Tab or `1` / `2` / `3` / `4` | Switch between Agents, Workspaces, Schedules, and Nodes |
+| **Settings** button | Configure the pane or open the active Boomux config in a terminal |
+| Workspace row | Select and immediately reveal that Workspace's existing desktop layer while keeping the pane open |
+| Workspace chevron | Expand or collapse its Shells, commands, and launchers without opening it |
+| Agent, Shell, or command row | Open that terminal while keeping the pane open |
+| Tab or `1` / `2` / `3` | Switch the lower section between Agents, Schedules, and Nodes |
 | `A` | From Nodes, open interactive Create Node in a native terminal |
-| Up / Down | Select an Agent, workspace, Schedule, or Node |
-| Enter | Open a selected Agent or select a workspace or Schedule |
+| Up / Down | Move selection in the active lower Agents, Schedules, or Nodes section |
+| Enter | Open the selected Agent or select the highlighted Schedule |
 | `D` | Dismiss the selected Agent notification |
 | `N` | Create a workspace |
-| `/` | Open the command palette |
 | `R` | Refresh immediately |
 | Escape | Close the panel |
 
-For direct keyboard access, bind the currently unused `Super+B` shortcut to the
-palette IPC method:
+For direct keyboard access, bind `Super+B` to the plugin panel. Pressing it
+again closes the pane; Boomux special Workspaces are opened only after choosing
+a Workspace row:
 
 ```lua
-o.bind("SUPER + B", "Boomux Palette",
-  "omarchy-shell io.github.gardnmi.boomux palette")
+hl.unbind("SUPER + B")
+o.bind("SUPER + B", "Toggle Boomux panel",
+  "omarchy-shell io.github.gardnmi.boomux toggle")
 ```
 
-The palette opens on the selected Workspace with grouped **Open Agent**, **Open
-Shell**, **Invoke Launcher**, and **View Schedule** commands. Each command opens
-a searchable picker for that resource type across every Node. **View Schedule**
-navigates to the existing prompt-free Schedule details without running it or
-opening an execution. Search by item name, kind, status, path, or Node alias. Its
-header shows the authoritative **Active
-Workspace** for the focused managed terminal. When that differs, it separately
-labels the **Palette** Workspace whose items are listed. **Open Workspace**
-performs the explicit Boomux fan-out action, while opening one item targets only
-that qualified resource.
-**Switch Workspace** changes the persisted coordinated Workspace default without
-opening anything. **Create Workspace** starts the existing project/directory
-flow. **Switch Node** changes only where **Create Shell** and **Start Agent**
-create their item; it does not hide items on other Nodes. **Create Node** opens
-guided registration in a native terminal. Choosing a Workspace or Node closes
-the palette and confirms the new default or creation Node in the same lower-right notice used for focused
-terminals. Workspace confirmation appears only after Boomux accepts the durable
-selection. Opening a Workspace from the palette also closes it and reports the
-open result in that notice. Because Workspace restore is non-transactional, a
-known unavailable placement is reported as **Workspace open warning** with the
-unavailable placement count and a note that available items were attempted.
-Other nonzero results use the same warning because the current human-only
-command cannot distinguish partial from total resource failure.
-Escape returns from Workspace or Node selection before closing the palette.
+The Settings button opens an in-pane view for moving the pane between the left
+and right screen edges and adjusting its width in 20-pixel steps. Changes mutate
+the plugin's Omarchy entry through the inline settings API. **Open Boomux config** launches
+`boomux config edit` in a native terminal so Boomux resolves the active writable
+configuration layer itself.
 
-**Remove Workspace** uses the existing full-scope confirmation before removing
-the selected Workspace and its managed resources. Agent and Shell picker rows
-offer **Remove** only for locally owned backing Shells and use the same exact-ID
-confirmation flow. Schedule picker rows remain view-only; Schedule removal is
-not exposed until its public exact-ID confirmation flow is implemented.
-
-Selecting a coordinated Workspace in the **Workspaces** section also stores its
-exact ID as Boomux's local CLI default. Selecting an external owner Workspace
-clears that default so later commands cannot silently target the previous
-Workspace. Boomux resolves explicit Workspace arguments before this selection.
+Clicking a coordinated Workspace row presents its desktop layer and stores its
+exact ID as Boomux's local CLI default without restoring every Shell or invoking
+launchers. Expanding the row does not change the default or open anything. The
+pane remains open over the revealed special Workspace until you close it. Older
+Boomux CLIs fall back to full Workspace restore and report completion or partial
+failure in the lower-corner notice. Clicking an external owner Workspace clears the coordinated
+default so later commands cannot silently target the previous Workspace. Boomux
+resolves explicit Workspace arguments before this selection.
 
 Manage the same selection directly:
 
@@ -207,18 +225,34 @@ hl.unbind("SUPER + CTRL + RETURN")
 o.bind("SUPER + CTRL + RETURN", "New Boomux Shell", "boomux shell create --open")
 ```
 
-The **Open TUI** button launches the Boomux dashboard in a new native terminal
-window. The Nodes tab keeps **Create Node** at section scope and opens Boomux's
+The terminal icon in the pane header launches the Boomux dashboard in a new
+native terminal window. The Nodes tab keeps **Create Node** at section scope and opens Boomux's
 guided Node setup in a local native terminal, where Boomux alone handles SSH
 authentication, remote install details, and confirmation. The terminal remains
 open after setup so its success or failure is visible. The Node table keeps the
 full health state visible and marks stale projections as cached. Selecting a
 Node shows its exact ID, observed protocol and time, resource counts, and
 Workspace-owner eligibility. It does not display SSH routes or turn
-Nodes into a Workspace filter. Selecting a Workspace shows its items and scoped
-**Open**, **Shell**, **Agent**, and **Remove Workspace** actions below the
-Workspace dropdown. Clicking a shell, command, or Agent opens its managed terminal;
-clicking a launcher invokes that detached command. Opening a managed terminal
+Nodes into a Workspace filter. The upper Workspace tree remains visible while
+the lower section switches between Agents, Schedules, and Nodes. Its chevrons
+show Shells, commands, and launchers inline; clicking one opens that exact
+terminal or invokes that detached launcher. The exact Shell or command whose
+managed window currently has Hyprland focus gets a subtle accent dot and tint;
+launchers are never marked as focused. Local Shell and command rows also expose
+a confirmed **Close** action that terminates the process and removes the Shell
+definition and retained terminal state. Local launchers expose confirmed
+**Remove**, and the expanded Workspace exposes **Shell**, **Agent**, and
+**Remove** actions. Expanding with the chevron positions
+that Workspace header at the top of the tree so its visible children remain
+above the lower-section tabs. Selecting and opening a Workspace preserves the
+current tree viewport. Workspace rows remain selectable while an earlier open
+is finishing; the most recently selected Workspace opens next. Drag the thin divider
+above the tabs up or down to resize the Workspace tree and lower section; both
+surfaces retain a usable minimum height. Polling refreshes preserve the current
+Workspace-tree scroll offset instead of jumping back to the first row. Pointer
+focus only updates the subtle focused-item indicator; it never expands or scrolls
+the Workspace tree. Clicking an Agent in the lower
+section opens its managed terminal without dismissing the pane. Opening a managed terminal
 takes over its writable controller so the new window receives the authoritative
 terminal size and input stream. When Hyprland focus follows the pointer into a
 managed terminal, a passive lower-right popup briefly shows its authoritative
@@ -292,7 +326,8 @@ Node; selecting another Node updates placement-specific name and path defaults.
 
 The bomb icon changes with Agent state. Blocked work uses the urgent color;
 finished work uses the accent color. The spark turns yellow while either alert
-is active. Agent rows are ordered newest-update first; the **Updated** column uses
+is active. Agent rows keep a stable Workspace-and-name order while the focused
+Agent receives a subtle accent without moving. The **Updated** column uses
 the latest lifecycle observation, durable attention observation, or initial
 registration time. Use the Agent row's **Dismiss** button or press `D` to clear a
 local finished marker and acknowledge durable attention without opening the terminal.
@@ -372,7 +407,9 @@ and data.
   after a verified remote cursor resumes. The plugin presents Boomux's durable
   projected attention after refresh; it does not derive or deliver notifications
   from health changes, execution outcomes, quiet output, or cache reseeds.
-- It does not modify Boomux or Omarchy configuration directly.
+- Pane side and width changes mutate the plugin's Omarchy entry through its
+  inline settings API. The plugin does not edit Boomux configuration itself;
+  **Open Boomux config** delegates that mutation to `boomux config edit`.
 - After a locally owned Agent terminal opens successfully, its notification is explicitly
   dismissed, or a blocked Agent reports `working` again, the plugin can run the
   local, revision-conditional `boomux attention acknowledge` command. Attention
@@ -464,7 +501,7 @@ Validate the repository with:
 
 ```bash
 omarchy plugin validate .
-qmllint -I /usr/share/omarchy/shell Panel.qml
+qmllint -I /usr/share/omarchy/shell Panel.qml SidePane.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
 bun test tests/workspace-model.test.js
