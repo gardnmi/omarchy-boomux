@@ -80,7 +80,8 @@ The sliding pane has a persistent expandable Workspace tree and three lower view
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 - **Nodes**: a health and version table with selected-Node route, helper and
   control versions, protocol, freshness, scheduler state, workload, eligibility,
-  exact identity, guided creation, guided upgrade, and local registration removal
+  exact identity, guided creation, guided reauthentication, guided upgrade, and
+  local registration removal
 
 The header Settings surface owns pane-local presentation settings. Side and
 width changes persist through Omarchy's inline plugin settings API. Opening the
@@ -129,8 +130,11 @@ or lifecycle observation.
   and published plugin manifest. Cap each response before collecting stdout and
   do not follow redirects; failures remain silent. **Create Node** and **Update**
   may only launch Boomux's guided setup or upgrade wrapper in a local native
-  terminal. Pass the exact Node ID as one argv element; never interpolate it
-  into a shell command.
+  terminal. **Authenticate** may likewise launch only Boomux's guided
+  reauthentication wrapper for an `authentication_required` Node when the local
+  CLI advertises `node_reauthentication` and daemon protocol 38 is available.
+  Pass the exact Node ID as one argv element; never interpolate it into a shell
+  command.
 - Consume federation through `boomux node snapshot --json`. Pass exact `--node`
   context to every supported remote open, inspect, host service, attention,
   Schedule, execution, and mutation command. Never queue an offline action.
@@ -182,6 +186,11 @@ or lifecycle observation.
   it only for an older helper with both local and observed remote upgrade
   capabilities. For a newer helper, show **Control machine update needed** and
   no replacement action.
+- Replace the unavailable **Create Shell** action with **Authenticate** only for
+  an `authentication_required` remote Node when the installed CLI advertises
+  `node_reauthentication` and daemon protocol 38 is available. Delegate route,
+  identity, helper, prompt-free retry, and registration validation to Boomux in
+  a native terminal.
 - Keep Node rows card-like and scannable: name plus one compact health/version
   line and a small action group. The selected summary shows route, runtime, and
   combined workload; health detail, scheduler activity, control-version warnings,

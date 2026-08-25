@@ -48,6 +48,18 @@ function guidedNodeUpgradeCommand(nodeId) {
     "boomux", "__guided-node-upgrade", String(nodeId)]
 }
 
+function nodeCanReauthenticate(node, cliFeatures, daemonProtocolVersion) {
+  return !!node && !!node.node_id && !node.local
+    && node.health === "authentication_required"
+    && Number(daemonProtocolVersion || 0) >= 38
+    && Array.isArray(cliFeatures) && cliFeatures.indexOf("node_reauthentication") >= 0
+}
+
+function guidedNodeReauthenticateCommand(nodeId) {
+  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-reauthenticate",
+    "boomux", "__guided-node-reauthenticate", String(nodeId)]
+}
+
 function boomuxSpecialWorkspaceId(name) {
   var match = String(name || "").match(
     /^special:boomux-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/)
@@ -883,6 +895,8 @@ if (typeof module !== "undefined") module.exports = {
   versionDirection: versionDirection,
   nodeCanUpgrade: nodeCanUpgrade,
   guidedNodeUpgradeCommand: guidedNodeUpgradeCommand,
+  nodeCanReauthenticate: nodeCanReauthenticate,
+  guidedNodeReauthenticateCommand: guidedNodeReauthenticateCommand,
   agentUpdatedAt: agentUpdatedAt,
   agentsByLastUpdated: agentsByLastUpdated,
   agentsByWorkspace: agentsByWorkspace,

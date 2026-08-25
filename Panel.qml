@@ -101,6 +101,7 @@ Panel {
   property string actionMessage: ""
   property string nodeShellAlias: ""
   property string nodeUpgradeAlias: ""
+  property string nodeReauthenticateAlias: ""
   property string formMode: ""
   property bool settingsOpen: false
   property string workspaceCreationMode: "choice"
@@ -428,6 +429,10 @@ Panel {
 
   function nodeCanUpgrade(node) {
     return WorkspaceModel.nodeCanUpgrade(node, cliVersion, cliFeatures)
+  }
+
+  function nodeCanReauthenticate(node) {
+    return WorkspaceModel.nodeCanReauthenticate(node, cliFeatures, daemonProtocolVersion)
   }
 
   function nodeVersionIndicator(node) {
@@ -1715,7 +1720,7 @@ Panel {
 
   function requestForgetNode(node) {
     if (!node || node.local || actionProcess.running || nodeShellProcess.running
-        || nodeUpgradeProcess.running) return
+        || nodeUpgradeProcess.running || nodeReauthenticateProcess.running) return
     removeItemDialog.selectedIndex = 0
     itemToRemove = { kind: "node", node: node }
   }
@@ -1752,7 +1757,7 @@ Panel {
     }
     if (item && item.kind === "node") {
       if (item.node.local || actionProcess.running || nodeShellProcess.running
-          || nodeUpgradeProcess.running) return
+          || nodeUpgradeProcess.running || nodeReauthenticateProcess.running) return
       pendingAction = { kind: "forget-node", key: item.node.node_id }
       actionMessage = "Forgetting " + String(item.node.alias) + "..."
       actionProcess.command = ["boomux", "node", "forget",
@@ -1840,7 +1845,7 @@ Panel {
 
   function createShellOnNode(node) {
     if (!node || node.local || nodeShellProcess.running || nodeUpgradeProcess.running
-        || !nodeIsActionable(node.node_id)) return
+        || nodeReauthenticateProcess.running || !nodeIsActionable(node.node_id)) return
     if (activeBoomuxWorkspaceId === "") {
       showNotice("Shell creation unavailable",
         "Show the Boomux Workspace where the Shell should be created",
@@ -1855,10 +1860,20 @@ Panel {
 
   function updateNode(node) {
     if (!nodeCanUpgrade(node) || nodeUpgradeProcess.running || nodeShellProcess.running
-        || actionProcess.running) return
+        || nodeReauthenticateProcess.running || actionProcess.running) return
     nodeUpgradeAlias = String(node.alias)
     nodeUpgradeProcess.command = WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)
     nodeUpgradeProcess.running = true
+    close()
+  }
+
+  function reauthenticateNode(node) {
+    if (!nodeCanReauthenticate(node) || nodeReauthenticateProcess.running
+        || nodeUpgradeProcess.running || nodeShellProcess.running || actionProcess.running) return
+    nodeReauthenticateAlias = String(node.alias)
+    nodeReauthenticateProcess.command
+      = WorkspaceModel.guidedNodeReauthenticateCommand(node.node_id)
+    nodeReauthenticateProcess.running = true
     close()
   }
 
@@ -2787,6 +2802,24 @@ Panel {
         root.showNotice("Node update failed", root.processError(
           nodeUpgradeStderr.text || nodeUpgradeStdout.text,
           "Could not update " + root.nodeUpgradeAlias), root.currentNoticeScreen(), true)
+      }
+    }
+  }
+
+  Process {
+    id: nodeReauthenticateProcess
+    stdout: StdioCollector { id: nodeReauthenticateStdout; waitForEnd: true }
+    stderr: StdioCollector { id: nodeReauthenticateStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.actionMessage = "Node authentication finished for "
+          + root.nodeReauthenticateAlias
+        root.refresh()
+      } else {
+        root.showNotice("Node authentication failed", root.processError(
+          nodeReauthenticateStderr.text || nodeReauthenticateStdout.text,
+          "Could not authenticate " + root.nodeReauthenticateAlias),
+          root.currentNoticeScreen(), true)
       }
     }
   }
@@ -5188,6 +5221,7 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(4)
                   Button {
+                    visible: !root.nodeCanReauthenticate(modelData)
                     width: Style.space(68)
                     height: Style.space(30)
                     text: "Shell +"
@@ -5198,12 +5232,27 @@ Panel {
                     enabled: modelData.workspace_owner_eligible
                       && root.nodeIsActionable(modelData.node_id)
                       && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
-                      && !nodeUpgradeProcess.running
+                      && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
                     foreground: root.foreground
                     fontSize: Style.font.caption
                     horizontalPadding: Style.space(4)
                     verticalPadding: Style.space(1)
                     onClicked: root.createShellOnNode(modelData)
+                  }
+                  Button {
+                    visible: root.nodeCanReauthenticate(modelData)
+                    width: Style.space(82)
+                    height: Style.space(30)
+                    text: "Authenticate"
+                    tooltipText: "Open interactive authentication for this registered Node"
+                    bordered: true
+                    enabled: !nodeReauthenticateProcess.running && !nodeUpgradeProcess.running
+                      && !nodeShellProcess.running && !actionProcess.running
+                    foreground: root.urgent
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(3)
+                    verticalPadding: Style.space(1)
+                    onClicked: root.reauthenticateNode(modelData)
                   }
                   Button {
                     visible: root.nodeCanUpgrade(modelData)
@@ -5213,7 +5262,7 @@ Panel {
                     tooltipText: "Reconnect, verify, and update this older Boomux helper"
                     bordered: true
                     enabled: !nodeUpgradeProcess.running && !nodeShellProcess.running
-                      && !actionProcess.running
+                      && !nodeReauthenticateProcess.running && !actionProcess.running
                     foreground: root.urgent
                     fontSize: Style.font.caption
                     horizontalPadding: Style.space(3)
@@ -5228,7 +5277,7 @@ Panel {
                     tooltipText: "Forget this remote Node registration"
                     bordered: false
                     enabled: !actionProcess.running && !nodeShellProcess.running
-                      && !nodeUpgradeProcess.running
+                      && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
                     foreground: root.urgent
                     iconSize: 8
                     horizontalPadding: Style.space(1)
