@@ -15,6 +15,8 @@ terminals, monitoring Agents, and checking Schedules and Nodes.
 
 - Keeps an expandable multi-Workspace tree visible above Agent, Schedule, and
   Node views.
+- Provides a three-dot action menu for each Workspace and item, including
+  creation, rename, and confirmed removal actions when supported.
 - Reserves the left or right screen edge so Hyprland tiles applications beside
   the pane instead of covering them.
 - Presents coordinated Workspaces immediately through Boomux's Hyprland desktop

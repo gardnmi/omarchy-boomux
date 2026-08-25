@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Mike Gardner",
   "license": "MIT AND CC-BY-4.0",
   "description": "Open a sliding Boomux Workspace, Agent, Schedule, and Node pane from the Omarchy bar.",
