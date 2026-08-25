@@ -3,7 +3,11 @@
 Navigate coordinator-owned global Workspaces, monitor interactive Boomux Agents,
 and operate recurring Agent Schedules from a full-height Omarchy side pane.
 
-![Boomux Agent status in the Omarchy bar](assets/agents.png)
+<p align="center">
+  <img src="assets/boomux-workspace-side-pane.png" width="32%" alt="Boomux side pane with an active Workspace and Agent">
+  <img src="assets/boomux-side-pane-settings.png" width="32%" alt="Boomux side pane settings">
+  <img src="assets/boomux-side-pane-nodes.png" width="32%" alt="Boomux side pane Node health view">
+</p>
 
 ## Features
 
@@ -67,7 +71,7 @@ and operate recurring Agent Schedules from a full-height Omarchy side pane.
 - [Boomux](https://github.com/gardnmi/boomux) `0.27.0` or newer available on
   `PATH`
 - The active-Workspace bar label requires a Boomux build advertising
-  `hyprland_special_workspaces` with `[desktop] workspace_layer = "hyprland-special"`
+  `hyprland_special_workspaces`; the Hyprland layer is enabled by default
 - A configured native terminal supported by `xdg-terminal-exec`
 - `curl` for optional passive update detection
 
