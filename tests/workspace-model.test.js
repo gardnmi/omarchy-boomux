@@ -16,6 +16,21 @@ test("compares only valid semantic release versions", () => {
   expect(model.versionIsNewer("main", "0.18.0")).toBe(false)
 })
 
+test("recognizes only canonical Boomux special Workspace names", () => {
+  expect(model.boomuxSpecialWorkspaceId(
+    "special:boomux-a84eb9a6-9611-478b-bb7d-d18e40d44d9c"
+  )).toBe("a84eb9a6-9611-478b-bb7d-d18e40d44d9c")
+  expect(model.boomuxSpecialWorkspaceId(
+    "special:boomux-018f9f63-7b2c-7d00-8000-0123456789ab"
+  )).toBe("018f9f63-7b2c-7d00-8000-0123456789ab")
+  for (const invalid of [
+    "special:scratchpad",
+    "special:boomux-not-an-id",
+    "special:boomux-A84EB9A6-9611-478b-bb7d-d18e40d44d9c",
+    "boomux-a84eb9a6-9611-478b-bb7d-d18e40d44d9c"
+  ]) expect(model.boomuxSpecialWorkspaceId(invalid)).toBe("")
+})
+
 test("sorts Agents by their latest authoritative update", () => {
   const agents = [
     { key: "older", started_at_ms: 100, observation: { observed_at_ms: 200 } },
@@ -28,6 +43,87 @@ test("sorts Agents by their latest authoritative update", () => {
   expect(agents.map(agent => agent.key)).toEqual(["older", "attention", "newer"])
 })
 
+test("keeps pane Agent order stable across focus and observation changes", () => {
+  const agents = [
+    { key: "other", name: "review", workspace_name: "zeta", global_workspace_id: "other",
+      observation: { observed_at_ms: 300 } },
+    { key: "active-old", name: "worker", workspace_name: "alpha", global_workspace_id: "active",
+      observation: { observed_at_ms: 100 } },
+    { key: "active-new", name: "author", workspace_name: "alpha", global_workspace_id: "active",
+      observation: { observed_at_ms: 200 } }
+  ]
+  expect(model.agentsByWorkspace(agents).map(agent => agent.key)).toEqual([
+    "active-new", "active-old", "other"
+  ])
+  agents[1].observation.observed_at_ms = 500
+  expect(model.agentsByWorkspace(agents).map(agent => agent.key)).toEqual([
+    "active-new", "active-old", "other"
+  ])
+  expect(agents.map(agent => agent.key)).toEqual(["other", "active-old", "active-new"])
+})
+
+test("marks only an Agent backed by the exact focused Shell", () => {
+  expect(model.agentFocused({ shell_key: "node-a\u001fshell" }, "node-a\u001fshell")).toBe(true)
+  expect(model.agentFocused({ shell_key: "node-b\u001fshell" }, "node-a\u001fshell")).toBe(false)
+  expect(model.agentFocused({ shell_key: "node-a\u001fshell" }, "")).toBe(false)
+})
+
+test("builds compact Workspace tree items without schedule-owned Shells", () => {
+  const items = model.workspaceTreeItems({
+    shells: [
+      { id: "shell", key: "node\u001fshell", node_id: "node", node_alias: "local",
+        name: "terminal", owner: "user", status: "running", cwd: "/tmp" },
+      { id: "command", node_id: "node", node_alias: "local", name: "server",
+        owner: "user", status: { exited: 2 }, command: ["bun", "run", "dev"] },
+      { id: "scheduled", node_id: "node", name: "private", owner: "schedule",
+        status: "running" }
+    ],
+    launchers: [{ id: "launcher", node_id: "node", node_alias: "local", name: "browser",
+      command: ["xdg-open", "https://example.com"] }]
+  })
+  expect(items.map(item => [item.kind, item.name, item.status])).toEqual([
+    ["shell", "terminal", "running"],
+    ["command", "server", "exited"],
+    ["launcher", "browser", "on open"]
+  ])
+  expect(items[1].detail).toBe("bun run dev")
+  expect(items[0].workspace.shells).toHaveLength(3)
+  expect(items[2].launcher.id).toBe("launcher")
+  expect(items[2]).toEqual(expect.objectContaining({
+    id: "launcher", node_id: "node", node_local: false
+  }))
+})
+
+test("marks only the exact qualified terminal-backed Workspace tree item focused", () => {
+  const focusedKey = "node-a\u001fshell"
+  const shell = { key: focusedKey, kind: "shell", shell: { id: "shell" } }
+  const sameIdOtherNode = {
+    key: "node-b\u001fshell", kind: "shell", shell: { id: "shell" }
+  }
+  const launcherCollision = {
+    key: focusedKey, kind: "launcher", shell: null, launcher: { id: "shell" }
+  }
+
+  expect(model.workspaceTreeItemFocused(shell, focusedKey)).toBe(true)
+  expect(model.workspaceTreeItemFocused(sameIdOtherNode, focusedKey)).toBe(false)
+  expect(model.workspaceTreeItemFocused(launcherCollision, focusedKey)).toBe(false)
+  expect(model.workspaceTreeItemFocused(shell, "")).toBe(false)
+})
+
+test("keeps the Workspace tree model stable across lifecycle-only refreshes", () => {
+  const workspace = {
+    key: "global:workspace", id: "workspace", name: "boomux", is_global: true,
+    shells: [{ key: "node\u001fshell", id: "shell", name: "terminal", owner: "user",
+      status: "running", node_id: "node", node_alias: "local" }],
+    agents: [{ observation: { observed_at_ms: 100 } }]
+  }
+  const first = model.workspaceTreeModelSignature([workspace])
+  workspace.agents[0].observation.observed_at_ms = 200
+  expect(model.workspaceTreeModelSignature([workspace])).toBe(first)
+  workspace.shells[0].status = { exited: 0 }
+  expect(model.workspaceTreeModelSignature([workspace])).not.toBe(first)
+})
+
 test("formats compact relative Agent update times", () => {
   const now = 1_000_000_000
   expect(model.relativeTime(now - 20_000, now)).toBe("now")
@@ -35,68 +131,6 @@ test("formats compact relative Agent update times", () => {
   expect(model.relativeTime(now - 2 * 60 * 60_000, now)).toBe("2h ago")
   expect(model.relativeTime(now - 3 * 24 * 60 * 60_000, now)).toBe("3d ago")
   expect(model.relativeTime(0, now)).toBe("unknown")
-})
-
-test("builds qualified command palette entries and filters their metadata", () => {
-  const workspace = { key: "global\u001fworkspace", id: "workspace", name: "Release",
-    is_global: true }
-  const items = [
-    { key: "node-a\u001fshared", kind: "agent", name: "review", node_alias: "local",
-      status: "working", detail: "opencode" },
-    { key: "node-a\u001fshared", kind: "launcher", name: "server", node_alias: "local",
-      status: "on workspace open", detail: "bun run dev" }
-  ]
-  const nodes = [
-    { node_id: "node-a", alias: "local", workspace_owner_eligible: true },
-    { node_id: "node-b", alias: "build", workspace_owner_eligible: true }
-  ]
-  const schedules = [{ key: "node-a\u001fschedule", workspace_key: workspace.key,
-    name: "nightly", state: "enabled", node_alias: "local", integration: "opencode" }]
-  const entries = model.paletteEntries("items", workspace, items, [workspace], nodes,
-    "node-b", schedules)
-  expect(entries.map(entry => entry.action)).toEqual([
-    "choose-workspace", "create-workspace", "open-workspace", "open-agents",
-    "open-shells", "invoke-launchers", "view-schedules", "create-shell",
-    "start-agent", "switch-node", "create-node", "remove-workspace"
-  ])
-  expect(entries.find(entry => entry.action === "create-shell").subtitle).toContain("build")
-  const agentEntries = model.paletteEntries("agents", workspace, items, [workspace], nodes,
-    "node-b", schedules)
-  const launcherEntries = model.paletteEntries("launchers", workspace, items, [workspace],
-    nodes, "node-b", schedules)
-  expect(agentEntries.concat(launcherEntries).map(entry => entry.id)).toEqual([
-    "item:terminal:node-a\u001fshared", "item:launcher:node-a\u001fshared"
-  ])
-  expect(model.filterPaletteEntries(launcherEntries, "BUN RUN").map(entry => entry.title))
-    .toEqual(["server"])
-  expect(model.filterPaletteEntries(agentEntries.concat(launcherEntries), "local")
-    .map(entry => entry.title))
-    .toEqual(["review", "server"])
-  expect(model.filterPaletteEntries(entries, "switch node").map(entry => entry.title))
-    .toEqual(["Switch Node..."])
-  expect(model.paletteEntries("schedules", workspace, items, [workspace], nodes, "node-b",
-    schedules)).toEqual([expect.objectContaining({
-    action: "view-schedule", schedule_key: "node-a\u001fschedule", title: "nightly"
-  })])
-})
-
-test("limits palette switching to coordinated Workspaces and eligible Nodes", () => {
-  const current = { key: "global\u001fone", name: "one", is_global: true }
-  const next = { key: "global\u001ftwo", name: "two", is_global: true }
-  const closing = { key: "global\u001fclosing", name: "closing", is_global: true,
-    closing: true }
-  const external = { key: "external\u001fnode\u001fowner", name: "owner",
-    is_global: false, is_external: true }
-  expect(model.paletteEntries("workspaces", current, [],
-    [current, next, closing, external], [], "").map(entry => entry.workspace_key)).toEqual([
-    current.key, next.key
-  ])
-  expect(model.paletteEntries("nodes", current, [], [], [
-    { node_id: "node-a", alias: "local", workspace_owner_eligible: true },
-    { node_id: "node-b", alias: "offline", workspace_owner_eligible: false }
-  ], "node-a")).toEqual([expect.objectContaining({
-    node_id: "node-a", selected: true, action: "select-node"
-  })])
 })
 
 test("normalizes the exact qualified focused terminal", () => {
@@ -162,44 +196,139 @@ test("discovers Agent hosts instead of hard-coding host buttons", () => {
   expect(panel).not.toContain('text: "Pi"')
 })
 
-test("opens a keyboard-owned palette through plugin IPC", () => {
+test("opens pane settings and the Boomux config editor", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("function palette(): void { root.togglePalette() }")
-  expect(panel).toContain('text: "Palette"')
-  expect(panel).toContain("onClicked: root.showPalette()")
-  expect(panel).toContain("focusTarget: root.paletteOpen ? paletteSearchField : keyCatcher")
-  expect(panel).toContain('showForm(entry.action === "create-shell" ? "shell" : "agent", targetNodeId, true)')
-  expect(panel).toContain("function paletteItem(entry)")
-  expect(panel).toContain("!openProcess.running && !executionOpenProcess.running")
-  expect(panel).toContain("visible: !root.formFromPalette")
-  expect(panel).toContain('setPaletteMode("agents")')
-  expect(panel).toContain('setPaletteMode("shells")')
-  expect(panel).toContain('setPaletteMode("launchers")')
-  expect(panel).toContain('setPaletteMode("schedules")')
-  expect(panel).toContain('selectSchedule(targetSchedule.key)')
-  expect(panel).toContain("function paletteItemCanRemove(entry)")
-  expect(panel).toContain("onClicked: root.requestRemoveItem(root.paletteItem(modelData))")
-  expect(panel).toContain('entry.action === "remove-workspace"')
-  expect(panel).not.toContain('action: "remove-schedule"')
+  expect(panel).toContain('tooltipText: "Open Boomux settings"')
+  expect(panel).toContain("onClicked: root.showSettings()")
+  expect(panel).toContain("function persistPaneSettings(values)")
+  expect(panel).toContain("bar.shell.updateEntryInline(moduleName, next)")
+  expect(panel).toContain('root.persistPaneSettings({ side: "left" })')
+  expect(panel).toContain('root.persistPaneSettings({ side: "right" })')
+  expect(panel).toContain("paneWidth: root.paneWidth - 20")
+  expect(panel).toContain("paneWidth: root.paneWidth + 20")
+  expect(panel).toContain("omarchy-launch-tui --app-id=org.omarchy.boomux-config boomux config edit")
+  expect(panel).toContain("if (root.itemToRemove || root.settingsOpen) return")
+  expect(panel).not.toMatch(/palette/i)
   expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
   expect(panel).toContain("removeItemDialog.handleKey(event)")
-  expect(panel).toContain('(activeTab === "schedules" || paletteOpen)')
   expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
 })
 
-test("exits the palette and confirms Workspace and Node selections", () => {
+test("uses a configurable sliding side pane with an active Workspace tree", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel.match(/closePaletteAfterSelection\(\)/g)).toHaveLength(4)
-  expect(panel).toContain('showNotice("Creation Node", String(node.alias), nodeScreen, true)')
-  expect(panel).toContain('showNotice("Default Workspace", active.name,')
-  expect(panel).toContain('showNotice("Workspace selection failed", root.actionMessage,')
+  const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
+  expect(panel).toContain('String(setting("side", "left"))')
+  expect(panel).toContain('Number(setting("paneWidth", Style.space(360)))')
+  expect(panel).toContain("SidePane {")
+  expect(panel).not.toContain('workspaceTreeDelegate.workspaceActive ? "ACTIVE"')
+  expect(panel).toContain("modelData.id === root.activeBoomuxWorkspaceId")
+  expect(panel).toContain("onClicked: root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)")
+  expect(panel).toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Beginning)")
+  expect(panel).not.toContain("onActiveBoomuxTerminalKeyChanged")
+  expect(panel).not.toContain("function positionFocusedWorkspace")
+  expect(panel).not.toContain("onActiveBoomuxWorkspaceIdChanged")
+  expect(panel).toContain("workspacePositionTimer.restart()")
+  expect(panel).toContain("interval: 180")
+  expect(panel).toContain("root.applyWorkspacePosition(workspaceKey)")
+  expect(panel).toContain('height: root.expandedWorkspaceKey === "" ? 0')
+  expect(panel).toContain("Math.max(0, workspaceTreeList.height - Style.space(48))")
+  expect(panel).toContain("property int workspaceTreeHeight: Style.space(265)")
+  expect(panel).toContain("cursorShape: Qt.SizeVerCursor")
+  expect(panel).toContain("root.setWorkspaceTreeHeight(startingHeight + translation.y)")
+  expect(panel).toContain("panel.height - Style.space(360)")
+  expect(panel).not.toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Contain)")
+  expect(panel).toContain("onClicked: root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
+  const activation = panel.slice(panel.indexOf("function activateWorkspaceRow"),
+    panel.indexOf("function openWorkspaceTreeItem"))
+  expect(activation).not.toContain("close()")
+  expect(activation).not.toContain("positionWorkspace(")
+  expect(activation).toContain("expandedWorkspaceKey = workspace.key")
+  expect(activation).toContain("pendingWorkspaceOpen = { key: workspace.key")
+  expect(activation).toContain("function startPendingWorkspaceOpen()")
+  expect(activation).toContain("openWorkspace(workspace, screen, presentationOnly)")
+  expect(activation).toContain('cliFeatures.indexOf("desktop_workspace_show") >= 0')
+  expect(activation).toContain("if (!presentationOnly) requestWorkspaceSelection(workspace)")
+  expect(panel).toContain("root.startPendingWorkspaceOpen()")
+  expect(panel).not.toContain("&& !actionProcess.running\n                  cursorShape")
+  expect(panel).toContain('var tabs = ["agents", "schedules", "nodes"]')
+  expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
+  expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
+  expect(panel).not.toContain('visible: root.actionMessage !== ""')
+  expect(panel).not.toContain('root.actionMessage = "Workspace shown"')
+  expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane"')
+  expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane-reservation"')
+  expect(sidePane).toContain("exclusiveZone: implicitWidth")
+  expect(sidePane).toContain("left: !root.onRight")
+  expect(sidePane).toContain("right: root.onRight")
+  expect(sidePane).toContain("mask: Region { item: card }")
+  expect(sidePane).not.toContain("id: dismissArea")
+  expect(sidePane).not.toContain("omarchy-boomux-side-pane-dismiss")
+  expect(sidePane).not.toContain("requestPopout")
+  expect(sidePane).not.toContain("releasePopout")
+  expect(sidePane).not.toContain("popoutSwitching")
+  expect(sidePane).toContain("Behavior on revealProgress")
+  expect(sidePane).toContain('readonly property real paneX: onRight')
+})
+
+test("keeps the pane open after an Agent or Shell terminal opens", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const completion = panel.slice(panel.indexOf("id: openProcess"),
+    panel.indexOf("id: executionOpenProcess"))
+  expect(completion).toContain('root.actionMessage = ""')
+  expect(completion).not.toContain("root.close()")
+})
+
+test("offers confirmed local Shell closure from the Workspace tree", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel.match(/iconText: ""/g).length).toBeGreaterThanOrEqual(2)
+  expect(panel).toContain(': "Close and remove this Boomux Shell"')
+  expect(panel).toContain("onClicked: root.requestRemoveItem(modelData)")
+  expect(panel).toContain('String(item.shell.owner_workspace_id || owningWorkspace.id)')
+  expect(panel).toContain('root.actionMessage = "Shell closed"')
+})
+
+test("keeps compact Workspace removal reachable from the tree", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('iconText: ""')
+  expect(panel).toContain("id: workspaceHeaderActions")
+  expect(panel).toContain("width: Style.space(18)")
+  expect(panel).toContain("iconSize: 8")
+  const tree = panel.slice(panel.indexOf("id: workspaceTreeList"),
+    panel.indexOf("id: workspaceResizeHandle"))
+  expect(tree).not.toContain("Start Agent in this Workspace")
+  expect(tree).not.toContain('iconText: ""')
+  expect(tree).not.toContain('text: modelData.kind === "launcher" ? "Remove" : "Close"')
+  expect(panel).toContain("onClicked: root.requestRemoveWorkspace(workspaceTreeDelegate.modelData)")
+  expect(panel).toContain("onClicked: root.requestRemoveItem(modelData)")
+})
+
+test("uses the existing exact launcher path from the Workspace tree", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('if (item.kind === "launcher") openWorkspaceItem(item)')
+  expect(panel).not.toContain("invokeLauncher(")
+  expect(panel).toContain('["boomux", "launcher", "invoke"]')
+  expect(panel).toContain("item.id, item.node_id, owner && owner.local")
+})
+
+test("shows passive Workspace notices", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('WlrLayershell.namespace: "omarchy-boomux-notice"')
   expect(panel).toContain("if (Date.now() < noticeProtectedUntil) return")
   expect(panel).toContain('showNotice("Workspace opened", pending.name,')
   expect(panel).toContain('showNotice("Workspace open warning", pending.unavailablePlacements + " placement"')
   expect(panel).toContain('showNotice("Workspace open warning", root.actionMessage,')
-  expect(panel).toContain('return "Active Workspace: " + String(focusedWorkspace.name)')
-  expect(panel).toContain('return "Palette: " + String(selectedWorkspace.name) + addTarget')
+  expect(panel).toContain("function showActionFailure(title, detail)")
+  expect(panel).toContain('root.showActionFailure("Workspace selection failed"')
+  expect(panel).toContain('root.showNotice("Boomux action failed", root.actionMessage,')
+  expect(panel).toContain('root.showActionFailure("Terminal open failed"')
+})
+
+test("documents actual keyboard navigation and configuration mutation", () => {
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
+  expect(readme).toContain("Switch Agents, Schedules, and Nodes")
+  expect(readme).not.toContain("Select an Agent, workspace, Schedule, or Node")
+  expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
+  expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
 })
 
 test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
@@ -229,6 +358,61 @@ test("uses Boomux events to refresh focused terminal state promptly", () => {
   expect(panel).toContain("root.requestFocusedTerminalRefresh()")
 })
 
+test("shows the active Boomux special Workspace name in the bar", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("import Quickshell.Hyprland")
+  expect(panel).toContain('name === "activespecialv2"')
+  expect(panel).toContain('command: ["hyprctl", "-j", "monitors"]')
+  expect(panel).toContain("WorkspaceModel.boomuxSpecialWorkspaceId")
+  expect(panel).toContain("activeBoomuxWorkspaceName")
+  expect(panel).toContain("openWorkspacePanel(root.activeBoomuxWorkspace)")
+  expect(panel).toContain("openWorkspacePanel(root.activeBoomuxTerminalWorkspace)")
+  expect(panel).not.toContain('"boomux", "workspace", "current"')
+})
+
+test("requests full Workspace restore in the owning desktop layer", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('cliFeatures.indexOf("workspace_open_desktop_show") >= 0')
+  expect(model.workspaceOpenCommand({ id: "workspace-1", is_global: true }, true)).toEqual([
+    "boomux", "workspace", "open", "workspace-1", "--show"
+  ])
+  expect(model.workspaceOpenCommand(
+    { id: "workspace-1", is_global: true }, true, true
+  )).toEqual(["boomux", "desktop", "show", "workspace-1"])
+})
+
+test("recognizes focused marked and legacy Boomux terminal windows", () => {
+  const nodeId = "11111111-1111-4111-8111-111111111111"
+  const shellId = "22222222-2222-4222-8222-222222222222"
+  const key = `${nodeId}\u001f${shellId}`
+  const shells = [{ key, name: "agent_boom", workspace_name: "boomux",
+    node_local: true, node_alias: "local" }]
+
+  expect(model.boomuxShellWindowKey(
+    `boomux:shell:${nodeId}:${shellId} | boomux - agent_boom`, "", [])).toBe(key)
+  expect(model.boomuxShellWindowKey("boomux - agent_boom", key, shells)).toBe(key)
+  expect(model.boomuxShellWindowKey("Documentation", key, shells)).toBe("")
+})
+
+test("opens a Shell in its exact coordinated desktop Workspace", () => {
+  const shell = { id: "shell-1", node_id: "node-1" }
+  const workspace = { id: "workspace-1", is_global: true }
+  expect(model.shellOpenCommand(shell, workspace, true)).toEqual([
+    "boomux", "open", "shell-1", "--takeover", "--workspace", "workspace-1"
+  ])
+  expect(model.shellOpenCommand(shell, { id: "external-1", is_global: false }, false)).toEqual([
+    "boomux", "open", "shell-1", "--node", "node-1", "--takeover"
+  ])
+})
+
+test("shows focused Shell identity separately from the presented Workspace", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('command: ["hyprctl", "-j", "activewindow"]')
+  expect(panel).toContain("activeBoomuxTerminalLabel")
+  expect(panel).toContain('name === "activewindowv2"')
+  expect(panel).toContain('"> " + String(activeBoomuxTerminalWorkspace.name) + " / " + shellName')
+})
+
 test("persists the explicitly selected coordinator Workspace", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('["boomux", "workspace", "select", workspaceSelectionActive.id]')
@@ -256,6 +440,14 @@ test("preserves the Workspace item viewport across polling snapshots", () => {
   expect(panel).toContain("itemList.contentY = Math.max(0")
   expect(panel).toContain("if (signature === workspaceItemsSignature) return")
   expect(panel).toContain("onWorkspaceDetailChanged: syncWorkspaceItems()")
+  expect(panel).toContain("var treeScrollY = workspaceTreeList ? workspaceTreeList.contentY : 0")
+  expect(panel.match(/restoreWorkspaceTreeScroll\(treeScrollY\)/g)).toHaveLength(2)
+  expect(panel).toContain("var workspaceModelChanged = applyWorkspaceSnapshot(")
+  expect(panel).toContain("WorkspaceModel.workspaceTreeModelSignature(nextWorkspaces)")
+  expect(panel).toContain("if (signature === workspaceTreeSnapshotSignature) return false")
+  expect(panel).toContain("model: root.workspaceTreeWorkspaces")
+  expect(panel).toContain('if (root.pendingWorkspacePositionKey !== "") return')
+  expect(panel).toContain("workspaceTreeList.contentY = Math.max(0,")
 })
 
 test("keeps guided Node setup feedback visible", () => {
@@ -388,6 +580,9 @@ describe("qualified commands and action gates", () => {
     expect(model.workspaceCreationBlockReason(localExternal, 2)).toContain("Adopt or link")
     expect(model.workspaceOpenCommand(global)).toEqual([
       "boomux", "workspace", "open", "global-1"
+    ])
+    expect(model.workspaceOpenCommand(global, true)).toEqual([
+      "boomux", "workspace", "open", "global-1", "--show"
     ])
     expect(model.workspaceOpenCommand(localExternal)).toEqual([
       "boomux", "workspace", "open", "global-1", "--node", "node-a"

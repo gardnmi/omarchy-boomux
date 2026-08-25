@@ -6,7 +6,8 @@ about operations that can start processes or take over terminals.
 
 ## Repository Map
 
-- `Panel.qml`: runtime integration and UI
+- `Panel.qml`: runtime integration, bar indicator, and pane content
+- `SidePane.qml`: configurable layer-shell drawer, focus, animation, and dismissal
 - `WorkspaceModel.js`: protocol-38 grouping and qualified command construction
 - `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
@@ -14,8 +15,7 @@ about operations that can start processes or take over terminals.
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
 - `assets/bomb-spark.svg`: fixed yellow attention spark
 - `preview.png`: root marketplace preview
-- `assets/agents.png`, `assets/workspaces.png`, `assets/projects.png`,
-  `assets/schedules.png`, `assets/nodes.png`: README screenshots
+- `assets/boomux-workspace-desktop.png`: current side-pane README screenshot
 - `deploy-local.sh`: development-only deployment helper
 - `THIRD_PARTY_NOTICES.md`: Font Awesome attribution
 
@@ -59,31 +59,26 @@ through a shell. Do not invoke Boomux private transport commands.
 
 ## Runtime Model
 
-The panel has four top-level views:
+The sliding pane has a persistent expandable Workspace tree and three lower views:
 
+- **Workspace tree**: coordinated and external Workspaces, with the currently
+  presented Hyprland special Workspace highlighted independently from the
+  persisted default; a separate chevron expands Shells, commands, and launchers,
+  while the row itself stores the default and opens the Workspace
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
-  durable attention, newest authoritative update first; schedule-owned Agents
+  durable attention, grouped in stable Workspace-and-name order;
+  schedule-owned Agents
   are excluded by shell ownership; capability-gated section controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
-- **Workspaces**: a flat workspace selector and a separate selected-workspace
-  detail surface
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 - **Nodes**: a read-only health table with selected-Node protocol,
   freshness, eligibility, and exact identity details
 
-The keyboard command palette is an alternate panel surface over the selected
-Workspace. Its root commands open type-specific Agent, Shell, launcher, and
-Schedule pickers instead of mixing raw resources with actions. Schedule choice
-navigates to prompt-free details and never dispatches or opens an execution. It
-can open that Workspace or one exact item, switch the persisted coordinator
-Workspace default without opening it, and switch the eligible Node used by its
-Shell and Agent creation actions. Node choice is a creation target, not a
-resource filter; items from every placement remain visible. A Workspace or
-Node choice exits the palette and uses the passive lower-right notice for
-confirmation; durable Workspace selection is confirmed only after CLI success.
-Workspace and local backing-Shell removal reuse the existing modal exact-ID
-confirmation. Schedule removal remains unavailable.
+The header Settings surface owns pane-local presentation settings. Side and
+width changes persist through Omarchy's inline plugin settings API. Opening the
+Boomux configuration must delegate to `boomux config edit` so Boomux resolves
+the active writable configuration layer; the plugin must not guess that path.
 
 Protocol 38 adds coordinator-owned global Workspaces with explicit Node
 placements. Keep Workspace grouping task-first; show Node ownership as secondary
@@ -161,18 +156,36 @@ or lifecycle observation.
 
 ## UI Conventions
 
-- Keep **Create Workspace** at workspace-section scope.
-- Keep **Open**, **Shell**, and **Agent** inside the selected workspace detail
-  surface so their target is unambiguous.
+- Keep **Create Workspace** at Workspace-tree scope.
+- Keep Workspace expansion separate from activation. The chevron changes only
+  local pane state; the row persists the default and performs explicit open
+  without dismissing the pane, and makes that opened Workspace the expanded row.
+- Local Shell and command rows in the Workspace tree expose **Close** through
+  the existing exact-ID confirmation flow. Never close directly from the row or
+  derive owner context from whichever Workspace was previously selected.
+- Agent and Shell opens from the pane retain the pane. Pointer input outside the
+  drawer passes through to applications; only explicit close, Escape while the
+  pane owns keyboard focus, or its IPC toggle should hide it.
 - Keep **Create Node** at Nodes-section scope; do not add a Node filter.
-- Do not use collapsible workspace cards unless explicitly requested.
+- Highlight only the Hyprland-presented special Workspace as active. Persisted
+  default and expanded Workspace state must remain visually distinct.
+- The divider above the lower tabs resizes the Workspace viewport vertically.
+  Clamp it so both the tree and lower section retain usable space, and reposition
+  the expanded Workspace when dragging ends.
+- Mark a focused Workspace item only from the exact qualified Shell identity of
+  Hyprland's active managed terminal. Never mark a launcher or match by name.
+  Focus styling must remain a subtle accent and must not reorder Agent rows.
+- While open, the side pane owns a transparent layer-shell exclusive zone on its
+  configured edge so tiled windows reflow beside it. Closing the pane must
+  release that reservation; the overlay surface still owns input and animation.
+- The Boomux side pane is persistent and must not join the bar's single-popout
+  coordinator. Opening another plugin may temporarily own input above it but
+  must not close Boomux or release its reservation.
 - Use Omarchy `qs.Ui` controls and `Style.space(...)`; follow the active bar
   foreground, urgent color, font, and accent.
 - Set `PanelKeyCatcher.blocked` while text fields own keyboard input.
 - Modal confirmations must consume or explicitly handle Enter, Escape, Tab,
   arrows, and text shortcuts instead of leaking input to the panel below.
-- The command palette follows the same rule, re-resolves structural identities
-  before activation, and keeps Workspace opening distinct from default selection.
 - Bound every dynamic list with clipping and a scrollbar. The panel content
   height is capped, so unbounded repeaters can make actions inaccessible.
 - Display paths under `$HOME` with `~` to reduce noise and avoid exposing a
@@ -206,7 +219,7 @@ Run all of these before committing:
 
 ```bash
 omarchy plugin validate .
-qmllint -I /usr/share/omarchy/shell Panel.qml
+qmllint -I /usr/share/omarchy/shell Panel.qml SidePane.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
 bun test tests/workspace-model.test.js

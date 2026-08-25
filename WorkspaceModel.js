@@ -22,6 +22,28 @@ function versionIsNewer(candidate, current) {
   return false
 }
 
+function boomuxSpecialWorkspaceId(name) {
+  var match = String(name || "").match(
+    /^special:boomux-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/)
+  return match ? match[1] : ""
+}
+
+function boomuxShellWindowKey(initialTitle, focusedKey, shells) {
+  var title = String(initialTitle || "")
+  var marked = title.match(/^boomux:shell:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) \| /)
+  if (marked) return resourceKey(marked[1], marked[2])
+
+  for (var i = 0; i < shells.length; i++) {
+    var shell = shells[i]
+    if (!shell || shell.key !== focusedKey) continue
+    var expected = String(shell.workspace_name) + " - " + String(shell.name)
+    if (!shell.node_local)
+      expected = "[" + String(shell.node_alias) + "] " + expected
+    return title === expected ? String(shell.key) : ""
+  }
+  return ""
+}
+
 function agentUpdatedAt(agent) {
   if (!agent) return 0
   var observation = agent.observation
@@ -39,6 +61,25 @@ function agentsByLastUpdated(agents) {
     var rightKey = String(right.key || right.id || "")
     return leftKey < rightKey ? -1 : (leftKey > rightKey ? 1 : 0)
   })
+}
+
+function agentsByWorkspace(agents) {
+  return agents.slice().sort(function(left, right) {
+    var leftWorkspace = String(left.workspace_name || "").toLowerCase()
+    var rightWorkspace = String(right.workspace_name || "").toLowerCase()
+    if (leftWorkspace !== rightWorkspace) return leftWorkspace < rightWorkspace ? -1 : 1
+    var leftName = String(left.name || "").toLowerCase()
+    var rightName = String(right.name || "").toLowerCase()
+    if (leftName !== rightName) return leftName < rightName ? -1 : 1
+    var leftKey = String(left.key || left.id || "")
+    var rightKey = String(right.key || right.id || "")
+    return leftKey < rightKey ? -1 : (leftKey > rightKey ? 1 : 0)
+  })
+}
+
+function agentFocused(agent, activeTerminalKey) {
+  return !!agent && !!activeTerminalKey
+    && String(agent.shell_key || "") === String(activeTerminalKey)
 }
 
 function relativeTime(timestamp, now) {
@@ -559,13 +600,90 @@ function normalizeWorkspaceDetail(source, workspace, node) {
   return detail
 }
 
-function workspaceOpenCommand(workspace) {
+function workspaceOpenCommand(workspace, showDesktop, presentationOnly) {
+  if (presentationOnly && workspace.is_global)
+    return ["boomux", "desktop", "show", String(workspace.id)]
   var command = ["boomux", "workspace", "open", String(workspace.id)]
   if (workspace.is_external && workspace.node_id)
     command.push("--node", String(workspace.node_id))
   else if (!workspace.is_global && workspace.node_id && !workspace.node_local)
     command.push("--node", String(workspace.node_id))
+  if (showDesktop && workspace.is_global) command.push("--show")
   return command
+}
+
+function workspaceTreeItems(workspace) {
+  if (!workspace) return []
+  var items = []
+  var shells = workspace.shells || []
+  for (var s = 0; s < shells.length; s++) {
+    var shell = shells[s]
+    if (!shell || shellOwner(shell.owner) === "schedule") continue
+    items.push({
+      key: String(shell.key || resourceKey(shell.node_id, shell.id)),
+      kind: shell.command && shell.command.length > 0 ? "command" : "shell",
+      name: String(shell.name || "unnamed"),
+      status: shellStatus(shell.status),
+      detail: shell.command && shell.command.length > 0
+        ? shell.command.join(" ") : String(shell.cwd || ""),
+      node_id: String(shell.node_id || ""),
+      node_alias: String(shell.node_alias || "local"),
+      placement_state: String(shell.placement_state || "active"),
+      workspace: workspace,
+      shell: shell,
+      launcher: null
+    })
+  }
+  var launchers = workspace.launchers || []
+  for (var l = 0; l < launchers.length; l++) {
+    var launcher = launchers[l]
+    if (!launcher) continue
+    items.push({
+      key: String(launcher.key || resourceKey(launcher.node_id, launcher.id)),
+      id: String(launcher.id || ""),
+      kind: "launcher",
+      name: String(launcher.name || "unnamed"),
+      status: "on open",
+      detail: launcher.command ? launcher.command.join(" ") : "",
+      node_id: String(launcher.node_id || ""),
+      node_alias: String(launcher.node_alias || "local"),
+      node_local: !!launcher.node_local,
+      placement_state: String(launcher.placement_state || "active"),
+      workspace: workspace,
+      shell: null,
+      launcher: launcher
+    })
+  }
+  return items
+}
+
+function workspaceTreeModelSignature(workspaces) {
+  return JSON.stringify((workspaces || []).map(function(workspace) {
+    return {
+      row: [workspace.key, workspace.id, workspace.name, !!workspace.is_global,
+        !!workspace.is_external, !!workspace.closing, !!workspace.available,
+        workspace.node_id, workspace.node_current, workspace.node_stale,
+        Number(workspace.attention_count || 0), Number(workspace.shell_count || 0)],
+      placements: (workspace.placements || []).map(function(placement) {
+        return [placement.node_id, placement.workspace_id, placement.state,
+          !!placement.available, !!placement.node_current, !!placement.node_stale]
+      }),
+      items: workspaceTreeItems(workspace).map(function(item) {
+        var resource = item.kind === "launcher" ? item.launcher : item.shell
+        return [item.key, item.kind, item.name, item.status, item.detail,
+          item.node_id, item.node_alias, item.placement_state,
+          resource ? resource.id : "", resource ? resource.owner : "",
+          resource ? !!resource.node_current : false,
+          resource ? !!resource.node_stale : false]
+      })
+    }
+  }))
+}
+
+function workspaceTreeItemFocused(item, activeTerminalKey) {
+  return !!item && item.kind !== "launcher" && !!item.shell
+    && String(activeTerminalKey || "") !== ""
+    && String(item.key || "") === String(activeTerminalKey)
 }
 
 function workspaceCloseCommand(workspace) {
@@ -575,6 +693,14 @@ function workspaceCloseCommand(workspace) {
 function qualifiedCommand(prefix, resourceIdValue, nodeId, local) {
   var command = prefix.concat([String(resourceIdValue)])
   if (!local) command.push("--node", String(nodeId))
+  return command
+}
+
+function shellOpenCommand(shell, workspace, local) {
+  var command = qualifiedCommand(["boomux", "open"], shell.id, shell.node_id, local)
+  command.push("--takeover")
+  if (workspace && workspace.is_global)
+    command.push("--workspace", String(workspace.id))
   return command
 }
 
@@ -710,215 +836,6 @@ function resourceActionable(resource, nodeActionable) {
     && resource.placement_state !== "close_pending" && !!nodeActionable
 }
 
-function paletteItemEntry(item, workspace) {
-  var targetType = item.kind === "launcher" ? "launcher" : "terminal"
-  return {
-    id: "item:" + targetType + ":" + item.key,
-    action: "open-item",
-    item_key: item.key,
-    target_type: targetType,
-    title: String(item.name),
-    subtitle: String(item.kind) + " · " + String(item.node_alias || "local")
-      + " · " + String(item.status || "unknown"),
-    search_text: [item.name, item.kind, item.node_alias, item.status, item.detail,
-      workspace ? workspace.name : "", "open"].join(" ")
-  }
-}
-
-function paletteEntries(mode, workspace, items, workspaces, nodes, selectedNodeId, schedules) {
-  var entries = []
-  var scheduleModels = schedules || []
-  if (mode === "workspaces") {
-    for (var w = 0; w < workspaces.length; w++) {
-      var candidate = workspaces[w]
-      if (!candidate || !candidate.is_global || candidate.closing) continue
-      entries.push({
-        id: "workspace:" + candidate.key,
-        action: "switch-workspace",
-        workspace_key: candidate.key,
-        title: String(candidate.name),
-        subtitle: candidate.key === (workspace ? workspace.key : "")
-          ? "Palette Workspace" : "Make this the default Workspace",
-        search_text: [candidate.name, "workspace", "switch", "default"].join(" "),
-        selected: candidate.key === (workspace ? workspace.key : "")
-      })
-    }
-    return entries
-  }
-
-  if (mode === "nodes") {
-    for (var n = 0; n < nodes.length; n++) {
-      var node = nodes[n]
-      if (!node || !node.workspace_owner_eligible) continue
-      entries.push({
-        id: "node:" + node.node_id,
-        action: "select-node",
-        node_id: String(node.node_id),
-        title: String(node.alias),
-        subtitle: node.node_id === selectedNodeId
-          ? "Current creation Node" : "Create new items on this Node",
-        search_text: [node.alias, node.node_id, "node", "switch", "create"].join(" "),
-        selected: node.node_id === selectedNodeId
-      })
-    }
-    return entries
-  }
-
-  if (mode === "agents" || mode === "shells" || mode === "launchers") {
-    for (var r = 0; r < items.length; r++) {
-      var resource = items[r]
-      var matches = mode === "agents" ? resource.kind === "agent"
-        : (mode === "launchers" ? resource.kind === "launcher"
-          : (resource.kind === "shell" || resource.kind === "command"))
-      if (matches) entries.push(paletteItemEntry(resource, workspace))
-    }
-    return entries
-  }
-
-  if (mode === "schedules") {
-    for (var s = 0; s < scheduleModels.length; s++) {
-      var schedule = scheduleModels[s]
-      if (!workspace || schedule.workspace_key !== workspace.key) continue
-      entries.push({
-        id: "schedule:" + schedule.key,
-        action: "view-schedule",
-        schedule_key: schedule.key,
-        title: String(schedule.name),
-        subtitle: String(schedule.state || "unknown") + " · "
-          + String(schedule.node_alias || "local") + " · "
-          + String(schedule.integration || "Agent"),
-        search_text: [schedule.name, schedule.state, schedule.node_alias,
-          schedule.integration, schedule.workspace_name, "view schedule"].join(" ")
-      })
-    }
-    return entries
-  }
-
-  var selectedNode = null
-  for (var i = 0; i < nodes.length; i++)
-    if (nodes[i].node_id === selectedNodeId) selectedNode = nodes[i]
-  var nodeLabel = selectedNode ? String(selectedNode.alias) : "switch Node first"
-  entries.push({
-    id: "action:choose-workspace",
-    action: "choose-workspace",
-    title: "Switch Workspace...",
-    subtitle: "Change the persisted Boomux default",
-    search_text: "Switch Workspace choose change default"
-  })
-  entries.push({
-    id: "action:create-workspace",
-    action: "create-workspace",
-    title: "Create Workspace",
-    subtitle: "Create from a project or directory",
-    search_text: "Create Workspace new project directory"
-  })
-  if (!workspace) {
-    entries.push({
-      id: "action:create-node",
-      action: "create-node",
-      title: "Create Node",
-      subtitle: "Open guided Node setup in a native terminal",
-      search_text: "Create Node new register guided setup"
-    })
-    return entries
-  }
-  entries.push({
-    id: "action:open-workspace:" + workspace.key,
-    action: "open-workspace",
-    workspace_key: workspace.key,
-    title: "Open Workspace",
-    subtitle: "Open all available items in " + String(workspace.name),
-    search_text: [workspace.name, "open", "workspace", "all", "items"].join(" ")
-  })
-  var agentCount = items.filter(function(item) { return item.kind === "agent" }).length
-  var shellCount = items.filter(function(item) {
-    return item.kind === "shell" || item.kind === "command"
-  }).length
-  var launcherCount = items.filter(function(item) { return item.kind === "launcher" }).length
-  var scheduleCount = scheduleModels.filter(function(schedule) {
-    return schedule.workspace_key === workspace.key
-  }).length
-  entries.push({
-    id: "action:open-agents",
-    action: "open-agents",
-    title: "Open Agent...",
-    subtitle: agentCount + " Agent" + (agentCount === 1 ? "" : "s") + " in this Workspace",
-    search_text: "Open Agent select choose"
-  })
-  entries.push({
-    id: "action:open-shells",
-    action: "open-shells",
-    title: "Open Shell...",
-    subtitle: shellCount + " Shell" + (shellCount === 1 ? "" : "s") + " in this Workspace",
-    search_text: "Open Shell command terminal select choose"
-  })
-  entries.push({
-    id: "action:invoke-launchers",
-    action: "invoke-launchers",
-    title: "Invoke Launcher...",
-    subtitle: launcherCount + " Launcher" + (launcherCount === 1 ? "" : "s")
-      + " in this Workspace",
-    search_text: "Invoke Launcher open run select choose"
-  })
-  entries.push({
-    id: "action:view-schedules",
-    action: "view-schedules",
-    title: "View Schedule...",
-    subtitle: scheduleCount + " Schedule" + (scheduleCount === 1 ? "" : "s")
-      + " in this Workspace",
-    search_text: "View Schedule open select choose"
-  })
-  entries.push({
-    id: "action:create-shell:" + workspace.key,
-    action: "create-shell",
-    workspace_key: workspace.key,
-    title: "Create Shell",
-    subtitle: "Create on " + nodeLabel,
-    search_text: [workspace.name, nodeLabel, "Create Shell", "new"].join(" ")
-  })
-  entries.push({
-    id: "action:start-agent:" + workspace.key,
-    action: "start-agent",
-    workspace_key: workspace.key,
-    title: "Start Agent",
-    subtitle: "Create on " + nodeLabel,
-    search_text: [workspace.name, nodeLabel, "add", "new", "start", "agent"].join(" ")
-  })
-
-  if (workspace.is_global) entries.push({
-    id: "action:switch-node",
-    action: "switch-node",
-    title: "Switch Node...",
-    subtitle: "Change where new Shells and Agents are created",
-    search_text: [nodeLabel, "Switch Node", "create target shell agent"].join(" ")
-  })
-  entries.push({
-    id: "action:create-node",
-    action: "create-node",
-    title: "Create Node",
-    subtitle: "Open guided Node setup in a native terminal",
-    search_text: "Create Node new register guided setup"
-  })
-  entries.push({
-    id: "action:remove-workspace:" + workspace.key,
-    action: "remove-workspace",
-    workspace_key: workspace.key,
-    title: "Remove Workspace",
-    subtitle: "Remove " + String(workspace.name) + " and its managed resources",
-    search_text: [workspace.name, "Remove Workspace delete close"].join(" ")
-  })
-
-  return entries
-}
-
-function filterPaletteEntries(entries, query) {
-  var needle = String(query || "").trim().toLowerCase()
-  if (needle === "") return entries.slice()
-  return entries.filter(function(entry) {
-    return String(entry.search_text || "").toLowerCase().indexOf(needle) >= 0
-  })
-}
-
 function acknowledgementIdentity(agent, revision) {
   return {
     agentKey: resourceKey(agent.node_id, agent.id),
@@ -936,10 +853,14 @@ if (typeof module !== "undefined") module.exports = {
   versionIsNewer: versionIsNewer,
   agentUpdatedAt: agentUpdatedAt,
   agentsByLastUpdated: agentsByLastUpdated,
+  agentsByWorkspace: agentsByWorkspace,
+  agentFocused: agentFocused,
   relativeTime: relativeTime,
   resourceId: resourceId,
   resourceNode: resourceNode,
   resourceKey: resourceKey,
+  boomuxSpecialWorkspaceId: boomuxSpecialWorkspaceId,
+  boomuxShellWindowKey: boomuxShellWindowKey,
   qualifiedMatches: qualifiedMatches,
   parseEnvelope: parseEnvelope,
   normalizeWebStatus: normalizeWebStatus,
@@ -959,8 +880,12 @@ if (typeof module !== "undefined") module.exports = {
   externalKey: externalKey,
   groupSnapshot: groupSnapshot,
   workspaceOpenCommand: workspaceOpenCommand,
+  workspaceTreeItems: workspaceTreeItems,
+  workspaceTreeModelSignature: workspaceTreeModelSignature,
+  workspaceTreeItemFocused: workspaceTreeItemFocused,
   workspaceCloseCommand: workspaceCloseCommand,
   qualifiedCommand: qualifiedCommand,
+  shellOpenCommand: shellOpenCommand,
   eligibleNodes: eligibleNodes,
   defaultCreationNodeId: defaultCreationNodeId,
   workspaceCreateCommand: workspaceCreateCommand,
@@ -978,8 +903,6 @@ if (typeof module !== "undefined") module.exports = {
   resolvePendingShell: resolvePendingShell,
   consumePendingShell: consumePendingShell,
   resourceActionable: resourceActionable,
-  paletteEntries: paletteEntries,
-  filterPaletteEntries: filterPaletteEntries,
   acknowledgementIdentity: acknowledgementIdentity,
   acknowledgementResponseMatches: acknowledgementResponseMatches
 }
