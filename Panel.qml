@@ -100,6 +100,7 @@ Panel {
   property string executionError: ""
   property string actionMessage: ""
   property string nodeShellAlias: ""
+  property string nodeUpgradeAlias: ""
   property string formMode: ""
   property bool settingsOpen: false
   property string workspaceCreationMode: "choice"
@@ -404,6 +405,56 @@ Panel {
         || node.health === "identity_conflict" || node.health === "unsupported"
         || node.health === "unreachable") return urgent
     return dim
+  }
+
+  function nodeHealthDetail(node) {
+    if (!node) return "unknown"
+    if (node.health === "authentication_required")
+      return "authentication required · cached data retained · retrying automatically"
+    if (node.health === "reconnecting")
+      return "reconnecting · cached data retained · retrying automatically"
+    if (node.health === "stale" || node.health === "unreachable" || node.stale)
+      return String(node.health).split("_").join(" ")
+        + " · cached data retained · retrying automatically"
+    if (node.health === "identity_changed" || node.health === "identity_conflict")
+      return String(node.health).split("_").join(" ")
+        + " · cached data retained · action required"
+    return nodeHealthLabel(node)
+  }
+
+  function nodeVersionDirection(node) {
+    return WorkspaceModel.versionDirection(node ? node.observed_helper_version : "", cliVersion)
+  }
+
+  function nodeCanUpgrade(node) {
+    return WorkspaceModel.nodeCanUpgrade(node, cliVersion, cliFeatures)
+  }
+
+  function nodeVersionIndicator(node) {
+    if (!node || !node.observed_helper_version) return "unknown"
+    var remote = String(node.observed_helper_version)
+    var direction = nodeVersionDirection(node)
+    if (direction === "older") return remote + " → " + cliVersion
+    if (direction === "newer") return remote + " · control old"
+    return remote
+  }
+
+  function nodeVersionDetail(node) {
+    if (!node) return ""
+    var remote = node.observed_helper_version ? String(node.observed_helper_version) : "unknown"
+    var control = cliVersion || "unknown"
+    var direction = nodeVersionDirection(node)
+    var status = direction === "older" ? "update available"
+      : (direction === "newer" ? "Control machine update needed"
+        : (direction === "current" ? "current" : "comparison unavailable"))
+    return "Versions: remote " + remote + " · control " + control + " · " + status
+  }
+
+  function nodeSchedulerDetail(node) {
+    var scheduler = node && node.scheduler ? node.scheduler : {}
+    return "Scheduler: " + String(scheduler.state || "offline") + " · "
+      + Number(scheduler.active_executions || 0) + " active / "
+      + Number(scheduler.max_concurrent || 0) + " max"
   }
 
   function nodeMetric(node, field, collection) {
@@ -1660,7 +1711,8 @@ Panel {
   }
 
   function requestForgetNode(node) {
-    if (!node || node.local || actionProcess.running || nodeShellProcess.running) return
+    if (!node || node.local || actionProcess.running || nodeShellProcess.running
+        || nodeUpgradeProcess.running) return
     removeItemDialog.selectedIndex = 0
     itemToRemove = { kind: "node", node: node }
   }
@@ -1696,7 +1748,8 @@ Panel {
       return
     }
     if (item && item.kind === "node") {
-      if (item.node.local || actionProcess.running || nodeShellProcess.running) return
+      if (item.node.local || actionProcess.running || nodeShellProcess.running
+          || nodeUpgradeProcess.running) return
       pendingAction = { kind: "forget-node", key: item.node.node_id }
       actionMessage = "Forgetting " + String(item.node.alias) + "..."
       actionProcess.command = ["boomux", "node", "forget",
@@ -1783,7 +1836,8 @@ Panel {
   }
 
   function createShellOnNode(node) {
-    if (!node || node.local || nodeShellProcess.running) return
+    if (!node || node.local || nodeShellProcess.running || nodeUpgradeProcess.running
+        || !nodeIsActionable(node.node_id)) return
     if (activeBoomuxWorkspaceId === "") {
       showNotice("Shell creation unavailable",
         "Show the Boomux Workspace where the Shell should be created",
@@ -1794,6 +1848,15 @@ Panel {
     nodeShellProcess.command = ["boomux", "shell", "create",
       String(activeBoomuxWorkspaceId), "--node", String(node.node_id), "--open"]
     nodeShellProcess.running = true
+  }
+
+  function updateNode(node) {
+    if (!nodeCanUpgrade(node) || nodeUpgradeProcess.running || nodeShellProcess.running
+        || actionProcess.running) return
+    nodeUpgradeAlias = String(node.alias)
+    nodeUpgradeProcess.command = WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)
+    nodeUpgradeProcess.running = true
+    close()
   }
 
   function openExecution(execution) {
@@ -2705,6 +2768,22 @@ Panel {
           nodeShellStderr.text || nodeShellStdout.text,
           "Could not create a Shell on " + root.nodeShellAlias),
           root.currentNoticeScreen(), true)
+      }
+    }
+  }
+
+  Process {
+    id: nodeUpgradeProcess
+    stdout: StdioCollector { id: nodeUpgradeStdout; waitForEnd: true }
+    stderr: StdioCollector { id: nodeUpgradeStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.actionMessage = "Node update finished for " + root.nodeUpgradeAlias
+        root.refresh()
+      } else {
+        root.showNotice("Node update failed", root.processError(
+          nodeUpgradeStderr.text || nodeUpgradeStdout.text,
+          "Could not update " + root.nodeUpgradeAlias), root.currentNoticeScreen(), true)
       }
     }
   }
@@ -5038,7 +5117,7 @@ Panel {
               width: parent.width
               height: Style.space(22)
               Text {
-                width: parent.width * 0.34
+                width: parent.width * 0.22
                 text: "NODE"
                 color: root.dim
                 font.family: root.fontFamily
@@ -5046,7 +5125,7 @@ Panel {
                 font.bold: true
               }
               Text {
-                width: parent.width * 0.31
+                width: parent.width * 0.18
                 text: "HEALTH"
                 color: root.dim
                 font.family: root.fontFamily
@@ -5054,7 +5133,15 @@ Panel {
                 font.bold: true
               }
               Text {
-                width: parent.width * 0.35
+                width: parent.width * 0.15
+                text: "VERSION"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              Text {
+                width: parent.width * 0.45
                 text: "ACTION"
                 color: root.dim
                 font.family: root.fontFamily
@@ -5093,7 +5180,7 @@ Panel {
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
                   Text {
-                    width: parent.width * 0.52
+                    width: parent.width * 0.4
                     text: String(modelData.alias)
                       + (modelData.local && String(modelData.alias).toLowerCase() !== "local"
                         ? " · local" : "")
@@ -5104,9 +5191,18 @@ Panel {
                     elide: Text.ElideRight
                   }
                   Text {
-                    width: parent.width * 0.48
+                    width: parent.width * 0.28
                     text: root.nodeHealthLabel(modelData)
                     color: root.nodeHealthColor(modelData)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width * 0.32
+                    text: root.nodeVersionIndicator(modelData)
+                    color: root.nodeVersionDirection(modelData) === "older"
+                      || root.nodeVersionDirection(modelData) === "newer" ? root.urgent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
@@ -5131,9 +5227,10 @@ Panel {
                 Button {
                   id: createShellNodeButton
                   z: 1
-                  width: parent.width * 0.35 - forgetNodeButton.width - Style.space(13)
+                  width: updateNodeButton.visible ? parent.width * 0.24
+                    : parent.width * 0.45 - forgetNodeButton.width - Style.space(13)
                   height: Style.space(30)
-                  anchors.right: forgetNodeButton.left
+                  anchors.right: updateNodeButton.visible ? updateNodeButton.left : forgetNodeButton.left
                   anchors.rightMargin: Style.space(5)
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Create Shell"
@@ -5142,12 +5239,36 @@ Panel {
                     : "Create a Shell in the active Workspace on this Node"
                   bordered: true
                   enabled: modelData.workspace_owner_eligible
+                    && root.nodeIsActionable(modelData.node_id)
                     && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
+                    && !nodeUpgradeProcess.running
                   foreground: root.foreground
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(4)
                   verticalPadding: Style.space(1)
                   onClicked: root.createShellOnNode(modelData)
+                }
+                Button {
+                  id: updateNodeButton
+                  z: 1
+                  visible: root.nodeCanUpgrade(modelData)
+                  width: parent.width * 0.17
+                  height: Style.space(30)
+                  anchors.right: forgetNodeButton.left
+                  anchors.rightMargin: Style.space(5)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Update"
+                  tooltipText: modelData.stale || !modelData.current
+                    ? "Reconnect, verify this exact Node, and update its older Boomux helper"
+                    : "Update this older Boomux helper with guided verification"
+                  bordered: true
+                  enabled: !nodeUpgradeProcess.running && !nodeShellProcess.running
+                    && !actionProcess.running
+                  foreground: root.urgent
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(3)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.updateNode(modelData)
                 }
                 Button {
                   id: forgetNodeButton
@@ -5161,6 +5282,7 @@ Panel {
                   tooltipText: "Forget this remote Node registration"
                   bordered: false
                   enabled: !actionProcess.running && !nodeShellProcess.running
+                    && !nodeUpgradeProcess.running
                   foreground: root.urgent
                   iconSize: 8
                   horizontalPadding: Style.space(1)
@@ -5206,10 +5328,40 @@ Panel {
                 }
                 Text {
                   width: parent.width
-                  text: root.selectedNode ? "Health: " + root.nodeHealthLabel(root.selectedNode)
-                    + " · Protocol " + Number(root.selectedNode.observed_protocol_version || 0)
+                  text: root.selectedNode ? "Route: "
+                    + (root.selectedNode.route ? String(root.selectedNode.route)
+                      : (root.selectedNode.local ? "local" : "unavailable"))
+                    + " · registration revision "
+                    + Number(root.selectedNode.registration_revision || 0) : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideMiddle
+                }
+                Text {
+                  width: parent.width
+                  text: root.nodeVersionDetail(root.selectedNode)
+                  color: root.nodeVersionDirection(root.selectedNode) === "older"
+                    || root.nodeVersionDirection(root.selectedNode) === "newer" ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? "Health: " + root.nodeHealthDetail(root.selectedNode)
                     + " · observed " + root.formatTimestamp(root.selectedNode.observed_at_ms) : ""
                   color: root.nodeHealthColor(root.selectedNode)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+                Text {
+                  width: parent.width
+                  text: root.selectedNode ? "Protocol: "
+                    + Number(root.selectedNode.observed_protocol_version || 0)
+                    + " · " + root.nodeSchedulerDetail(root.selectedNode) : ""
+                  color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
