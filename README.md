@@ -63,6 +63,7 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | `Tab` or `1` / `2` / `3` | Switch Agents, Schedules, and Nodes |
 | `A` in Nodes | Open guided Node setup |
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
+| Authenticate in Nodes | Open interactive authentication for an existing registered Node |
 | Update in Nodes | Reconnect, verify, and update an older remote Boomux helper in a native terminal |
 | Trash icon in Nodes | Confirm removal of the local Node registration without contacting the remote Node |
 | `D` in Agents | Dismiss the selected notification |
@@ -98,6 +99,15 @@ versions, protocol, freshness, scheduler state, resource counts, and Workspace
 eligibility. Its **Create Shell** action uses the exact selected remote Node and
 the currently active Boomux Workspace; paths and commands are resolved on that
 Node.
+
+When a Node reports **authentication required**, **Authenticate** opens Boomux's
+interactive reauthentication flow in a native terminal. It uses the exact stored
+route and pinned identity, requires an existing compatible helper, and does not
+install, upgrade, restart, retarget, or rewrite the registration. The action is
+shown only with daemon protocol 38 or newer when the installed Boomux advertises
+`node_reauthentication`. Before requesting an observer retry, Boomux verifies a
+separate prompt-free reconnect after the interactive authentication completes;
+the observer reports the resulting Node health asynchronously.
 
 When a remote helper is older than the control machine, **Update** opens Boomux's
 guided upgrade in a native terminal. Boomux handles authentication, confirmation,

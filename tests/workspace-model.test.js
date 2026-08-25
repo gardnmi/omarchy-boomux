@@ -261,6 +261,29 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   expect(panel).toContain("cached data retained · retrying automatically")
 })
 
+test("offers exact guided reauthentication only for authentication-required Nodes", () => {
+  const features = ["node_reauthentication"]
+  const remote = {
+    node_id: "node;$(false)", local: false, health: "authentication_required"
+  }
+  expect(model.nodeCanReauthenticate(remote, features, 38)).toBe(true)
+  expect(model.nodeCanReauthenticate(Object.assign({}, remote,
+    { health: "unreachable" }), features, 38)).toBe(false)
+  expect(model.nodeCanReauthenticate(Object.assign({}, remote,
+    { local: true }), features, 38)).toBe(false)
+  expect(model.nodeCanReauthenticate(remote, [], 38)).toBe(false)
+  expect(model.nodeCanReauthenticate(remote, features, 37)).toBe(false)
+  expect(model.guidedNodeReauthenticateCommand(remote.node_id)).toEqual([
+    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-reauthenticate",
+    "boomux", "__guided-node-reauthenticate", "node;$(false)"
+  ])
+
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("visible: root.nodeCanReauthenticate(modelData)")
+  expect(panel).toContain("WorkspaceModel.guidedNodeReauthenticateCommand(node.node_id)")
+  expect(panel).toContain('text: "Authenticate"')
+})
+
 test("keeps the Nodes surface compact and reveals only exceptional details", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('text: "Shell +"')
