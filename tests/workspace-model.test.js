@@ -325,9 +325,9 @@ test("shows passive Workspace notices", () => {
 
 test("documents actual keyboard navigation and configuration mutation", () => {
   const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
-  expect(readme).toContain("Move selection in the active lower Agents, Schedules, or Nodes section")
+  expect(readme).toContain("Switch Agents, Schedules, and Nodes")
   expect(readme).not.toContain("Select an Agent, workspace, Schedule, or Node")
-  expect(readme).toContain("mutate the plugin's Omarchy entry through its")
+  expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
   expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
 })
 

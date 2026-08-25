@@ -15,9 +15,7 @@ about operations that can start processes or take over terminals.
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
 - `assets/bomb-spark.svg`: fixed yellow attention spark
 - `preview.png`: root marketplace preview
-- `assets/boomux-*.png`: current side-pane README screenshots
-- `assets/agents.png`, `assets/workspaces.png`, `assets/projects.png`,
-  `assets/schedules.png`, `assets/nodes.png`: historical panel screenshots
+- `assets/boomux-workspace-desktop.png`: current side-pane README screenshot
 - `deploy-local.sh`: development-only deployment helper
 - `THIRD_PARTY_NOTICES.md`: Font Awesome attribution
 
