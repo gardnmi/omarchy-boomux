@@ -3,6 +3,11 @@
 Navigate coordinator-owned global Workspaces, monitor interactive Boomux Agents,
 and operate recurring Agent Schedules from a full-height Omarchy side pane.
 
+> [!IMPORTANT]
+> This plugin is a UI integration for [Boomux](https://github.com/gardnmi/boomux)
+> and does not work without Boomux installed and available on `PATH`. Install
+> Boomux before installing or enabling this plugin.
+
 <p align="center">
   <img src="assets/boomux-workspace-desktop.png" width="100%" alt="Boomux persistent side pane beside an active tiled Workspace">
 </p>
