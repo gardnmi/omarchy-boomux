@@ -4,9 +4,7 @@ Navigate coordinator-owned global Workspaces, monitor interactive Boomux Agents,
 and operate recurring Agent Schedules from a full-height Omarchy side pane.
 
 <p align="center">
-  <img src="assets/boomux-workspace-side-pane.png" width="32%" alt="Boomux side pane with an active Workspace and Agent">
-  <img src="assets/boomux-side-pane-settings.png" width="32%" alt="Boomux side pane settings">
-  <img src="assets/boomux-side-pane-nodes.png" width="32%" alt="Boomux side pane Node health view">
+  <img src="assets/boomux-workspace-side-pane-v2.png" width="360" alt="Boomux persistent side pane showing multiple Workspaces and an active Agent">
 </p>
 
 ## Features

@@ -3969,15 +3969,37 @@ Panel {
 
                 Text {
                   id: workspaceBadge
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(9)
+                  anchors.right: workspaceHeaderActions.left
+                  anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: expansionTarget.verticalCenter
-                  text: workspaceTreeDelegate.workspaceActive ? "ACTIVE"
-                    : (workspaceTreeDelegate.workspaceDefault ? "◆" : "")
-                  color: workspaceTreeDelegate.workspaceActive ? Color.accent : root.dim
+                  text: workspaceTreeDelegate.workspaceDefault
+                    && !workspaceTreeDelegate.workspaceActive ? "◆" : ""
+                  color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  font.bold: workspaceTreeDelegate.workspaceActive
+                }
+
+                Row {
+                  id: workspaceHeaderActions
+                  visible: workspaceTreeDelegate.workspaceExpanded
+                  z: 2
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(5)
+                  anchors.verticalCenter: expansionTarget.verticalCenter
+                  width: visible ? implicitWidth : 0
+                  Button {
+                    width: Style.space(18)
+                    height: Style.space(18)
+                    iconText: ""
+                    tooltipText: "Remove this Workspace and all managed resources"
+                    bordered: false
+                    enabled: root.workspaceCanRemove(workspaceTreeDelegate.modelData)
+                    foreground: root.urgent
+                    iconSize: 8
+                    horizontalPadding: Style.space(1)
+                    verticalPadding: 0
+                    onClicked: root.requestRemoveWorkspace(workspaceTreeDelegate.modelData)
+                  }
                 }
 
                 MouseArea {
@@ -4011,46 +4033,6 @@ Panel {
                     font.pixelSize: Style.font.caption
                     verticalAlignment: Text.AlignVCenter
                     leftPadding: Style.space(12)
-                  }
-
-                  Row {
-                    width: parent.width
-                    spacing: Style.space(4)
-                    Button {
-                      width: (parent.width - parent.spacing * 2) / 3
-                      text: "Create Shell"
-                      tooltipText: root.workspaceCreationReason(workspaceTreeDelegate.modelData)
-                        || "Create Shell in this Workspace"
-                      bordered: true
-                      enabled: root.workspaceCreationReason(workspaceTreeDelegate.modelData) === ""
-                      foreground: root.foreground
-                      fontSize: Style.font.caption
-                      horizontalPadding: Style.space(3)
-                      onClicked: root.showWorkspaceForm(workspaceTreeDelegate.modelData, "shell")
-                    }
-                    Button {
-                      width: (parent.width - parent.spacing * 2) / 3
-                      text: "Start Agent"
-                      tooltipText: root.workspaceCreationReason(workspaceTreeDelegate.modelData)
-                        || "Start Agent in this Workspace"
-                      bordered: true
-                      enabled: root.workspaceCreationReason(workspaceTreeDelegate.modelData) === ""
-                      foreground: root.foreground
-                      fontSize: Style.font.caption
-                      horizontalPadding: Style.space(3)
-                      onClicked: root.showWorkspaceForm(workspaceTreeDelegate.modelData, "agent")
-                    }
-                    Button {
-                      width: (parent.width - parent.spacing * 2) / 3
-                      text: "Remove"
-                      tooltipText: "Remove this Workspace and all managed resources"
-                      bordered: true
-                      enabled: root.workspaceCanRemove(workspaceTreeDelegate.modelData)
-                      foreground: root.urgent
-                      fontSize: Style.font.caption
-                      horizontalPadding: Style.space(3)
-                      onClicked: root.requestRemoveWorkspace(workspaceTreeDelegate.modelData)
-                    }
                   }
 
                   Repeater {
@@ -4139,17 +4121,19 @@ Panel {
                         anchors.right: parent.right
                         anchors.rightMargin: Style.space(5)
                         anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.kind === "launcher" ? "Remove" : "Close"
+                        width: Style.space(18)
+                        height: Style.space(18)
+                        iconText: ""
                         tooltipText: modelData.kind === "launcher"
                           ? "Remove this launcher definition"
                           : "Close and remove this Boomux Shell"
-                        bordered: true
+                        bordered: false
                         enabled: !actionProcess.running && !openProcess.running
                           && !executionOpenProcess.running
                         foreground: root.urgent
-                        fontSize: Style.font.caption
-                        horizontalPadding: Style.space(6)
-                        verticalPadding: Style.space(2)
+                        iconSize: 8
+                        horizontalPadding: Style.space(1)
+                        verticalPadding: 0
                         onClicked: root.requestRemoveItem(modelData)
                       }
                     }

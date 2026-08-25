@@ -220,7 +220,7 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain('String(setting("side", "left"))')
   expect(panel).toContain('Number(setting("paneWidth", Style.space(360)))')
   expect(panel).toContain("SidePane {")
-  expect(panel).toContain('text: workspaceTreeDelegate.workspaceActive ? "ACTIVE"')
+  expect(panel).not.toContain('workspaceTreeDelegate.workspaceActive ? "ACTIVE"')
   expect(panel).toContain("modelData.id === root.activeBoomuxWorkspaceId")
   expect(panel).toContain("onClicked: root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)")
   expect(panel).toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Beginning)")
@@ -280,21 +280,25 @@ test("keeps the pane open after an Agent or Shell terminal opens", () => {
 
 test("offers confirmed local Shell closure from the Workspace tree", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('text: modelData.kind === "launcher" ? "Remove" : "Close"')
+  expect(panel.match(/iconText: ""/g).length).toBeGreaterThanOrEqual(2)
   expect(panel).toContain(': "Close and remove this Boomux Shell"')
   expect(panel).toContain("onClicked: root.requestRemoveItem(modelData)")
   expect(panel).toContain('String(item.shell.owner_workspace_id || owningWorkspace.id)')
   expect(panel).toContain('root.actionMessage = "Shell closed"')
 })
 
-test("keeps palette replacement actions reachable from the Workspace tree", () => {
+test("keeps compact Workspace removal reachable from the tree", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('text: "Create Shell"')
-  expect(panel).toContain('text: "Start Agent"')
-  expect(panel).toContain('onClicked: root.showWorkspaceForm(workspaceTreeDelegate.modelData, "shell")')
-  expect(panel).toContain('onClicked: root.showWorkspaceForm(workspaceTreeDelegate.modelData, "agent")')
+  expect(panel).toContain('iconText: ""')
+  expect(panel).toContain("id: workspaceHeaderActions")
+  expect(panel).toContain("width: Style.space(18)")
+  expect(panel).toContain("iconSize: 8")
+  const tree = panel.slice(panel.indexOf("id: workspaceTreeList"),
+    panel.indexOf("id: workspaceResizeHandle"))
+  expect(tree).not.toContain("Start Agent in this Workspace")
+  expect(tree).not.toContain('iconText: ""')
+  expect(tree).not.toContain('text: modelData.kind === "launcher" ? "Remove" : "Close"')
   expect(panel).toContain("onClicked: root.requestRemoveWorkspace(workspaceTreeDelegate.modelData)")
-  expect(panel).toContain('text: modelData.kind === "launcher" ? "Remove" : "Close"')
   expect(panel).toContain("onClicked: root.requestRemoveItem(modelData)")
 })
 
