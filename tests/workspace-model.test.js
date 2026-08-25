@@ -214,6 +214,20 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
 })
 
+test("creates active-Workspace Shells directly on remote Node rows", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("visibleNodes: nodes.filter(function(node) { return !node.local })")
+  expect(panel).toContain('text: "Create Shell"')
+  expect(panel).toContain("root.createShellOnNode(modelData)")
+  expect(panel).toContain("root.requestForgetNode(modelData)")
+  expect(panel).toContain('["boomux", "node", "forget",')
+  expect(panel).toContain("It does not contact the Node or stop its processes.")
+  expect(panel).toContain("String(activeBoomuxWorkspaceId), \"--node\", String(node.node_id), \"--open\"")
+  expect(panel).toContain('"Remote Node: " + String(root.creationNode.alias)')
+  expect(panel).toContain('" · Node: " + String(modelData.node_alias)')
+  expect(panel).not.toContain("defaultNodeId")
+})
+
 test("uses a configurable sliding side pane with an active Workspace tree", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
