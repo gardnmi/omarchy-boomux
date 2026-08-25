@@ -182,6 +182,11 @@ or lifecycle observation.
   it only for an older helper with both local and observed remote upgrade
   capabilities. For a newer helper, show **Control machine update needed** and
   no replacement action.
+- Keep Node rows card-like and scannable: name plus one compact health/version
+  line and a small action group. The selected summary shows route, runtime, and
+  combined workload; health detail, scheduler activity, control-version warnings,
+  and eligibility failures appear only when exceptional. Do not restore a dense
+  diagnostics table or an always-visible metadata wall.
 - Highlight only the Hyprland-presented special Workspace as active. Persisted
   default and expanded Workspace state must remain visually distinct.
 - The divider above the lower tabs resizes the Workspace viewport vertically.
