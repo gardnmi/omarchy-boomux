@@ -261,6 +261,19 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   expect(panel).toContain("cached data retained · retrying automatically")
 })
 
+test("keeps the Nodes surface compact and reveals only exceptional details", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('text: "Shell +"')
+  expect(panel).toContain("root.nodeHealthLabel(modelData) + \" · \"")
+  expect(panel).toContain("text: root.nodeRuntimeSummary(root.selectedNode)")
+  expect(panel).toContain("text: root.nodeWorkloadSummary(root.selectedNode)")
+  expect(panel).toContain('root.selectedNode.health !== "online"')
+  expect(panel).not.toContain('text: "ACTION"')
+  expect(panel).not.toContain('text: "VERSION"')
+  expect(panel).not.toContain('" · registration revision "')
+  expect(panel).not.toContain('text: root.selectedNode ? "ID: "')
+})
+
 test("uses a configurable sliding side pane with an active Workspace tree", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")

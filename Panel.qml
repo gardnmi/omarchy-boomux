@@ -439,22 +439,25 @@ Panel {
     return remote
   }
 
-  function nodeVersionDetail(node) {
+  function nodeRuntimeSummary(node) {
     if (!node) return ""
-    var remote = node.observed_helper_version ? String(node.observed_helper_version) : "unknown"
-    var control = cliVersion || "unknown"
-    var direction = nodeVersionDirection(node)
-    var status = direction === "older" ? "update available"
-      : (direction === "newer" ? "Control machine update needed"
-        : (direction === "current" ? "current" : "comparison unavailable"))
-    return "Versions: remote " + remote + " · control " + control + " · " + status
+    var version = node.observed_helper_version
+      ? String(node.observed_helper_version) : "version unknown"
+    return version + " · protocol " + Number(node.observed_protocol_version || 0)
+      + " · seen " + formatTimestamp(node.observed_at_ms)
   }
 
-  function nodeSchedulerDetail(node) {
+  function nodeWorkloadSummary(node) {
+    if (!node) return ""
+    return nodeWorkspaceCount(node) + " Workspaces · " + nodeShellCount(node) + " Shells · "
+      + nodeAgentCount(node) + " Agents · " + Number(node.schedule_count || 0) + " Schedules"
+  }
+
+  function nodeSchedulerWarning(node) {
     var scheduler = node && node.scheduler ? node.scheduler : {}
-    return "Scheduler: " + String(scheduler.state || "offline") + " · "
-      + Number(scheduler.active_executions || 0) + " active / "
-      + Number(scheduler.max_concurrent || 0) + " max"
+    var active = Number(scheduler.active_executions || 0)
+    return active > 0 ? "Scheduler: " + active + " active of "
+      + Number(scheduler.max_concurrent || 0) : ""
   }
 
   function nodeMetric(node, field, collection) {
@@ -5112,45 +5115,6 @@ Panel {
               bottomPadding: Style.space(24)
             }
 
-            Row {
-              visible: root.visibleNodes.length > 0
-              width: parent.width
-              height: Style.space(22)
-              Text {
-                width: parent.width * 0.22
-                text: "NODE"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              Text {
-                width: parent.width * 0.18
-                text: "HEALTH"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              Text {
-                width: parent.width * 0.15
-                text: "VERSION"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              Text {
-                width: parent.width * 0.45
-                text: "ACTION"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                horizontalAlignment: Text.AlignHCenter
-              }
-            }
-
             ListView {
               id: nodeList
               visible: root.visibleNodes.length > 0
@@ -5166,24 +5130,23 @@ Panel {
                 required property var modelData
                 required property int index
                 width: ListView.view.width
-                height: Style.space(48)
+                height: Style.space(58)
                 radius: Style.cornerRadius
                 color: index === root.selectedIndex
                   ? Style.selectedFillFor(root.foreground, Color.accent)
                   : (nodeMouse.containsMouse ? Util.alpha(root.foreground, 0.06) : "transparent")
                 opacity: modelData.stale ? 0.72 : 1
 
-                Row {
+                Column {
                   anchors.left: parent.left
-                  anchors.right: createShellNodeButton.left
+                  anchors.right: nodeActionRow.left
                   anchors.leftMargin: Style.space(8)
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(1)
                   Text {
-                    width: parent.width * 0.4
+                    width: parent.width
                     text: String(modelData.alias)
-                      + (modelData.local && String(modelData.alias).toLowerCase() !== "local"
-                        ? " · local" : "")
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -5191,18 +5154,11 @@ Panel {
                     elide: Text.ElideRight
                   }
                   Text {
-                    width: parent.width * 0.28
-                    text: root.nodeHealthLabel(modelData)
-                    color: root.nodeHealthColor(modelData)
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                  Text {
-                    width: parent.width * 0.32
-                    text: root.nodeVersionIndicator(modelData)
-                    color: root.nodeVersionDirection(modelData) === "older"
-                      || root.nodeVersionDirection(modelData) === "newer" ? root.urgent : root.dim
+                    width: parent.width
+                    text: root.nodeHealthLabel(modelData) + " · "
+                      + root.nodeVersionIndicator(modelData)
+                    color: modelData.health === "online" && modelData.current && !modelData.stale
+                      && root.nodeVersionDirection(modelData) !== "newer" ? root.dim : root.urgent
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
@@ -5211,7 +5167,7 @@ Panel {
                 MouseArea {
                   id: nodeMouse
                   anchors.left: parent.left
-                  anchors.right: createShellNodeButton.left
+                  anchors.right: nodeActionRow.left
                   anchors.top: parent.top
                   anchors.bottom: parent.bottom
                   hoverEnabled: true
@@ -5224,70 +5180,61 @@ Panel {
                     root.selectedNodeId = modelData.node_id
                   }
                 }
-                Button {
-                  id: createShellNodeButton
+                Row {
+                  id: nodeActionRow
                   z: 1
-                  width: updateNodeButton.visible ? parent.width * 0.24
-                    : parent.width * 0.45 - forgetNodeButton.width - Style.space(13)
-                  height: Style.space(30)
-                  anchors.right: updateNodeButton.visible ? updateNodeButton.left : forgetNodeButton.left
-                  anchors.rightMargin: Style.space(5)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Create Shell"
-                  tooltipText: root.activeBoomuxWorkspaceId === ""
-                    ? "Show a Boomux Workspace first"
-                    : "Create a Shell in the active Workspace on this Node"
-                  bordered: true
-                  enabled: modelData.workspace_owner_eligible
-                    && root.nodeIsActionable(modelData.node_id)
-                    && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
-                    && !nodeUpgradeProcess.running
-                  foreground: root.foreground
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(4)
-                  verticalPadding: Style.space(1)
-                  onClicked: root.createShellOnNode(modelData)
-                }
-                Button {
-                  id: updateNodeButton
-                  z: 1
-                  visible: root.nodeCanUpgrade(modelData)
-                  width: parent.width * 0.17
-                  height: Style.space(30)
-                  anchors.right: forgetNodeButton.left
-                  anchors.rightMargin: Style.space(5)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Update"
-                  tooltipText: modelData.stale || !modelData.current
-                    ? "Reconnect, verify this exact Node, and update its older Boomux helper"
-                    : "Update this older Boomux helper with guided verification"
-                  bordered: true
-                  enabled: !nodeUpgradeProcess.running && !nodeShellProcess.running
-                    && !actionProcess.running
-                  foreground: root.urgent
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(3)
-                  verticalPadding: Style.space(1)
-                  onClicked: root.updateNode(modelData)
-                }
-                Button {
-                  id: forgetNodeButton
-                  z: 1
-                  width: Style.space(18)
-                  height: Style.space(18)
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(7)
                   anchors.verticalCenter: parent.verticalCenter
-                  iconText: ""
-                  tooltipText: "Forget this remote Node registration"
-                  bordered: false
-                  enabled: !actionProcess.running && !nodeShellProcess.running
-                    && !nodeUpgradeProcess.running
-                  foreground: root.urgent
-                  iconSize: 8
-                  horizontalPadding: Style.space(1)
-                  verticalPadding: 0
-                  onClicked: root.requestForgetNode(modelData)
+                  spacing: Style.space(4)
+                  Button {
+                    width: Style.space(68)
+                    height: Style.space(30)
+                    text: "Shell +"
+                    tooltipText: root.activeBoomuxWorkspaceId === ""
+                      ? "Show a Boomux Workspace first"
+                      : "Create a Shell in the active Workspace on this Node"
+                    bordered: true
+                    enabled: modelData.workspace_owner_eligible
+                      && root.nodeIsActionable(modelData.node_id)
+                      && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
+                      && !nodeUpgradeProcess.running
+                    foreground: root.foreground
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(4)
+                    verticalPadding: Style.space(1)
+                    onClicked: root.createShellOnNode(modelData)
+                  }
+                  Button {
+                    visible: root.nodeCanUpgrade(modelData)
+                    width: Style.space(58)
+                    height: Style.space(30)
+                    text: "Update"
+                    tooltipText: "Reconnect, verify, and update this older Boomux helper"
+                    bordered: true
+                    enabled: !nodeUpgradeProcess.running && !nodeShellProcess.running
+                      && !actionProcess.running
+                    foreground: root.urgent
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(3)
+                    verticalPadding: Style.space(1)
+                    onClicked: root.updateNode(modelData)
+                  }
+                  Button {
+                    width: Style.space(18)
+                    height: Style.space(18)
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconText: ""
+                    tooltipText: "Forget this remote Node registration"
+                    bordered: false
+                    enabled: !actionProcess.running && !nodeShellProcess.running
+                      && !nodeUpgradeProcess.running
+                    foreground: root.urgent
+                    iconSize: 8
+                    horizontalPadding: Style.space(1)
+                    verticalPadding: 0
+                    onClicked: root.requestForgetNode(modelData)
+                  }
                 }
               }
             }
@@ -5306,95 +5253,97 @@ Panel {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.margins: Style.space(9)
-                spacing: Style.space(4)
+                spacing: Style.space(5)
 
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Column {
+                    width: parent.width - nodeDetailVersion.width - parent.spacing
+                    spacing: 0
+                    Text {
+                      width: parent.width
+                      text: root.selectedNode ? String(root.selectedNode.alias) : ""
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+                    Text {
+                      width: parent.width
+                      text: root.selectedNode && root.selectedNode.route
+                        ? String(root.selectedNode.route) : "Route unavailable"
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideMiddle
+                    }
+                  }
+                  Text {
+                    id: nodeDetailVersion
+                    width: Style.space(86)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.selectedNode && root.selectedNode.observed_helper_version
+                      ? String(root.selectedNode.observed_helper_version) : "unknown"
+                    color: root.nodeVersionDirection(root.selectedNode) === "current"
+                      ? Color.accent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
+                  }
+                }
                 Text {
                   width: parent.width
-                  text: root.selectedNode ? String(root.selectedNode.alias)
-                    + (root.selectedNode.local ? " · Local Node" : " · Remote Node") : ""
-                  color: root.foreground
+                  text: root.nodeRuntimeSummary(root.selectedNode)
+                  color: root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
+                  font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
                 }
                 Text {
                   width: parent.width
-                  text: root.selectedNode ? "ID: " + String(root.selectedNode.node_id) : ""
+                  text: root.nodeWorkloadSummary(root.selectedNode)
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  elide: Text.ElideMiddle
+                  elide: Text.ElideRight
                 }
                 Text {
+                  visible: root.selectedNode && (root.selectedNode.health !== "online"
+                    || !root.selectedNode.current || root.selectedNode.stale)
                   width: parent.width
-                  text: root.selectedNode ? "Route: "
-                    + (root.selectedNode.route ? String(root.selectedNode.route)
-                      : (root.selectedNode.local ? "local" : "unavailable"))
-                    + " · registration revision "
-                    + Number(root.selectedNode.registration_revision || 0) : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideMiddle
-                }
-                Text {
-                  width: parent.width
-                  text: root.nodeVersionDetail(root.selectedNode)
-                  color: root.nodeVersionDirection(root.selectedNode) === "older"
-                    || root.nodeVersionDirection(root.selectedNode) === "newer" ? root.urgent : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  wrapMode: Text.Wrap
-                }
-                Text {
-                  width: parent.width
-                  text: root.selectedNode ? "Health: " + root.nodeHealthDetail(root.selectedNode)
-                    + " · observed " + root.formatTimestamp(root.selectedNode.observed_at_ms) : ""
+                  text: root.nodeHealthDetail(root.selectedNode)
                   color: root.nodeHealthColor(root.selectedNode)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   wrapMode: Text.Wrap
                 }
                 Text {
+                  visible: root.nodeVersionDirection(root.selectedNode) === "newer"
                   width: parent.width
-                  text: root.selectedNode ? "Protocol: "
-                    + Number(root.selectedNode.observed_protocol_version || 0)
-                    + " · " + root.nodeSchedulerDetail(root.selectedNode) : ""
+                  text: "Control machine update needed"
+                  color: root.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  visible: root.nodeSchedulerWarning(root.selectedNode) !== ""
+                  width: parent.width
+                  text: root.nodeSchedulerWarning(root.selectedNode)
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
                 }
                 Text {
+                  visible: root.selectedNode && !root.selectedNode.workspace_owner_eligible
+                    && root.selectedNode.workspace_owner_unavailable_reason !== ""
                   width: parent.width
-                  text: root.selectedNode ? "Workload: " + root.nodeWorkspaceCount(root.selectedNode)
-                    + " Workspaces · " + root.nodeShellCount(root.selectedNode) + " Shells · "
-                    + root.nodeAgentCount(root.selectedNode) + " Agents" : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-                Text {
-                  width: parent.width
-                  text: root.selectedNode ? "Definitions: "
-                    + Number(root.selectedNode.launcher_count || 0) + " launchers · "
-                    + Number(root.selectedNode.schedule_count || 0) + " Schedules" : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-                Text {
-                  width: parent.width
-                  text: root.selectedNode && root.selectedNode.workspace_owner_eligible
-                    ? "Workspace owner: eligible"
-                    : "Workspace owner: " + (root.selectedNode
-                      && root.selectedNode.workspace_owner_unavailable_reason
-                      ? String(root.selectedNode.workspace_owner_unavailable_reason) : "unavailable")
-                  color: root.selectedNode && root.selectedNode.workspace_owner_eligible
-                    ? root.dim : root.urgent
+                  text: root.selectedNode
+                    ? String(root.selectedNode.workspace_owner_unavailable_reason || "") : ""
+                  color: root.urgent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   wrapMode: Text.Wrap
