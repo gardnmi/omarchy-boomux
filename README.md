@@ -62,6 +62,8 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Trash icon | Confirm removal of the local resource |
 | `Tab` or `1` / `2` / `3` | Switch Agents, Schedules, and Nodes |
 | `A` in Nodes | Open guided Node setup |
+| Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
+| Trash icon in Nodes | Confirm removal of the local Node registration without contacting the remote Node |
 | `D` in Agents | Dismiss the selected notification |
 | `N` | Create a Workspace |
 | `R` | Refresh |
@@ -89,6 +91,10 @@ Use the gear button to:
 - Move the pane to the left or right edge.
 - Adjust its width in 20-pixel steps.
 - Open `boomux config edit` in a native terminal.
+
+The Nodes view lists registered remote Nodes. Its **Create Shell** action uses
+the exact selected remote Node and the currently active Boomux Workspace; paths
+and commands are resolved on that Node.
 
 Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 

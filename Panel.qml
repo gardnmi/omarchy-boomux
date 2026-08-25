@@ -99,6 +99,7 @@ Panel {
   property string scheduleError: ""
   property string executionError: ""
   property string actionMessage: ""
+  property string nodeShellAlias: ""
   property string formMode: ""
   property bool settingsOpen: false
   property string workspaceCreationMode: "choice"
@@ -152,6 +153,7 @@ Panel {
 
   readonly property var visibleWorkspaces: workspaces
   readonly property var visibleSchedules: schedules
+  readonly property var visibleNodes: nodes.filter(function(node) { return !node.local })
   readonly property var visibleAgents: WorkspaceModel.agentsByLastUpdated(agents.filter(function(agent) {
     var state = agent.observation ? agent.observation.state : "unknown"
     return !agentIsScheduleOwned(agent)
@@ -197,7 +199,6 @@ Panel {
   readonly property var eligibleCreationNodes: WorkspaceModel.eligibleNodes(nodes)
   readonly property var creationNode: {
     if (!globalWorkspacesAvailable) return selectedCreationNode()
-    if (eligibleCreationNodes.length === 1) return eligibleCreationNodes[0]
     var selected = nodeFor(creationNodeId)
     return selected && selected.workspace_owner_eligible ? selected : null
   }
@@ -214,10 +215,10 @@ Panel {
   readonly property var selectedProject: selectedProjectIndex >= 0
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
   readonly property int itemCount: activeTab === "agents" ? paneAgents.length
-    : (activeTab === "schedules" ? visibleSchedules.length : nodes.length)
+    : (activeTab === "schedules" ? visibleSchedules.length : visibleNodes.length)
   readonly property var selectedItem: {
     var model = activeTab === "agents" ? paneAgents
-      : (activeTab === "schedules" ? visibleSchedules : nodes)
+      : (activeTab === "schedules" ? visibleSchedules : visibleNodes)
     return selectedIndex >= 0 && selectedIndex < model.length ? model[selectedIndex] : null
   }
   readonly property var selectedNode: {
@@ -762,7 +763,7 @@ Panel {
     if (!selectedSchedule)
       selectedScheduleKey = visibleSchedules.length > 0 ? visibleSchedules[0].key : ""
     if (!selectedNode)
-      selectedNodeId = nodes.length > 0 ? nodes[0].node_id : ""
+      selectedNodeId = visibleNodes.length > 0 ? visibleNodes[0].node_id : ""
     workspaceDetail = selectedWorkspace
     syncAgentIndex()
     syncWorkspaceIndex()
@@ -1221,7 +1222,7 @@ Panel {
     }
     else if (activeTab === "schedules") selectSchedule(visibleSchedules[selectedIndex].key)
     else {
-      selectedNodeId = nodes[selectedIndex].node_id
+      selectedNodeId = visibleNodes[selectedIndex].node_id
       nodeList.positionViewAtIndex(selectedIndex, ListView.Contain)
     }
   }
@@ -1385,14 +1386,14 @@ Panel {
 
   function syncNodeIndex() {
     if (activeTab !== "nodes") return
-    for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].node_id === selectedNodeId) {
+    for (var i = 0; i < visibleNodes.length; i++) {
+      if (visibleNodes[i].node_id === selectedNodeId) {
         selectedIndex = i
         return
       }
     }
-    selectedIndex = nodes.length > 0 ? 0 : -1
-    selectedNodeId = nodes.length > 0 ? nodes[0].node_id : ""
+    selectedIndex = visibleNodes.length > 0 ? 0 : -1
+    selectedNodeId = visibleNodes.length > 0 ? visibleNodes[0].node_id : ""
   }
 
   function syncAgentIndex() {
@@ -1658,6 +1659,12 @@ Panel {
     itemToRemove = { kind: "workspace", workspace: workspace }
   }
 
+  function requestForgetNode(node) {
+    if (!node || node.local || actionProcess.running || nodeShellProcess.running) return
+    removeItemDialog.selectedIndex = 0
+    itemToRemove = { kind: "node", node: node }
+  }
+
   function cancelRemoveItem() {
     itemToRemove = null
   }
@@ -1667,6 +1674,9 @@ Panel {
     if (item.kind === "workspace")
       return "Remove Workspace " + String(item.workspace.name)
         + "? This terminates its running Shells and removes its launchers, schedules and persisted prompts, retained terminal state, Agent records, attention, and Workspace metadata."
+    if (item.kind === "node")
+      return "Forget remote Node " + String(item.node.alias)
+        + "? This removes only the local registration and cached projection. It does not contact the Node or stop its processes."
     if (item.kind === "launcher")
       return "Remove launcher " + String(item.name)
         + "? This deletes its workspace definition. Applications it already launched keep running."
@@ -1682,6 +1692,15 @@ Panel {
       pendingAction = { kind: "remove-workspace", key: item.workspace.key }
       actionMessage = "Removing " + String(item.workspace.name) + "..."
       actionProcess.command = WorkspaceModel.workspaceCloseCommand(item.workspace)
+      actionProcess.running = true
+      return
+    }
+    if (item && item.kind === "node") {
+      if (item.node.local || actionProcess.running || nodeShellProcess.running) return
+      pendingAction = { kind: "forget-node", key: item.node.node_id }
+      actionMessage = "Forgetting " + String(item.node.alias) + "..."
+      actionProcess.command = ["boomux", "node", "forget",
+        String(item.node.node_id), "--json"]
       actionProcess.running = true
       return
     }
@@ -1761,6 +1780,20 @@ Panel {
     if (!bar || !federationAvailable) return
     bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add")
     close()
+  }
+
+  function createShellOnNode(node) {
+    if (!node || node.local || nodeShellProcess.running) return
+    if (activeBoomuxWorkspaceId === "") {
+      showNotice("Shell creation unavailable",
+        "Show the Boomux Workspace where the Shell should be created",
+        currentNoticeScreen(), true)
+      return
+    }
+    nodeShellAlias = String(node.alias)
+    nodeShellProcess.command = ["boomux", "shell", "create",
+      String(activeBoomuxWorkspaceId), "--node", String(node.node_id), "--open"]
+    nodeShellProcess.running = true
   }
 
   function openExecution(execution) {
@@ -2660,6 +2693,23 @@ Panel {
   }
 
   Process {
+    id: nodeShellProcess
+    stdout: StdioCollector { id: nodeShellStdout; waitForEnd: true }
+    stderr: StdioCollector { id: nodeShellStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.actionMessage = "Shell created on " + root.nodeShellAlias
+        root.refresh()
+      } else {
+        root.showNotice("Shell creation failed", root.processError(
+          nodeShellStderr.text || nodeShellStdout.text,
+          "Could not create a Shell on " + root.nodeShellAlias),
+          root.currentNoticeScreen(), true)
+      }
+    }
+  }
+
+  Process {
     id: actionProcess
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
@@ -2700,6 +2750,7 @@ Panel {
       else if (action === "remove-launcher") root.actionMessage = "Launcher removed"
       else if (action === "remove-shell") root.actionMessage = "Shell closed"
       else if (action === "remove-workspace") root.actionMessage = "Workspace removed"
+      else if (action === "forget-node") root.actionMessage = "Node forgotten"
       else if (action === "run-schedule") root.actionMessage = "Schedule execution started"
       else if (action === "pause-schedule") root.actionMessage = "Schedule paused"
       else if (action === "resume-schedule") root.actionMessage = "Schedule resumed"
@@ -3577,12 +3628,24 @@ Panel {
                 options: root.eligibleCreationNodes.map(function(node) {
                   return {
                     value: String(node.node_id),
-                    label: String(node.alias) + " · available"
+                    label: String(node.alias) + (node.local ? " · local" : " · remote")
                   }
                 })
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onChanged: function(value) { root.selectCreationNode(value) }
+              }
+
+              Text {
+                visible: root.creationNode && !root.creationNode.local
+                width: parent.width
+                text: root.creationNode ? "Remote Node: " + String(root.creationNode.alias)
+                  + " · paths and commands run on that Node" : ""
+                color: Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
               }
 
             }
@@ -4606,6 +4669,7 @@ Panel {
                           + " · " + String(modelData.status) + (modelData.detail
                           ? " · " + (modelData.kind === "shell"
                             ? root.compactPath(modelData.detail) : String(modelData.detail)) : "")
+                          + (!modelData.node_local ? " · Node: " + String(modelData.node_alias) : "")
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -4958,9 +5022,9 @@ Panel {
             }
 
             Text {
-              visible: root.nodes.length === 0
+              visible: root.visibleNodes.length === 0
               width: parent.width
-              text: root.error !== "" ? root.error : "No Boomux Nodes"
+              text: root.error !== "" ? root.error : "No remote Boomux Nodes"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -4970,11 +5034,11 @@ Panel {
             }
 
             Row {
-              visible: root.nodes.length > 0
+              visible: root.visibleNodes.length > 0
               width: parent.width
               height: Style.space(22)
               Text {
-                width: parent.width * 0.45
+                width: parent.width * 0.34
                 text: "NODE"
                 color: root.dim
                 font.family: root.fontFamily
@@ -4982,21 +5046,30 @@ Panel {
                 font.bold: true
               }
               Text {
-                width: parent.width * 0.55
+                width: parent.width * 0.31
                 text: "HEALTH"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
               }
+              Text {
+                width: parent.width * 0.35
+                text: "ACTION"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+              }
             }
 
             ListView {
               id: nodeList
-              visible: root.nodes.length > 0
+              visible: root.visibleNodes.length > 0
               width: parent.width
               implicitHeight: Math.min(contentHeight, Style.space(190))
-              model: root.nodes
+              model: root.visibleNodes
               spacing: Style.space(3)
               clip: true
               boundsBehavior: Flickable.StopAtBounds
@@ -5015,14 +5088,15 @@ Panel {
 
                 Row {
                   anchors.left: parent.left
-                  anchors.right: parent.right
+                  anchors.right: createShellNodeButton.left
                   anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
                   Text {
-                    width: parent.width * 0.45
-                    text: String(modelData.alias) + (modelData.local
-                      && String(modelData.alias).toLowerCase() !== "local" ? " · local" : "")
+                    width: parent.width * 0.52
+                    text: String(modelData.alias)
+                      + (modelData.local && String(modelData.alias).toLowerCase() !== "local"
+                        ? " · local" : "")
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -5030,7 +5104,7 @@ Panel {
                     elide: Text.ElideRight
                   }
                   Text {
-                    width: parent.width * 0.55
+                    width: parent.width * 0.48
                     text: root.nodeHealthLabel(modelData)
                     color: root.nodeHealthColor(modelData)
                     font.family: root.fontFamily
@@ -5040,7 +5114,10 @@ Panel {
                 }
                 MouseArea {
                   id: nodeMouse
-                  anchors.fill: parent
+                  anchors.left: parent.left
+                  anchors.right: createShellNodeButton.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
                   hoverEnabled: true
                   onEntered: {
                     root.selectedIndex = index
@@ -5050,6 +5127,45 @@ Panel {
                     root.selectedIndex = index
                     root.selectedNodeId = modelData.node_id
                   }
+                }
+                Button {
+                  id: createShellNodeButton
+                  z: 1
+                  width: parent.width * 0.35 - forgetNodeButton.width - Style.space(13)
+                  height: Style.space(30)
+                  anchors.right: forgetNodeButton.left
+                  anchors.rightMargin: Style.space(5)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Create Shell"
+                  tooltipText: root.activeBoomuxWorkspaceId === ""
+                    ? "Show a Boomux Workspace first"
+                    : "Create a Shell in the active Workspace on this Node"
+                  bordered: true
+                  enabled: modelData.workspace_owner_eligible
+                    && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
+                  foreground: root.foreground
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(4)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.createShellOnNode(modelData)
+                }
+                Button {
+                  id: forgetNodeButton
+                  z: 1
+                  width: Style.space(18)
+                  height: Style.space(18)
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: ""
+                  tooltipText: "Forget this remote Node registration"
+                  bordered: false
+                  enabled: !actionProcess.running && !nodeShellProcess.running
+                  foreground: root.urgent
+                  iconSize: 8
+                  horizontalPadding: Style.space(1)
+                  verticalPadding: 0
+                  onClicked: root.requestForgetNode(modelData)
                 }
               }
             }
