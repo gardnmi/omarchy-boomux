@@ -218,12 +218,14 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
 })
 
-test("creates active-Workspace Shells directly on remote Node rows", () => {
+test("creates active-Workspace Shells from remote Node action menus", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("visibleNodes: nodes.filter(function(node) { return !node.local })")
   expect(panel).toContain('text: "Create Shell"')
-  expect(panel).toContain("root.createShellOnNode(modelData)")
-  expect(panel).toContain("root.requestForgetNode(modelData)")
+  expect(panel).toContain('root.runActionMenuAction("shell")')
+  expect(panel).toContain('root.runActionMenuAction("remove")')
+  expect(panel).toContain("createShellOnNode(target.node)")
+  expect(panel).toContain("requestForgetNode(target.node)")
   expect(panel).toContain('["boomux", "node", "forget",')
   expect(panel).toContain("It does not contact the Node or stop its processes.")
   expect(panel).toContain("String(activeBoomuxWorkspaceId), \"--node\", String(node.node_id), \"--open\"")
@@ -255,7 +257,7 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   expect(model.nodeCanUpgrade(remote, "0.30.1", ["node_upgrade_coordination"])).toBe(false)
 
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("visible: root.nodeCanUpgrade(modelData)")
+  expect(panel).toContain("root.nodeCanUpgrade(root.actionMenuTarget.node)")
   expect(panel).toContain("WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)")
   expect(panel).toContain("Control machine update needed")
   expect(panel).toContain("cached data retained · retrying automatically")
@@ -279,14 +281,17 @@ test("offers exact guided reauthentication only for authentication-required Node
   ])
 
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("visible: root.nodeCanReauthenticate(modelData)")
+  expect(panel).toContain("root.nodeCanReauthenticate(root.actionMenuTarget.node)")
   expect(panel).toContain("WorkspaceModel.guidedNodeReauthenticateCommand(node.node_id)")
   expect(panel).toContain('text: "Authenticate"')
 })
 
 test("keeps the Nodes surface compact and reveals only exceptional details", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('text: "Shell +"')
+  expect(panel).toContain("id: nodeMenuButton")
+  expect(panel).toContain('tooltipText: root.nodeCanReauthenticate(modelData)')
+  expect(panel).toContain('" · action: Authenticate"')
+  expect(panel).toContain('" · action: Update"')
   expect(panel).toContain("root.nodeHealthLabel(modelData) + \" · \"")
   expect(panel).toContain("text: root.nodeRuntimeSummary(root.selectedNode)")
   expect(panel).toContain("text: root.nodeWorkloadSummary(root.selectedNode)")

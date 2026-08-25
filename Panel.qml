@@ -1716,7 +1716,7 @@ Panel {
     actionMenuX = Math.max(Style.space(8), Math.min(point.x,
       keyCatcher.width - Style.space(172)))
     actionMenuY = Math.max(Style.space(8), Math.min(point.y,
-      keyCatcher.height - Style.space(142)))
+      keyCatcher.height - Style.space(target.kind === "node" ? 180 : 142)))
     actionMenuTarget = target
   }
 
@@ -1794,6 +1794,13 @@ Panel {
       if (action === "shell") showWorkspaceForm(workspace, "shell")
       else if (action === "rename") requestRename(target)
       else if (action === "remove") requestRemoveWorkspace(workspace)
+      return
+    }
+    if (target.kind === "node") {
+      if (action === "shell") createShellOnNode(target.node)
+      else if (action === "authenticate") reauthenticateNode(target.node)
+      else if (action === "update") updateNode(target.node)
+      else if (action === "remove") requestForgetNode(target.node)
       return
     }
     if (action === "rename") requestRename(target)
@@ -5266,6 +5273,8 @@ Panel {
                     width: parent.width
                     text: root.nodeHealthLabel(modelData) + " · "
                       + root.nodeVersionIndicator(modelData)
+                      + (root.nodeCanReauthenticate(modelData) ? " · action: Authenticate"
+                        : (root.nodeCanUpgrade(modelData) ? " · action: Update" : ""))
                     color: modelData.health === "online" && modelData.current && !modelData.stale
                       && root.nodeVersionDirection(modelData) !== "newer" ? root.dim : root.urgent
                     font.family: root.fontFamily
@@ -5297,68 +5306,24 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(4)
                   Button {
-                    visible: !root.nodeCanReauthenticate(modelData)
-                    width: Style.space(68)
+                    id: nodeMenuButton
+                    width: Style.space(28)
                     height: Style.space(30)
-                    text: "Shell +"
-                    tooltipText: root.activeBoomuxWorkspaceId === ""
-                      ? "Show a Boomux Workspace first"
-                      : "Create a Shell in the active Workspace on this Node"
+                    text: "⋮"
+                    tooltipText: root.nodeCanReauthenticate(modelData)
+                      ? "Action required: authenticate this Node"
+                      : (root.nodeCanUpgrade(modelData)
+                        ? "Update available for this Node" : "Node actions")
                     bordered: true
-                    enabled: modelData.workspace_owner_eligible
-                      && root.nodeIsActionable(modelData.node_id)
-                      && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
-                      && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
+                    enabled: !nodeShellProcess.running && !nodeUpgradeProcess.running
+                      && !nodeReauthenticateProcess.running && !actionProcess.running
+                    foreground: root.nodeCanReauthenticate(modelData)
+                      || root.nodeCanUpgrade(modelData) ? root.urgent : root.foreground
+                    fontSize: Style.font.body
                     horizontalPadding: Style.space(4)
                     verticalPadding: Style.space(1)
-                    onClicked: root.createShellOnNode(modelData)
-                  }
-                  Button {
-                    visible: root.nodeCanReauthenticate(modelData)
-                    width: Style.space(82)
-                    height: Style.space(30)
-                    text: "Authenticate"
-                    tooltipText: "Open interactive authentication for this registered Node"
-                    bordered: true
-                    enabled: !nodeReauthenticateProcess.running && !nodeUpgradeProcess.running
-                      && !nodeShellProcess.running && !actionProcess.running
-                    foreground: root.urgent
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(3)
-                    verticalPadding: Style.space(1)
-                    onClicked: root.reauthenticateNode(modelData)
-                  }
-                  Button {
-                    visible: root.nodeCanUpgrade(modelData)
-                    width: Style.space(58)
-                    height: Style.space(30)
-                    text: "Update"
-                    tooltipText: "Reconnect, verify, and update this older Boomux helper"
-                    bordered: true
-                    enabled: !nodeUpgradeProcess.running && !nodeShellProcess.running
-                      && !nodeReauthenticateProcess.running && !actionProcess.running
-                    foreground: root.urgent
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(3)
-                    verticalPadding: Style.space(1)
-                    onClicked: root.updateNode(modelData)
-                  }
-                  Button {
-                    width: Style.space(18)
-                    height: Style.space(18)
-                    anchors.verticalCenter: parent.verticalCenter
-                    iconText: ""
-                    tooltipText: "Forget this remote Node registration"
-                    bordered: false
-                    enabled: !actionProcess.running && !nodeShellProcess.running
-                      && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
-                    foreground: root.urgent
-                    iconSize: 8
-                    horizontalPadding: Style.space(1)
-                    verticalPadding: 0
-                    onClicked: root.requestForgetNode(modelData)
+                    onClicked: root.showActionMenu({ kind: "node", node: modelData },
+                      nodeMenuButton)
                   }
                 }
               }
@@ -5519,6 +5484,43 @@ Panel {
               onClicked: root.runActionMenuAction("shell")
             }
             Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && !root.nodeCanReauthenticate(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Create Shell"
+              bordered: false
+              foreground: root.foreground
+              enabled: visible && root.actionMenuTarget.node.workspace_owner_eligible
+                && root.nodeIsActionable(root.actionMenuTarget.node.node_id)
+                && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
+                && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
+              onClicked: root.runActionMenuAction("shell")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && root.nodeCanReauthenticate(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Authenticate"
+              bordered: false
+              foreground: root.urgent
+              enabled: visible && !nodeReauthenticateProcess.running
+                && !nodeUpgradeProcess.running && !nodeShellProcess.running
+                && !actionProcess.running
+              onClicked: root.runActionMenuAction("authenticate")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && root.nodeCanUpgrade(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Update"
+              bordered: false
+              foreground: root.urgent
+              enabled: visible && !nodeUpgradeProcess.running && !nodeShellProcess.running
+                && !nodeReauthenticateProcess.running && !actionProcess.running
+              onClicked: root.runActionMenuAction("update")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind !== "node"
               width: parent.width
               text: "Rename"
               bordered: false
@@ -5529,6 +5531,7 @@ Panel {
               onClicked: root.runActionMenuAction("rename")
             }
             Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind !== "node"
               width: parent.width
               text: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
                 ? "Remove Workspace" : (root.actionMenuTarget
@@ -5538,6 +5541,16 @@ Panel {
               enabled: root.actionMenuTarget && (root.actionMenuTarget.kind === "workspace"
                 ? root.workspaceCanRemove(root.actionMenuTarget.workspace)
                 : root.itemCanRename(root.actionMenuTarget))
+              onClicked: root.runActionMenuAction("remove")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+              width: parent.width
+              text: "Forget Node"
+              bordered: false
+              foreground: root.urgent
+              enabled: visible && !actionProcess.running && !nodeShellProcess.running
+                && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
               onClicked: root.runActionMenuAction("remove")
             }
           }
