@@ -93,6 +93,11 @@ Panel {
   property string pendingOpenRunKey: ""
   property string pendingExecutionOpenKey: ""
   property var itemToRemove: null
+  property var actionMenuTarget: null
+  property real actionMenuX: 0
+  property real actionMenuY: 0
+  property var renameTarget: null
+  property string renameError: ""
   property string inspectRequestedKey: ""
   property string inspectActiveKey: ""
   property string error: ""
@@ -257,6 +262,15 @@ Panel {
   onItemToRemoveChanged: Qt.callLater(function() {
     if (itemToRemove) removeDialogKeyHandler.forceActiveFocus()
     else if (opened) keyCatcher.forceActiveFocus()
+  })
+
+  onRenameTargetChanged: Qt.callLater(function() {
+    if (renameTarget) {
+      renameField.text = renameTarget.kind === "workspace"
+        ? String(renameTarget.workspace.name) : String(renameTarget.name)
+      renameField.selectAll()
+      renameField.forceActiveFocus()
+    } else if (opened) keyCatcher.forceActiveFocus()
   })
 
   visible: true
@@ -1696,6 +1710,103 @@ Panel {
     openShell(item.shell, item.agent)
   }
 
+  function showActionMenu(target, source) {
+    if (!target || !source) return
+    var point = source.mapToItem(keyCatcher, 0, source.height)
+    actionMenuX = Math.max(Style.space(8), Math.min(point.x,
+      keyCatcher.width - Style.space(172)))
+    actionMenuY = Math.max(Style.space(8), Math.min(point.y,
+      keyCatcher.height - Style.space(target.kind === "node" ? 180 : 142)))
+    actionMenuTarget = target
+  }
+
+  function closeActionMenu() {
+    actionMenuTarget = null
+  }
+
+  function workspaceCanRename(workspace) {
+    return workspaceCanRemove(workspace)
+  }
+
+  function itemCanRename(item) {
+    var node = item ? nodeFor(item.node_id) : null
+    return !!item && !!node && node.local && !actionProcess.running
+  }
+
+  function requestRename(target) {
+    if (!target) return
+    closeActionMenu()
+    var allowed = target.kind === "workspace"
+      ? workspaceCanRename(target.workspace) : itemCanRename(target)
+    if (!allowed) return
+    renameError = ""
+    renameTarget = target
+  }
+
+  function cancelRename() {
+    renameTarget = null
+    renameError = ""
+  }
+
+  function confirmRename() {
+    var target = renameTarget
+    var name = renameField.text.trim()
+    if (!target || actionProcess.running) return
+    if (name === "") {
+      renameError = "Name is required"
+      return
+    }
+    var currentName = target.kind === "workspace"
+      ? String(target.workspace.name) : String(target.name)
+    if (name === currentName) {
+      cancelRename()
+      return
+    }
+    if (target.kind === "workspace") {
+      if (!workspaceCanRename(target.workspace)) return
+      pendingAction = { kind: "rename-workspace", key: target.workspace.key }
+      actionProcess.command = ["boomux", "workspace", "rename",
+        String(target.workspace.id), name]
+    } else {
+      if (!itemCanRename(target)) return
+      var owningWorkspace = target.workspace || workspaceDetail
+      if (!owningWorkspace) return
+      pendingAction = { kind: target.kind === "launcher"
+        ? "rename-launcher" : "rename-shell", key: target.key, nodeId: target.node_id }
+      actionProcess.command = target.kind === "launcher"
+        ? ["boomux", "launcher", "rename", String(target.id), name, "--workspace",
+          String(target.launcher.owner_workspace_id || owningWorkspace.id)]
+        : ["boomux", "shell", "rename", String(target.shell.id), name, "--workspace",
+          String(target.shell.owner_workspace_id || owningWorkspace.id)]
+    }
+    actionMessage = "Renaming " + currentName + "..."
+    renameTarget = null
+    renameError = ""
+    actionProcess.running = true
+  }
+
+  function runActionMenuAction(action) {
+    var target = actionMenuTarget
+    closeActionMenu()
+    if (!target) return
+    if (target.kind === "workspace") {
+      var workspace = target.workspace
+      if (action === "shell") showWorkspaceForm(workspace, "shell")
+      else if (action === "rename") requestRename(target)
+      else if (action === "remove") requestRemoveWorkspace(workspace)
+      return
+    }
+    if (target.kind === "node") {
+      if (action === "shell") createShellOnNode(target.node)
+      else if (action === "authenticate") reauthenticateNode(target.node)
+      else if (action === "update") updateNode(target.node)
+      else if (action === "remove") requestForgetNode(target.node)
+      return
+    }
+    if (action === "rename") requestRename(target)
+    else if (action === "remove") requestRemoveItem(target)
+  }
+
   function requestRemoveItem(item) {
     var node = item ? nodeFor(item.node_id) : null
     if (!item || !node || !node.local
@@ -1740,7 +1851,7 @@ Panel {
     if (item.kind === "launcher")
       return "Remove launcher " + String(item.name)
         + "? This deletes its workspace definition. Applications it already launched keep running."
-    return "Close " + String(item.kind) + " " + String(item.name)
+    return "Remove Shell " + String(item.name)
       + "? This terminates it if running and deletes its shell definition and retained terminal state. Durable Agent history may remain."
   }
 
@@ -1770,8 +1881,7 @@ Panel {
     if (!owningWorkspace) return
     pendingAction = { kind: item.kind === "launcher" ? "remove-launcher" : "remove-shell",
       key: item.key, nodeId: item.node_id }
-    actionMessage = (item.kind === "launcher" ? "Removing " : "Closing ")
-      + String(item.name) + "..."
+    actionMessage = "Removing " + String(item.name) + "..."
     actionProcess.command = item.kind === "launcher"
       ? ["boomux", "launcher", "remove", String(item.id), "--workspace",
         String(item.launcher.owner_workspace_id || owningWorkspace.id)]
@@ -2863,8 +2973,11 @@ Panel {
         root.actionMessage = "Starting " + String(pending.hostName || "Agent") + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
       else if (action === "remove-launcher") root.actionMessage = "Launcher removed"
-      else if (action === "remove-shell") root.actionMessage = "Shell closed"
+      else if (action === "remove-shell") root.actionMessage = "Shell removed"
       else if (action === "remove-workspace") root.actionMessage = "Workspace removed"
+      else if (action === "rename-workspace") root.actionMessage = "Workspace renamed"
+      else if (action === "rename-launcher") root.actionMessage = "Launcher renamed"
+      else if (action === "rename-shell") root.actionMessage = "Shell renamed"
       else if (action === "forget-node") root.actionMessage = "Node forgotten"
       else if (action === "run-schedule") root.actionMessage = "Schedule execution started"
       else if (action === "pause-schedule") root.actionMessage = "Schedule paused"
@@ -3177,15 +3290,17 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.editing || workspaceDropdown.popupOpen
-        || scheduleDropdown.popupOpen
+        || scheduleDropdown.popupOpen || root.renameTarget !== null
       onMoveRequested: function(dx, dy) {
         if (root.settingsOpen) return
+        if (root.actionMenuTarget) return
         if (root.itemToRemove && (dx !== 0 || dy !== 0))
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
         else if (dy !== 0) root.moveSelection(dy)
       }
       onActivateRequested: {
         if (root.settingsOpen) return
+        if (root.actionMenuTarget) return
         if (root.itemToRemove) {
           if (removeItemDialog.selectedIndex === 0) root.cancelRemoveItem()
           else root.confirmRemoveItem()
@@ -3193,17 +3308,19 @@ Panel {
       }
       onCloseRequested: {
         if (root.itemToRemove) root.cancelRemoveItem()
+        else if (root.actionMenuTarget) root.closeActionMenu()
         else if (root.settingsOpen) root.hideSettings()
         else root.close()
       }
       onTabRequested: function(direction) {
         if (root.settingsOpen) return
+        if (root.actionMenuTarget) return
         if (root.itemToRemove)
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
         else root.cycleTab(direction)
       }
       onTextKey: function(text) {
-        if (root.itemToRemove || root.settingsOpen) return
+        if (root.itemToRemove || root.actionMenuTarget || root.settingsOpen) return
         if (text === "r" || text === "R") root.refreshInstalledState()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("schedules")
@@ -4159,24 +4276,26 @@ Panel {
 
                 Row {
                   id: workspaceHeaderActions
-                  visible: workspaceTreeDelegate.workspaceExpanded
+                  visible: true
                   z: 2
                   anchors.right: parent.right
                   anchors.rightMargin: Style.space(5)
                   anchors.verticalCenter: expansionTarget.verticalCenter
                   width: visible ? implicitWidth : 0
                   Button {
-                    width: Style.space(18)
-                    height: Style.space(18)
-                    iconText: ""
-                    tooltipText: "Remove this Workspace and all managed resources"
+                    id: workspaceMenuButton
+                    width: Style.space(22)
+                    height: Style.space(22)
+                    text: "⋮"
+                    tooltipText: "Workspace actions"
                     bordered: false
-                    enabled: root.workspaceCanRemove(workspaceTreeDelegate.modelData)
-                    foreground: root.urgent
-                    iconSize: 8
+                    enabled: !actionProcess.running && !openProcess.running
+                    foreground: root.foreground
+                    fontSize: Style.font.body
                     horizontalPadding: Style.space(1)
                     verticalPadding: 0
-                    onClicked: root.requestRemoveWorkspace(workspaceTreeDelegate.modelData)
+                    onClicked: root.showActionMenu({ kind: "workspace",
+                      workspace: workspaceTreeDelegate.modelData }, workspaceMenuButton)
                   }
                 }
 
@@ -4243,8 +4362,7 @@ Panel {
                       Column {
                         anchors.left: treeItemGlyph.right
                         anchors.leftMargin: Style.space(9)
-                        anchors.right: treeItemCloseButton.visible ? treeItemCloseButton.left
-                          : (treeItemFocusBadge.visible ? treeItemFocusBadge.left : parent.right)
+                        anchors.right: treeItemMenuButton.left
                         anchors.rightMargin: Style.space(8)
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 0
@@ -4271,8 +4389,7 @@ Panel {
                       Text {
                         id: treeItemFocusBadge
                         visible: treeItemDelegate.terminalFocused
-                        anchors.right: treeItemCloseButton.visible
-                          ? treeItemCloseButton.left : parent.right
+                        anchors.right: treeItemMenuButton.left
                         anchors.rightMargin: Style.space(8)
                         anchors.verticalCenter: parent.verticalCenter
                         text: "●"
@@ -4292,27 +4409,23 @@ Panel {
                         onClicked: root.openWorkspaceTreeItem(modelData)
                       }
                       Button {
-                        id: treeItemCloseButton
-                        visible: root.nodeFor(modelData.node_id)
-                          && root.nodeFor(modelData.node_id).local
+                        id: treeItemMenuButton
                         z: 1
                         anchors.right: parent.right
                         anchors.rightMargin: Style.space(5)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Style.space(18)
                         height: Style.space(18)
-                        iconText: ""
-                        tooltipText: modelData.kind === "launcher"
-                          ? "Remove this launcher definition"
-                          : "Close and remove this Boomux Shell"
+                        text: "⋮"
+                        tooltipText: "Item actions"
                         bordered: false
                         enabled: !actionProcess.running && !openProcess.running
                           && !executionOpenProcess.running
-                        foreground: root.urgent
-                        iconSize: 8
+                        foreground: root.foreground
+                        fontSize: Style.font.caption
                         horizontalPadding: Style.space(1)
                         verticalPadding: 0
-                        onClicked: root.requestRemoveItem(modelData)
+                        onClicked: root.showActionMenu(modelData, treeItemMenuButton)
                       }
                     }
                   }
@@ -4658,47 +4771,18 @@ Panel {
                   elide: Text.ElideMiddle
                 }
 
-                Row {
+                Button {
                   width: parent.width
-                  spacing: Style.space(5)
-                  Button {
-                    width: (parent.width - parent.spacing * 2) / 3
-                    text: "Open"
-                    iconText: ""
-                    tooltipText: "Open selected workspace"
-                    bordered: true
-                    enabled: root.workspaceCanOpen(root.workspaceDetail)
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
-                    iconSize: Style.font.body
-                    onClicked: root.openWorkspace(root.workspaceDetail)
-                  }
-                  Button {
-                    width: (parent.width - parent.spacing * 2) / 3
-                    text: "Create Shell"
-                    iconText: "+"
-                     tooltipText: root.workspaceCreationReason(root.workspaceDetail)
-                       || "Create Shell in selected Workspace"
-                    bordered: true
-                     enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
-                    iconSize: Style.font.body
-                    onClicked: root.showForm("shell")
-                  }
-                  Button {
-                    width: (parent.width - parent.spacing * 2) / 3
-                    text: "Start Agent"
-                    iconText: "+"
-                     tooltipText: root.workspaceCreationReason(root.workspaceDetail)
-                       || "Start Agent in selected Workspace"
-                    bordered: true
-                     enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
-                    iconSize: Style.font.body
-                    onClicked: root.showForm("agent")
-                  }
+                  text: "Create Shell"
+                  iconText: "+"
+                  tooltipText: root.workspaceCreationReason(root.workspaceDetail)
+                    || "Create Shell in selected Workspace"
+                  bordered: true
+                  enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
+                  foreground: root.foreground
+                  fontSize: Style.font.caption
+                  iconSize: Style.font.body
+                  onClicked: root.showForm("shell")
                 }
 
                 Button {
@@ -4766,7 +4850,7 @@ Panel {
                     Column {
                       anchors.left: kindGlyph.right
                       anchors.leftMargin: Style.space(10)
-                      anchors.right: removeItemButton.left
+                      anchors.right: itemMenuButton.left
                       anchors.rightMargin: Style.space(8)
                       anchors.verticalCenter: parent.verticalCenter
                       spacing: Style.space(1)
@@ -4800,24 +4884,23 @@ Panel {
                       onClicked: root.openWorkspaceItem(modelData)
                     }
                     Button {
-                      id: removeItemButton
+                      id: itemMenuButton
                       z: 1
                       anchors.right: parent.right
                       anchors.rightMargin: Style.space(8)
                       anchors.verticalCenter: parent.verticalCenter
-                      text: "Remove"
-                      tooltipText: modelData.kind === "launcher"
-                        ? "Remove launcher definition"
-                        : "Close and remove backing shell"
+                      width: Style.space(28)
+                      height: Style.space(28)
+                      text: "⋮"
+                      tooltipText: "Item actions"
                       bordered: true
-                      enabled: root.nodeFor(modelData.node_id) && root.nodeFor(modelData.node_id).local
-                        && !actionProcess.running
-                        && !openProcess.running && !executionOpenProcess.running
-                      foreground: root.urgent
-                      fontSize: Style.font.caption
+                      enabled: !actionProcess.running && !openProcess.running
+                        && !executionOpenProcess.running
+                      foreground: root.foreground
+                      fontSize: Style.font.body
                       horizontalPadding: Style.space(6)
                       verticalPadding: Style.space(2)
-                      onClicked: root.requestRemoveItem(modelData)
+                      onClicked: root.showActionMenu(modelData, itemMenuButton)
                     }
                   }
                 }
@@ -5190,6 +5273,8 @@ Panel {
                     width: parent.width
                     text: root.nodeHealthLabel(modelData) + " · "
                       + root.nodeVersionIndicator(modelData)
+                      + (root.nodeCanReauthenticate(modelData) ? " · action: Authenticate"
+                        : (root.nodeCanUpgrade(modelData) ? " · action: Update" : ""))
                     color: modelData.health === "online" && modelData.current && !modelData.stale
                       && root.nodeVersionDirection(modelData) !== "newer" ? root.dim : root.urgent
                     font.family: root.fontFamily
@@ -5221,68 +5306,24 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(4)
                   Button {
-                    visible: !root.nodeCanReauthenticate(modelData)
-                    width: Style.space(68)
+                    id: nodeMenuButton
+                    width: Style.space(28)
                     height: Style.space(30)
-                    text: "Shell +"
-                    tooltipText: root.activeBoomuxWorkspaceId === ""
-                      ? "Show a Boomux Workspace first"
-                      : "Create a Shell in the active Workspace on this Node"
+                    text: "⋮"
+                    tooltipText: root.nodeCanReauthenticate(modelData)
+                      ? "Action required: authenticate this Node"
+                      : (root.nodeCanUpgrade(modelData)
+                        ? "Update available for this Node" : "Node actions")
                     bordered: true
-                    enabled: modelData.workspace_owner_eligible
-                      && root.nodeIsActionable(modelData.node_id)
-                      && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
-                      && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
+                    enabled: !nodeShellProcess.running && !nodeUpgradeProcess.running
+                      && !nodeReauthenticateProcess.running && !actionProcess.running
+                    foreground: root.nodeCanReauthenticate(modelData)
+                      || root.nodeCanUpgrade(modelData) ? root.urgent : root.foreground
+                    fontSize: Style.font.body
                     horizontalPadding: Style.space(4)
                     verticalPadding: Style.space(1)
-                    onClicked: root.createShellOnNode(modelData)
-                  }
-                  Button {
-                    visible: root.nodeCanReauthenticate(modelData)
-                    width: Style.space(82)
-                    height: Style.space(30)
-                    text: "Authenticate"
-                    tooltipText: "Open interactive authentication for this registered Node"
-                    bordered: true
-                    enabled: !nodeReauthenticateProcess.running && !nodeUpgradeProcess.running
-                      && !nodeShellProcess.running && !actionProcess.running
-                    foreground: root.urgent
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(3)
-                    verticalPadding: Style.space(1)
-                    onClicked: root.reauthenticateNode(modelData)
-                  }
-                  Button {
-                    visible: root.nodeCanUpgrade(modelData)
-                    width: Style.space(58)
-                    height: Style.space(30)
-                    text: "Update"
-                    tooltipText: "Reconnect, verify, and update this older Boomux helper"
-                    bordered: true
-                    enabled: !nodeUpgradeProcess.running && !nodeShellProcess.running
-                      && !nodeReauthenticateProcess.running && !actionProcess.running
-                    foreground: root.urgent
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(3)
-                    verticalPadding: Style.space(1)
-                    onClicked: root.updateNode(modelData)
-                  }
-                  Button {
-                    width: Style.space(18)
-                    height: Style.space(18)
-                    anchors.verticalCenter: parent.verticalCenter
-                    iconText: ""
-                    tooltipText: "Forget this remote Node registration"
-                    bordered: false
-                    enabled: !actionProcess.running && !nodeShellProcess.running
-                      && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
-                    foreground: root.urgent
-                    iconSize: 8
-                    horizontalPadding: Style.space(1)
-                    verticalPadding: 0
-                    onClicked: root.requestForgetNode(modelData)
+                    onClicked: root.showActionMenu({ kind: "node", node: modelData },
+                      nodeMenuButton)
                   }
                 }
               }
@@ -5403,6 +5444,192 @@ Panel {
           }
         }
 
+      }
+
+      Item {
+        anchors.fill: parent
+        visible: root.actionMenuTarget !== null
+        z: 8
+
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.closeActionMenu()
+        }
+
+        Rectangle {
+          x: root.actionMenuX
+          y: root.actionMenuY
+          width: Style.space(164)
+          height: actionMenuColumn.implicitHeight + Style.space(10)
+          radius: Style.cornerRadius
+          color: Color.background
+          border.width: 1
+          border.color: Util.alpha(root.foreground, 0.2)
+
+          Column {
+            id: actionMenuColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(5)
+            spacing: Style.space(2)
+
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
+              width: parent.width
+              text: "Create Shell"
+              bordered: false
+              foreground: root.foreground
+              enabled: visible && root.workspaceCreationReason(root.actionMenuTarget.workspace) === ""
+              onClicked: root.runActionMenuAction("shell")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && !root.nodeCanReauthenticate(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Create Shell"
+              bordered: false
+              foreground: root.foreground
+              enabled: visible && root.actionMenuTarget.node.workspace_owner_eligible
+                && root.nodeIsActionable(root.actionMenuTarget.node.node_id)
+                && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
+                && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
+              onClicked: root.runActionMenuAction("shell")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && root.nodeCanReauthenticate(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Authenticate"
+              bordered: false
+              foreground: root.urgent
+              enabled: visible && !nodeReauthenticateProcess.running
+                && !nodeUpgradeProcess.running && !nodeShellProcess.running
+                && !actionProcess.running
+              onClicked: root.runActionMenuAction("authenticate")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && root.nodeCanUpgrade(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Update"
+              bordered: false
+              foreground: root.urgent
+              enabled: visible && !nodeUpgradeProcess.running && !nodeShellProcess.running
+                && !nodeReauthenticateProcess.running && !actionProcess.running
+              onClicked: root.runActionMenuAction("update")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind !== "node"
+              width: parent.width
+              text: "Rename"
+              bordered: false
+              foreground: root.foreground
+              enabled: root.actionMenuTarget && (root.actionMenuTarget.kind === "workspace"
+                ? root.workspaceCanRename(root.actionMenuTarget.workspace)
+                : root.itemCanRename(root.actionMenuTarget))
+              onClicked: root.runActionMenuAction("rename")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind !== "node"
+              width: parent.width
+              text: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
+                ? "Remove Workspace" : (root.actionMenuTarget
+                  && root.actionMenuTarget.kind === "launcher" ? "Remove Launcher" : "Remove Shell")
+              bordered: false
+              foreground: root.urgent
+              enabled: root.actionMenuTarget && (root.actionMenuTarget.kind === "workspace"
+                ? root.workspaceCanRemove(root.actionMenuTarget.workspace)
+                : root.itemCanRename(root.actionMenuTarget))
+              onClicked: root.runActionMenuAction("remove")
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+              width: parent.width
+              text: "Forget Node"
+              bordered: false
+              foreground: root.urgent
+              enabled: visible && !actionProcess.running && !nodeShellProcess.running
+                && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
+              onClicked: root.runActionMenuAction("remove")
+            }
+          }
+        }
+      }
+
+      Rectangle {
+        anchors.fill: parent
+        visible: root.renameTarget !== null
+        z: 9
+        color: Util.alpha(Color.background, 0.72)
+
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(parent.width - Style.space(32), Style.space(320))
+          height: renameColumn.implicitHeight + Style.space(24)
+          radius: Style.cornerRadius
+          color: Color.background
+          border.width: 1
+          border.color: Util.alpha(root.foreground, 0.2)
+
+          Column {
+            id: renameColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(12)
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              text: "Rename " + (root.renameTarget && root.renameTarget.kind === "workspace"
+                ? "Workspace" : "item")
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+            TextField {
+              id: renameField
+              width: parent.width
+              foreground: root.foreground
+              onTextEdited: root.renameError = ""
+              onAccepted: root.confirmRename()
+              Keys.onEscapePressed: root.cancelRename()
+            }
+            Text {
+              visible: root.renameError !== ""
+              width: parent.width
+              text: root.renameError
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: "Cancel"
+                bordered: true
+                foreground: root.foreground
+                Keys.onEscapePressed: root.cancelRename()
+                onClicked: root.cancelRename()
+              }
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: "Rename"
+                bordered: true
+                foreground: Color.accent
+                enabled: renameField.text.trim() !== "" && !actionProcess.running
+                Keys.onEscapePressed: root.cancelRename()
+                onClicked: root.confirmRename()
+              }
+            }
+          }
+        }
       }
 
       ConfirmDialog {

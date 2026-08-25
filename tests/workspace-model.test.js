@@ -211,19 +211,21 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
   expect(panel).toContain("omarchy-launch-tui --app-id=org.omarchy.boomux-config boomux config edit")
-  expect(panel).toContain("if (root.itemToRemove || root.settingsOpen) return")
+  expect(panel).toContain("if (root.itemToRemove || root.actionMenuTarget || root.settingsOpen) return")
   expect(panel).not.toMatch(/palette/i)
   expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
   expect(panel).toContain("removeItemDialog.handleKey(event)")
   expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
 })
 
-test("creates active-Workspace Shells directly on remote Node rows", () => {
+test("creates active-Workspace Shells from remote Node action menus", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("visibleNodes: nodes.filter(function(node) { return !node.local })")
   expect(panel).toContain('text: "Create Shell"')
-  expect(panel).toContain("root.createShellOnNode(modelData)")
-  expect(panel).toContain("root.requestForgetNode(modelData)")
+  expect(panel).toContain('root.runActionMenuAction("shell")')
+  expect(panel).toContain('root.runActionMenuAction("remove")')
+  expect(panel).toContain("createShellOnNode(target.node)")
+  expect(panel).toContain("requestForgetNode(target.node)")
   expect(panel).toContain('["boomux", "node", "forget",')
   expect(panel).toContain("It does not contact the Node or stop its processes.")
   expect(panel).toContain("String(activeBoomuxWorkspaceId), \"--node\", String(node.node_id), \"--open\"")
@@ -255,7 +257,7 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   expect(model.nodeCanUpgrade(remote, "0.30.1", ["node_upgrade_coordination"])).toBe(false)
 
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("visible: root.nodeCanUpgrade(modelData)")
+  expect(panel).toContain("root.nodeCanUpgrade(root.actionMenuTarget.node)")
   expect(panel).toContain("WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)")
   expect(panel).toContain("Control machine update needed")
   expect(panel).toContain("cached data retained · retrying automatically")
@@ -279,14 +281,17 @@ test("offers exact guided reauthentication only for authentication-required Node
   ])
 
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("visible: root.nodeCanReauthenticate(modelData)")
+  expect(panel).toContain("root.nodeCanReauthenticate(root.actionMenuTarget.node)")
   expect(panel).toContain("WorkspaceModel.guidedNodeReauthenticateCommand(node.node_id)")
   expect(panel).toContain('text: "Authenticate"')
 })
 
 test("keeps the Nodes surface compact and reveals only exceptional details", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('text: "Shell +"')
+  expect(panel).toContain("id: nodeMenuButton")
+  expect(panel).toContain('tooltipText: root.nodeCanReauthenticate(modelData)')
+  expect(panel).toContain('" · action: Authenticate"')
+  expect(panel).toContain('" · action: Update"')
   expect(panel).toContain("root.nodeHealthLabel(modelData) + \" · \"")
   expect(panel).toContain("text: root.nodeRuntimeSummary(root.selectedNode)")
   expect(panel).toContain("text: root.nodeWorkloadSummary(root.selectedNode)")
@@ -361,28 +366,36 @@ test("keeps the pane open after an Agent or Shell terminal opens", () => {
   expect(completion).not.toContain("root.close()")
 })
 
-test("offers confirmed local Shell closure from the Workspace tree", () => {
+test("offers confirmed local Shell removal from the Workspace action menu", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel.match(/iconText: ""/g).length).toBeGreaterThanOrEqual(2)
-  expect(panel).toContain(': "Close and remove this Boomux Shell"')
-  expect(panel).toContain("onClicked: root.requestRemoveItem(modelData)")
+  expect(panel).toContain('text: "⋮"')
+  expect(panel).toContain('? "Remove Launcher" : "Remove Shell"')
+  expect(panel).toContain('onClicked: root.runActionMenuAction("remove")')
+  expect(panel).toContain('return "Remove Shell " + String(item.name)')
   expect(panel).toContain('String(item.shell.owner_workspace_id || owningWorkspace.id)')
-  expect(panel).toContain('root.actionMessage = "Shell closed"')
+  expect(panel).toContain('root.actionMessage = "Shell removed"')
 })
 
-test("keeps compact Workspace removal reachable from the tree", () => {
+test("keeps Workspace and item actions reachable from three-dot menus", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('iconText: ""')
   expect(panel).toContain("id: workspaceHeaderActions")
-  expect(panel).toContain("width: Style.space(18)")
-  expect(panel).toContain("iconSize: 8")
+  expect(panel).toContain("id: workspaceMenuButton")
+  expect(panel).toContain("id: treeItemMenuButton")
+  expect(panel).toContain("id: itemMenuButton")
+  expect(panel).toContain('tooltipText: "Workspace actions"')
+  expect(panel).toContain('tooltipText: "Item actions"')
   const tree = panel.slice(panel.indexOf("id: workspaceTreeList"),
     panel.indexOf("id: workspaceResizeHandle"))
   expect(tree).not.toContain("Start Agent in this Workspace")
   expect(tree).not.toContain('iconText: ""')
   expect(tree).not.toContain('text: modelData.kind === "launcher" ? "Remove" : "Close"')
-  expect(panel).toContain("onClicked: root.requestRemoveWorkspace(workspaceTreeDelegate.modelData)")
-  expect(panel).toContain("onClicked: root.requestRemoveItem(modelData)")
+  expect(panel).toContain('onClicked: root.runActionMenuAction("rename")')
+  expect(panel).toContain('["boomux", "workspace", "rename"')
+  expect(panel).toContain('["boomux", "launcher", "rename"')
+  expect(panel).toContain('["boomux", "shell", "rename"')
+  expect(panel).not.toContain('root.runActionMenuAction("open")')
+  expect(panel).not.toContain('root.runActionMenuAction("agent")')
+  expect(panel).not.toContain('text: "Start Agent"')
 })
 
 test("uses the existing exact launcher path from the Workspace tree", () => {
