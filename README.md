@@ -63,6 +63,7 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | `Tab` or `1` / `2` / `3` | Switch Agents, Schedules, and Nodes |
 | `A` in Nodes | Open guided Node setup |
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
+| Update in Nodes | Reconnect, verify, and update an older remote Boomux helper in a native terminal |
 | Trash icon in Nodes | Confirm removal of the local Node registration without contacting the remote Node |
 | `D` in Agents | Dismiss the selected notification |
 | `N` | Create a Workspace |
@@ -92,9 +93,18 @@ Use the gear button to:
 - Adjust its width in 20-pixel steps.
 - Open `boomux config edit` in a native terminal.
 
-The Nodes view lists registered remote Nodes. Its **Create Shell** action uses
-the exact selected remote Node and the currently active Boomux Workspace; paths
-and commands are resolved on that Node.
+The Nodes view lists registered remote Nodes with route, helper and control
+versions, protocol, freshness, scheduler state, resource counts, and Workspace
+eligibility. Its **Create Shell** action uses the exact selected remote Node and
+the currently active Boomux Workspace; paths and commands are resolved on that
+Node.
+
+When a remote helper is older than the control machine, **Update** opens Boomux's
+guided upgrade in a native terminal. Boomux handles authentication, confirmation,
+identity verification, transactional upload, and graceful remote daemon restart.
+A newer remote is never downgraded; the pane instead reports **Control machine
+update needed**. Cached transient states remain visible and the guided flow
+revalidates the exact Node live before changing it.
 
 Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 
@@ -111,12 +121,15 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 - The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
   remote routing, authentication, and persistence.
 - Remote cached resources stay visible but become non-actionable when stale or
-  unavailable.
+  unavailable. The guided Node update is the only stale-row exception because
+  Boomux reconnects and verifies the exact registered Node before replacement.
 - Destructive local actions require confirmation and use exact resource IDs.
 - Removing a Shell can terminate its process and delete retained terminal state.
   Removing a launcher does not stop applications it already started.
 - The plugin never reads Schedule prompts, credentials, attachment environments,
   or remote terminal content.
+- The plugin never invokes SSH itself. Guided Node setup and updates run through
+  Boomux in a native terminal so authentication and confirmation stay interactive.
 - Its only direct network activity is a bounded update check against fixed GitHub
   release and manifest URLs.
 

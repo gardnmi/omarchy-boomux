@@ -11,15 +11,41 @@ function resourceKey(nodeId, value) {
   return String(nodeId || "") + "\u001f" + resourceId(value)
 }
 
-function versionIsNewer(candidate, current) {
-  var candidateMatch = String(candidate || "").match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
-  var currentMatch = String(current || "").match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
-  if (!candidateMatch || !currentMatch) return false
-  for (var i = 1; i <= 3; i++) {
-    var difference = Number(candidateMatch[i]) - Number(currentMatch[i])
-    if (difference !== 0) return difference > 0
+function versionParts(value) {
+  var match = String(value || "").match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
+}
+
+function versionDirection(remote, control) {
+  var remoteParts = versionParts(remote)
+  var controlParts = versionParts(control)
+  if (!remoteParts || !controlParts) return "unknown"
+  for (var i = 0; i < 3; i++) {
+    var difference = remoteParts[i] - controlParts[i]
+    if (difference !== 0) return difference < 0 ? "older" : "newer"
   }
-  return false
+  return "current"
+}
+
+function versionIsNewer(candidate, current) {
+  return versionDirection(candidate, current) === "newer"
+}
+
+function nodeCanUpgrade(node, controlVersion, cliFeatures) {
+  if (!node || !node.node_id || node.local
+      || versionDirection(node.observed_helper_version, controlVersion) !== "older")
+    return false
+  var required = ["observed_node_helper_version", "node_upgrade_coordination"]
+  var local = Array.isArray(cliFeatures) ? cliFeatures : []
+  var remote = Array.isArray(node.observed_capabilities) ? node.observed_capabilities : []
+  return required.every(function(feature) {
+    return local.indexOf(feature) >= 0 && remote.indexOf(feature) >= 0
+  })
+}
+
+function guidedNodeUpgradeCommand(nodeId) {
+  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-upgrade",
+    "boomux", "__guided-node-upgrade", String(nodeId)]
 }
 
 function boomuxSpecialWorkspaceId(name) {
@@ -438,11 +464,14 @@ function normalizeNodeSnapshot(data) {
       node_id: rawNode.node_id,
       alias: rawNode.alias,
       local: !!rawNode.local,
+      route: String(rawNode.route || ""),
+      registration_revision: Number(rawNode.registration_revision || 0),
       health: String(rawNode.health || "unobserved"),
       current: !!rawNode.current,
       stale: !!rawNode.stale,
       observed_at_ms: Number(rawNode.observed_at_ms || 0),
       observed_protocol_version: Number(rawNode.observed_protocol_version || 0),
+      observed_helper_version: String(rawNode.observed_helper_version || ""),
       observed_capabilities: Array.isArray(rawNode.observed_capabilities)
         ? rawNode.observed_capabilities : [],
       workspace_owner_eligible: !!rawNode.workspace_owner_eligible,
@@ -851,6 +880,9 @@ function acknowledgementResponseMatches(data, identity) {
 
 if (typeof module !== "undefined") module.exports = {
   versionIsNewer: versionIsNewer,
+  versionDirection: versionDirection,
+  nodeCanUpgrade: nodeCanUpgrade,
+  guidedNodeUpgradeCommand: guidedNodeUpgradeCommand,
   agentUpdatedAt: agentUpdatedAt,
   agentsByLastUpdated: agentsByLastUpdated,
   agentsByWorkspace: agentsByWorkspace,

@@ -14,6 +14,10 @@ test("compares only valid semantic release versions", () => {
   expect(model.versionIsNewer("0.18.0", "0.18.0")).toBe(false)
   expect(model.versionIsNewer("0.17.9", "0.18.0")).toBe(false)
   expect(model.versionIsNewer("main", "0.18.0")).toBe(false)
+  expect(model.versionDirection("0.29.1", "0.30.1")).toBe("older")
+  expect(model.versionDirection("0.31.0", "0.30.1")).toBe("newer")
+  expect(model.versionDirection("v0.30.1", "0.30.1")).toBe("current")
+  expect(model.versionDirection("main", "0.30.1")).toBe("unknown")
 })
 
 test("recognizes only canonical Boomux special Workspace names", () => {
@@ -226,6 +230,35 @@ test("creates active-Workspace Shells directly on remote Node rows", () => {
   expect(panel).toContain('"Remote Node: " + String(root.creationNode.alias)')
   expect(panel).toContain('" · Node: " + String(modelData.node_alias)')
   expect(panel).not.toContain("defaultNodeId")
+})
+
+test("offers exact guided updates only for older capable remote Nodes", () => {
+  const features = ["observed_node_helper_version", "node_upgrade_coordination"]
+  const remote = {
+    node_id: "node;$(false)", local: false, observed_helper_version: "0.29.1",
+    observed_capabilities: features
+  }
+  expect(model.nodeCanUpgrade(remote, "0.30.1", features)).toBe(true)
+  expect(model.nodeCanUpgrade(Object.assign({}, remote,
+    { stale: true, current: false, health: "authentication_required" }),
+    "0.30.1", features)).toBe(true)
+  expect(model.guidedNodeUpgradeCommand(remote.node_id)).toEqual([
+    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-upgrade",
+    "boomux", "__guided-node-upgrade", "node;$(false)"
+  ])
+  expect(model.nodeCanUpgrade(Object.assign({}, remote,
+    { observed_helper_version: "0.30.1" }), "0.30.1", features)).toBe(false)
+  expect(model.nodeCanUpgrade(Object.assign({}, remote,
+    { observed_helper_version: "0.31.0" }), "0.30.1", features)).toBe(false)
+  expect(model.nodeCanUpgrade(Object.assign({}, remote,
+    { observed_helper_version: "" }), "0.30.1", features)).toBe(false)
+  expect(model.nodeCanUpgrade(remote, "0.30.1", ["node_upgrade_coordination"])).toBe(false)
+
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("visible: root.nodeCanUpgrade(modelData)")
+  expect(panel).toContain("WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)")
+  expect(panel).toContain("Control machine update needed")
+  expect(panel).toContain("cached data retained · retrying automatically")
 })
 
 test("uses a configurable sliding side pane with an active Workspace tree", () => {
@@ -490,6 +523,24 @@ test("creates coordinated Workspaces without the removed compound command", () =
 })
 
 describe("CLI envelope normalization", () => {
+  test("preserves additive Node route, revision, and helper version fields", () => {
+    const snapshot = model.normalizeNodeSnapshot({ nodes: [{
+      node_id: "remote", alias: "build", local: false, route: "builder.example",
+      registration_revision: 7, health: "authentication_required", current: false,
+      stale: true, observed_at_ms: 100, observed_protocol_version: 41,
+      observed_helper_version: "0.29.1",
+      observed_capabilities: ["observed_node_helper_version", "node_upgrade_coordination"],
+      workspace_owner_eligible: false,
+      workspace_owner_unavailable_reason: "authentication required",
+      scheduler: { state: "offline", active_executions: 0, max_concurrent: 2 },
+      remote_projection: null
+    }] })
+    expect(snapshot.nodes[0]).toMatchObject({
+      route: "builder.example", registration_revision: 7,
+      observed_helper_version: "0.29.1", observed_protocol_version: 41
+    })
+  })
+
   test("parses protocol 38 into one task-first multi-placement Workspace", () => {
     const snapshot = normalized()
     const release = snapshot.workspaces.find(workspace => workspace.id === "global-1")

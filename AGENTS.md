@@ -26,7 +26,8 @@ publication.
 
 - Planned minimum released Boomux version: `0.27.0`
 - Stable JSON envelope: `boomux.cli/v1`
-- Current branch-validated daemon protocol: 38; live installed validation remains protocol 37
+- Current branch-validated daemon protocol: 44; Node helper versions and guided
+  upgrade coordination require protocol 41 capabilities
 - Supported Agent hosts come from `integration.status`; currently OpenCode, Pi,
   Claude Code, Codex, and Kiro CLI through Boomux lifecycle integrations
 
@@ -42,6 +43,11 @@ Workspace grouping additionally requires `global_workspaces` and
 installed CLI capability, local daemon protocol, and each remote Node's observed
 capabilities distinct. Every projected and pending resource identity is the
 structural pair `(node_id, resource_id)`; bare IDs are never globally unique.
+Preserve nullable Node `route`, `registration_revision`, and
+`observed_helper_version` fields. Compare helper versions only as valid semantic
+release versions. Offer replacement only when the remote helper is older than
+the control CLI; a newer remote requires updating the control machine and must
+never be downgraded by the pane.
 
 Project suggestions come only from advertised `project.list` JSON data. Keep
 project discovery passive and on-demand; do not parse Boomux configuration or
@@ -72,8 +78,9 @@ The sliding pane has a persistent expandable Workspace tree and three lower view
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
 - **Schedules**: a global Schedule selector with prompt-free details, bounded
   latest-run status, scheduler health, and explicit Run/Pause/Resume actions
-- **Nodes**: a read-only health table with selected-Node protocol,
-  freshness, eligibility, and exact identity details
+- **Nodes**: a health and version table with selected-Node route, helper and
+  control versions, protocol, freshness, scheduler state, workload, eligibility,
+  exact identity, guided creation, guided upgrade, and local registration removal
 
 The header Settings surface owns pane-local presentation settings. Side and
 width changes persist through Omarchy's inline plugin settings API. Opening the
@@ -86,7 +93,9 @@ metadata rather than a filter or Node-first path. Every stable health value (`un
 `reconnecting`, `stale`, `unreachable`, `authentication_required`,
 `identity_changed`, `identity_conflict`, and `unsupported`) remains visible.
 Cached stale rows are presentation only and all owner-dependent actions are
-disabled. Scheduler health is Node-specific.
+disabled. Guided Node upgrade is the sole stale-row exception: it must use the
+exact registered Node ID and delegate live route, authentication, identity, and
+replacement validation to Boomux. Scheduler health is Node-specific.
 
 Never merge owner Workspaces by name. Global membership comes only from explicit
 placements; unlinked owner Workspaces remain qualified external singletons.
@@ -118,8 +127,10 @@ or lifecycle observation.
   bootstrap confirmation. The sole direct network exception is a bounded,
   read-only startup check against fixed GitHub URLs for the latest Boomux release
   and published plugin manifest. Cap each response before collecting stdout and
-  do not follow redirects; failures remain silent. **Create Node** may only
-  launch interactive `boomux node add` in a local native terminal.
+  do not follow redirects; failures remain silent. **Create Node** and **Update**
+  may only launch Boomux's guided setup or upgrade wrapper in a local native
+  terminal. Pass the exact Node ID as one argv element; never interpolate it
+  into a shell command.
 - Consume federation through `boomux node snapshot --json`. Pass exact `--node`
   context to every supported remote open, inspect, host service, attention,
   Schedule, execution, and mutation command. Never queue an offline action.
@@ -167,6 +178,10 @@ or lifecycle observation.
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
 - Keep **Create Node** at Nodes-section scope; do not add a Node filter.
+- Keep **Update** beside the affected remote Node's **Create Shell** action. Show
+  it only for an older helper with both local and observed remote upgrade
+  capabilities. For a newer helper, show **Control machine update needed** and
+  no replacement action.
 - Highlight only the Hyprland-presented special Workspace as active. Persisted
   default and expanded Workspace state must remain visually distinct.
 - The divider above the lower tabs resizes the Workspace viewport vertically.
