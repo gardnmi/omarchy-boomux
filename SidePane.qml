@@ -53,6 +53,15 @@ PanelWindow {
     if (open && backingWindowVisible) focusPrimeTimer.restart()
   }
 
+  function requestKeyboardFocus() {
+    if (!open) return
+    focusPrimed = false
+    beginFocusPrime()
+    if (focusTarget) Qt.callLater(function() {
+      if (root.open && root.focusTarget) root.focusTarget.forceActiveFocus()
+    })
+  }
+
   screen: anchorWindow ? anchorWindow.screen : null
   visible: open || revealProgress > 0
   color: "transparent"

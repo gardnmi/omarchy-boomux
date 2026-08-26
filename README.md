@@ -60,6 +60,7 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | --- | --- |
 | Bar icon | Open or close the pane |
 | Right-click bar icon | Refresh |
+| `Super+B` with the binding below | Open or re-focus the pane |
 | Workspace row | Select and present that Workspace |
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact managed terminal |
@@ -83,9 +84,13 @@ For direct keyboard access:
 
 ```lua
 hl.unbind("SUPER + B")
-o.bind("SUPER + B", "Toggle Boomux panel",
-  "omarchy-shell io.github.gardnmi.boomux toggle")
+o.bind("SUPER + B", "Focus Boomux panel",
+  "omarchy-shell io.github.gardnmi.boomux focus")
 ```
+
+`Super+B` is an idempotent summon action: it opens a closed pane or returns
+keyboard focus to an already-visible pane. Press `Escape` to close it and return
+to the previously focused application.
 
 Selecting a coordinated Workspace presents its existing Hyprland layer and
 stores it as Boomux's default Workspace. It does not restore every Shell or run

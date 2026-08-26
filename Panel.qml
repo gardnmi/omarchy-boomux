@@ -2302,6 +2302,11 @@ Panel {
     }
   }
 
+  function focusPane() {
+    if (!opened) open()
+    else panel.requestKeyboardFocus()
+  }
+
   onOpenedChanged: if (opened) {
     refreshInstalledState()
     if (expandedWorkspaceKey === "") {
@@ -2332,9 +2337,10 @@ Panel {
   IpcHandler {
     target: root.ipcTarget
 
-    function open(): void { root.open() }
+    function focus(): void { root.focusPane() }
+    function open(): void { root.focusPane() }
     function close(): void { root.close() }
-    function show(): void { root.open() }
+    function show(): void { root.focusPane() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
   }

@@ -218,6 +218,20 @@ test("shows the installed Boomux CLI version in the pane header", () => {
   expect(panel).toContain('(root.cliVersion !== "" ? "v" + root.cliVersion + " · " : "")')
 })
 
+test("re-focuses an already-open pane through an idempotent IPC action", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
+  expect(panel).toContain("function focusPane()")
+  expect(panel).toContain("else panel.requestKeyboardFocus()")
+  expect(panel).toContain("function focus(): void { root.focusPane() }")
+  expect(panel).toContain("function toggle(): void { root.toggle() }")
+  expect(sidePane).toContain("function requestKeyboardFocus()")
+  expect(sidePane).toContain("focusPrimed = false")
+  expect(sidePane).toContain("focusPrimeTimer.restart()")
+  expect(readme).toContain("omarchy-shell io.github.gardnmi.boomux focus")
+})
+
 test("shows one flat Agent list ordered by latest update", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("readonly property var paneAgents: visibleAgents")
