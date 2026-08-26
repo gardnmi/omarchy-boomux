@@ -120,8 +120,8 @@ Selecting a coordinated Workspace presents its existing Hyprland layer and
 stores it as Boomux's default Workspace. It does not restore every Shell or run
 launchers. Older compatible Boomux versions fall back to `workspace open --show`.
 
-The terminal button opens the full Boomux TUI. The pane remains visible while
-applications receive focus and while other Omarchy plugins open.
+The pane remains visible while applications receive focus and while other
+Omarchy plugins open.
 
 ## Settings
 

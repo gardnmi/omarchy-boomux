@@ -721,6 +721,11 @@ Panel {
     noticeTimer.restart()
   }
 
+  onActionMessageChanged: {
+    if (actionMessage !== "")
+      showNotice("Boomux", actionMessage, currentNoticeScreen(), true)
+  }
+
   function showActionFailure(title, detail) {
     actionMessage = String(detail || "")
     showNotice(title, actionMessage, currentNoticeScreen(), true)
@@ -1817,12 +1822,6 @@ Panel {
     actionProcess.running = true
   }
 
-  function openDashboard() {
-    if (!bar) return
-    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux boomux")
-    close()
-  }
-
   function persistPaneSettings(values) {
     var next = ({})
     for (var key in settings) if (key !== "id") next[key] = settings[key]
@@ -1879,7 +1878,6 @@ Panel {
   function createNode() {
     if (!bar || !federationAvailable) return
     bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add")
-    close()
   }
 
   function createShellOnNode(node) {
@@ -3003,9 +3001,10 @@ Panel {
     BorderSurface {
       width: Style.space(250)
       implicitHeight: noticeColumn.implicitHeight + Style.space(20)
-      anchors.right: parent.right
+      x: root.paneSide === "left"
+        ? panel.sideInset + Style.space(18)
+        : parent.width - width - panel.sideInset - Style.space(18)
       anchors.bottom: parent.bottom
-      anchors.rightMargin: Style.space(18)
       anchors.bottomMargin: Style.space(18)
       color: Util.alpha(Color.background, 0.97)
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border,
@@ -3420,18 +3419,6 @@ Panel {
               horizontalPadding: Style.space(3)
               verticalPadding: Style.space(1)
               onClicked: root.showSettings()
-            }
-            Button {
-              width: Style.space(30)
-              height: Style.space(30)
-              iconText: ""
-              tooltipText: "Open Boomux TUI"
-              bordered: true
-              enabled: root.cliAvailable
-              foreground: root.foreground
-              horizontalPadding: Style.space(3)
-              verticalPadding: Style.space(1)
-              onClicked: root.openDashboard()
             }
             Button {
               width: Style.space(30)
@@ -4862,46 +4849,6 @@ Panel {
           }
         }
 
-        }
-      }
-
-      BorderSurface {
-        visible: root.actionMessage !== "" && !root.itemToRemove
-          && !root.renameTarget && !root.actionMenuTarget
-        z: 7
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: Style.space(8)
-        height: Style.space(34)
-        color: Color.background
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
-        radius: Style.cornerRadius
-
-        Text {
-          id: actionStatusText
-          anchors.left: parent.left
-          anchors.right: dismissStatusButton.left
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.space(9)
-          anchors.rightMargin: Style.space(6)
-          text: root.actionMessage
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
-        Button {
-          id: dismissStatusButton
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          width: Style.space(28)
-          height: Style.space(28)
-          text: "×"
-          tooltipText: "Dismiss status"
-          bordered: false
-          foreground: root.dim
-          onClicked: root.actionMessage = ""
         }
       }
 
