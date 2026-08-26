@@ -26,7 +26,7 @@ Panel {
   readonly property string pluginRepositoryUrl: "https://github.com/gardnmi/omarchy-boomux"
   readonly property string paneSide: String(setting("side", "left")).toLowerCase() === "right"
     ? "right" : "left"
-  readonly property int paneWidth: Math.max(Style.space(320),
+  readonly property int paneWidth: Math.max(Style.space(280),
     Math.min(Style.space(520), Number(setting("paneWidth", Style.space(360)))))
 
   property var workspaces: []
@@ -43,7 +43,7 @@ Panel {
   property string activeTab: "agents"
   property string expandedWorkspaceKey: ""
   property string pendingWorkspacePositionKey: ""
-  property int workspaceTreeHeight: Style.space(265)
+  property int workspaceTreeHeight: Style.space(340)
   property int selectedIndex: 0
   property bool online: false
   property bool refreshing: false
@@ -91,6 +91,11 @@ Panel {
   property var actionMenuTarget: null
   property real actionMenuX: 0
   property real actionMenuY: 0
+  property real actionMenuAnchorY: 0
+  property int actionMenuIndex: 0
+  property string focusSection: "workspaces"
+  property int selectedWorkspaceIndex: 0
+  property int selectedWorkspaceItemIndex: 0
   property var renameTarget: null
   property string renameError: ""
   property string inspectRequestedKey: ""
@@ -141,9 +146,6 @@ Panel {
   property var workspaceSelectionRequested: null
   property var workspaceSelectionActive: null
   property string workspaceSelectionAppliedId: ""
-  property var workspaceItems: []
-  property string workspaceItemsSignature: ""
-  property int workspaceItemsRevision: 0
   property string activeBoomuxWorkspaceId: ""
   property bool desktopWorkspaceRefreshPending: false
   property string activeBoomuxTerminalKey: ""
@@ -158,6 +160,18 @@ Panel {
         || attentionRevision(agent) > 0)
   }))
   readonly property var paneAgents: visibleAgents
+  readonly property var cursorWorkspace: selectedWorkspaceIndex >= 0
+    && selectedWorkspaceIndex < workspaceTreeWorkspaces.length
+    ? workspaceTreeWorkspaces[selectedWorkspaceIndex] : null
+  readonly property var cursorWorkspaceItems: cursorWorkspace
+    ? WorkspaceModel.workspaceTreeItems(cursorWorkspace) : []
+  readonly property var cursorWorkspaceItem: selectedWorkspaceItemIndex >= 0
+    && selectedWorkspaceItemIndex < cursorWorkspaceItems.length
+    ? cursorWorkspaceItems[selectedWorkspaceItemIndex] : null
+  readonly property var currentActionMenuActions: actionMenuActionsFor(actionMenuTarget)
+  readonly property string currentActionMenuAction: actionMenuIndex >= 0
+    && actionMenuIndex < currentActionMenuActions.length
+    ? currentActionMenuActions[actionMenuIndex] : ""
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
       if (workspaces[i].key === selectedWorkspaceKey) return workspaces[i]
@@ -225,14 +239,8 @@ Panel {
     clampProjectSelection()
   }
 
-  onSelectedWorkspaceKeyChanged: {
-    if (workspaceDropdown) workspaceDropdown.value = selectedWorkspaceKey
-  }
-
   onAgentHostNameChanged: if (agentHostDropdown)
     agentHostDropdown.value = agentHostName
-
-  onWorkspaceDetailChanged: syncWorkspaceItems()
 
   onItemToRemoveChanged: Qt.callLater(function() {
     if (itemToRemove) removeDialogKeyHandler.forceActiveFocus()
@@ -362,12 +370,6 @@ Panel {
       + (workspace.is_external ? " · external Workspace" : "")
   }
 
-  function workspaceSelectionLabel(workspace) {
-    if (!workspace) return ""
-    var label = String(workspace.name)
-    return workspace.is_external ? label + " · " + nodeName(workspace) : label
-  }
-
   function workspaceVisibleAgentCount(workspace) {
     if (!workspace) return 0
     return paneAgents.filter(function(agent) {
@@ -404,6 +406,17 @@ Panel {
       return String(node.health).split("_").join(" ")
         + " · cached data retained · action required"
     return nodeHealthLabel(node)
+  }
+
+  function nodeNextStep(node) {
+    if (!node) return ""
+    if (nodeCanReauthenticate(node)) return "Open Node actions and choose Authenticate."
+    if (nodeCanUpgrade(node)) return "Open Node actions and choose Update."
+    if (node.health === "identity_changed" || node.health === "identity_conflict")
+      return "Open the Boomux TUI to review and repair the registered identity."
+    if (nodeVersionDirection(node) === "newer")
+      return "Update Boomux on this control machine before managing the Node."
+    return ""
   }
 
   function nodeVersionDirection(node) {
@@ -467,11 +480,6 @@ Panel {
   function shellOwner(owner) {
     if (typeof owner === "string") return owner
     return owner && owner.kind === "schedule" ? "schedule" : "user"
-  }
-
-  function shellStatus(status) {
-    if (typeof status === "string") return status
-    return status && status.exited !== undefined ? "exited" : "unknown"
   }
 
   function refresh() {
@@ -606,20 +614,10 @@ Panel {
     return WorkspaceModel.normalizeAgent(source, node, workspaceName)
   }
 
-  function normalizeShell(source, node, workspaceId, workspaceName, workspaceKey) {
-    return WorkspaceModel.normalizeShell(source, node, workspaceId, workspaceName, workspaceKey)
-  }
-
-  function normalizeLauncher(source, node, workspaceId, workspaceName, workspaceKey) {
-    return WorkspaceModel.normalizeLauncher(source, node, workspaceId, workspaceName, workspaceKey)
-  }
-
   function parseNodeSnapshot(raw) {
     try {
       if (snapshotActiveEpoch !== pollEpoch) return
-      var itemScrollY = itemList ? itemList.contentY : 0
       var treeScrollY = workspaceTreeList ? workspaceTreeList.contentY : 0
-      var itemModelRevision = workspaceItemsRevision
       var data = parseEnvelope(raw, "node.snapshot")
       var snapshot = WorkspaceModel.normalizeNodeSnapshot(data)
       nodes = snapshot.nodes
@@ -641,8 +639,6 @@ Panel {
       }
       preserveSelections()
       if (workspaceModelChanged) restoreWorkspaceTreeScroll(treeScrollY)
-      if (workspaceItemsRevision !== itemModelRevision)
-        restoreWorkspaceItemScroll(itemScrollY)
       openPendingShellIfPresent()
     } catch (exception) {
       error = "Could not read federated Boomux state"
@@ -650,20 +646,20 @@ Panel {
     }
   }
 
-  function restoreWorkspaceItemScroll(contentY) {
-    if (!itemList || activeTab !== "workspaces") return
-    Qt.callLater(function() {
-      var maximum = Math.max(0, itemList.contentHeight - itemList.height)
-      itemList.contentY = Math.max(0, Math.min(Number(contentY || 0), maximum))
-    })
-  }
-
   function applyWorkspaceSnapshot(nextWorkspaces) {
+    var cursorKey = cursorWorkspace ? cursorWorkspace.key : ""
     workspaces = nextWorkspaces
     var signature = WorkspaceModel.workspaceTreeModelSignature(nextWorkspaces)
     if (signature === workspaceTreeSnapshotSignature) return false
     workspaceTreeSnapshotSignature = signature
     workspaceTreeWorkspaces = nextWorkspaces
+    if (cursorKey !== "") for (var i = 0; i < nextWorkspaces.length; i++) {
+      if (nextWorkspaces[i].key === cursorKey) {
+        selectedWorkspaceIndex = i
+        break
+      }
+    }
+    clampWorkspaceCursor()
     return true
   }
 
@@ -1139,6 +1135,7 @@ Panel {
     if (tab === "workspaces") tab = "agents"
     if (activeTab === tab) return
     activeTab = tab
+    focusSection = "lower"
     if (tab === "nodes") syncNodeIndex()
     else syncAgentIndex()
     cancelForm()
@@ -1161,6 +1158,116 @@ Panel {
     selectedIndex = Math.max(0, Math.min(selectedIndex, itemCount - 1))
   }
 
+  function clampWorkspaceCursor() {
+    selectedWorkspaceIndex = Math.max(0, Math.min(selectedWorkspaceIndex,
+      workspaceTreeWorkspaces.length - 1))
+    selectedWorkspaceItemIndex = Math.max(0, Math.min(selectedWorkspaceItemIndex,
+      cursorWorkspaceItems.length - 1))
+  }
+
+  function moveWorkspaceCursor(offset) {
+    if (workspaceTreeWorkspaces.length === 0) return
+    selectedWorkspaceIndex = Math.max(0, Math.min(selectedWorkspaceIndex + offset,
+      workspaceTreeWorkspaces.length - 1))
+    selectedWorkspaceItemIndex = 0
+    workspaceTreeList.positionViewAtIndex(selectedWorkspaceIndex, ListView.Contain)
+  }
+
+  function cycleFocusSection(direction) {
+    var sections = ["workspaces"]
+    if (cursorWorkspace && cursorWorkspace.key === expandedWorkspaceKey
+        && cursorWorkspaceItems.length > 0) sections.push("workspace-items")
+    sections.push("lower")
+    var index = sections.indexOf(focusSection)
+    if (index < 0) index = 0
+    focusSection = sections[(index + (direction < 0 ? -1 : 1) + sections.length)
+      % sections.length]
+    ensureFocusSectionVisible()
+  }
+
+  function revealContentItem(item) {
+    if (!item || !contentScroll || !contentColumn) return
+    var point = item.mapToItem(contentColumn, 0, 0)
+    var top = point.y
+    var bottom = top + item.height
+    if (top < contentScroll.contentY) contentScroll.contentY = Math.max(0, top)
+    else if (bottom > contentScroll.contentY + contentScroll.height)
+      contentScroll.contentY = Math.max(0, Math.min(
+        contentScroll.contentHeight - contentScroll.height, bottom - contentScroll.height))
+  }
+
+  function ensureFocusSectionVisible() {
+    Qt.callLater(function() {
+      if (root.focusSection === "workspaces") root.revealContentItem(workspaceTreeColumn)
+      else if (root.focusSection === "lower") root.revealContentItem(
+        root.activeTab === "agents" ? agentColumn : nodeColumn)
+      else root.revealContentItem(workspaceTreeList)
+    })
+  }
+
+  function revealWorkspaceTreeCursor() {
+    Qt.callLater(function() {
+      var workspaceDelegate = workspaceTreeList.itemAtIndex(root.selectedWorkspaceIndex)
+      if (workspaceDelegate)
+        workspaceDelegate.revealTreeItem(root.selectedWorkspaceItemIndex)
+    })
+  }
+
+  function revealSettingsItem(item) {
+    if (!item || !settingsScroll || !settingsColumn || !item.activeFocus) return
+    var point = item.mapToItem(settingsColumn, 0, 0)
+    if (point.y < settingsScroll.contentY) settingsScroll.contentY = Math.max(0, point.y)
+    else if (point.y + item.height > settingsScroll.contentY + settingsScroll.height)
+      settingsScroll.contentY = Math.max(0,
+        point.y + item.height - settingsScroll.height)
+  }
+
+  function movePanelCursor(dx, dy) {
+    if (actionMenuTarget) {
+      moveActionMenu(dy !== 0 ? dy : dx)
+      return
+    }
+    if (focusSection === "workspaces") {
+      if (dy !== 0) moveWorkspaceCursor(dy)
+      else if (dx > 0 && cursorWorkspace && cursorWorkspace.key !== expandedWorkspaceKey)
+        toggleWorkspaceExpansion(cursorWorkspace)
+      else if (dx < 0 && cursorWorkspace && cursorWorkspace.key === expandedWorkspaceKey)
+        toggleWorkspaceExpansion(cursorWorkspace)
+      return
+    }
+    if (focusSection === "workspace-items") {
+      if (dy !== 0 && cursorWorkspaceItems.length > 0) {
+        selectedWorkspaceItemIndex = Math.max(0, Math.min(selectedWorkspaceItemIndex + dy,
+          cursorWorkspaceItems.length - 1))
+        revealWorkspaceTreeCursor()
+      } else if (dx < 0) focusSection = "workspaces"
+      return
+    }
+    if (dy !== 0) moveSelection(dy)
+    else if (dx < 0) focusSection = "workspaces"
+  }
+
+  function activatePanelCursor() {
+    if (actionMenuTarget) {
+      if (currentActionMenuAction !== "") runActionMenuAction(currentActionMenuAction)
+      return
+    }
+    if (focusSection === "workspaces") activateWorkspaceRow(cursorWorkspace)
+    else if (focusSection === "workspace-items") openWorkspaceTreeItem(cursorWorkspaceItem)
+    else activateSelected()
+  }
+
+  function showCursorActionMenu() {
+    var target = null
+    if (focusSection === "workspaces" && cursorWorkspace)
+      target = { kind: "workspace", workspace: cursorWorkspace }
+    else if (focusSection === "workspace-items") target = cursorWorkspaceItem
+    else if (activeTab === "nodes" && selectedItem)
+      target = { kind: "node", node: selectedItem }
+    if (target) showActionMenuAt(target, keyCatcher.width - Style.space(172),
+      Style.space(72))
+  }
+
   function moveSelection(offset) {
     if (editing || itemCount === 0) return
     selectedIndex = Math.max(0, Math.min(selectedIndex + offset, itemCount - 1))
@@ -1175,14 +1282,7 @@ Panel {
 
   function activateSelected() {
     if (activeTab === "agents") openAgent(selectedItem)
-  }
-
-  function selectWorkspace(workspaceKey) {
-    selectedWorkspaceKey = String(workspaceKey)
-    syncWorkspaceIndex()
-    workspaceDetail = null
-    inspectWorkspace(selectedWorkspaceKey)
-    requestWorkspaceSelection(selectedWorkspace)
+    else if (activeTab === "nodes" && selectedItem) showCursorActionMenu()
   }
 
   function openWorkspacePanel(workspace) {
@@ -1197,7 +1297,12 @@ Panel {
     if (!workspace) return
     var expanding = expandedWorkspaceKey !== workspace.key
     expandedWorkspaceKey = expanding ? workspace.key : ""
-    if (expanding) positionWorkspace(workspace.key)
+    if (expanding) {
+      var itemCount = WorkspaceModel.workspaceTreeItems(workspace).length
+      setWorkspaceTreeHeight(Math.max(workspaceTreeHeight,
+        Style.space(62 + Math.min(itemCount, 5) * 40)))
+      positionWorkspace(workspace.key)
+    }
   }
 
   function activateWorkspaceRow(workspace) {
@@ -1270,8 +1375,8 @@ Panel {
   }
 
   function setWorkspaceTreeHeight(height) {
-    var minimum = Style.space(110)
-    var maximum = Math.max(minimum, panel.height - Style.space(360))
+    var minimum = Style.space(150)
+    var maximum = Math.max(minimum, panel.height - Style.space(260))
     workspaceTreeHeight = Math.round(Math.max(minimum, Math.min(Number(height), maximum)))
   }
 
@@ -1341,97 +1446,6 @@ Panel {
     return home !== "" && value.indexOf(home + "/") === 0 ? "~" + value.substring(home.length) : value
   }
 
-  function currentAgentForShell(shell) {
-    if (!workspaceDetail || !workspaceDetail.agents || !shell) return null
-    for (var i = 0; i < workspaceDetail.agents.length; i++) {
-      var rawAgent = workspaceDetail.agents[i]
-      var agent = rawAgent.key ? rawAgent : normalizeAgent(rawAgent, nodeFor(shell.node_id), workspaceDetail.name)
-      var state = agent.observation ? agent.observation.state : "unknown"
-      if (WorkspaceModel.agentMatchesShell(agent, shell)
-          && state !== "inactive" && state !== "done" && agentIsProjectedCurrent(agent)) return agent
-    }
-    return null
-  }
-
-  function buildWorkspaceItems() {
-    if (!workspaceDetail) return []
-    var items = []
-    var detailShells = workspaceDetail.shells || []
-    for (var i = 0; i < detailShells.length; i++) {
-      var shell = detailShells[i]
-      var owner = shellOwner(shell.owner)
-      if (owner === "schedule") continue
-      var shellId = resourceId(shell.id)
-      var normalizedShell = Object.assign({}, shell, { id: shellId,
-        key: resourceKey(shell.node_id, shellId), workspace_key: workspaceDetail.key,
-        owner: owner, status: shellStatus(shell.status),
-        run: shell.run || (shell.run_id ? { id: resourceId(shell.run_id) } : null) })
-      var agent = currentAgentForShell(normalizedShell)
-      items.push({
-        kind: agent ? "agent" : (shell.command && shell.command.length > 0 ? "command" : "shell"),
-        id: shellId,
-        key: normalizedShell.key,
-        node_id: shell.node_id,
-        node_alias: shell.node_alias,
-        node_local: shell.node_local,
-        name: shell.name,
-        status: agent && agent.observation ? agent.observation.state : normalizedShell.status,
-        detail: agent ? String(agent.integration || "agent")
-          : (shell.command && shell.command.length > 0 ? shell.command.join(" ") : String(shell.cwd || "")),
-        shell: normalizedShell,
-        agent: agent
-      })
-    }
-    var launchers = workspaceDetail.launchers || []
-    for (var j = 0; j < launchers.length; j++) {
-      var launcher = launchers[j]
-      var launcherId = resourceId(launcher.id)
-      items.push({
-        kind: "launcher",
-        id: launcherId,
-        key: resourceKey(launcher.node_id, launcherId),
-        node_id: launcher.node_id,
-        node_alias: launcher.node_alias,
-        node_local: launcher.node_local,
-        name: launcher.name,
-        status: "on workspace open",
-        detail: launcher.command ? launcher.command.join(" ") : "",
-        launcher: launcher
-      })
-    }
-    return items
-  }
-
-  function syncWorkspaceItems() {
-    var nextItems = buildWorkspaceItems()
-    var signature = JSON.stringify({
-      workspace: workspaceDetail ? workspaceDetail.key : "",
-      items: nextItems.map(function(item) {
-        var shell = item.shell || null
-        var agent = item.agent || null
-        var launcher = item.launcher || null
-        return {
-          key: item.key,
-          kind: item.kind,
-          name: item.name,
-          status: item.status,
-          detail: item.detail,
-          node_id: item.node_id,
-          placement_state: shell ? shell.placement_state : (launcher ? launcher.placement_state : ""),
-          run_id: shell && shell.run ? shell.run.id : "",
-          agent_id: agent ? agent.id : "",
-          agent_revision: agent && agent.observation ? agent.observation.revision : 0,
-          attention_revision: agent ? attentionRevision(agent) : 0,
-          launcher_revision: launcher ? Number(launcher.revision || 0) : 0
-        }
-      })
-    })
-    if (signature === workspaceItemsSignature) return
-    workspaceItemsSignature = signature
-    workspaceItems = nextItems
-    workspaceItemsRevision++
-  }
-
   function workspaceCanOpen(workspace) {
     if (!workspace || workspace.closing) return false
     if (workspace.is_global) return true
@@ -1484,14 +1498,12 @@ Panel {
     if (!agent) return
     var shell = WorkspaceModel.retainedShellForAgent(agent, shells)
     if (!shell) {
-      if (attentionRevision(agent) > 0 && agentCanAcknowledge(agent)) {
-        actionMessage = "Acknowledging attention for removed shell..."
-        acknowledgeAgent(agent)
-      } else if (attentionRevision(agent) > 0) {
+      if (attentionRevision(agent) > 0 && !agentCanAcknowledge(agent)) {
         showActionFailure("Agent unavailable",
           "Remote attention remains visible; this CLI cannot acknowledge it")
       } else {
-        showActionFailure("Agent unavailable", "This Agent's shell was removed")
+        showActionFailure("Agent unavailable",
+          "This Agent's shell was removed; use Dismiss to acknowledge its notification")
       }
       return
     }
@@ -1563,15 +1575,61 @@ Panel {
   function showActionMenu(target, source) {
     if (!target || !source) return
     var point = source.mapToItem(keyCatcher, 0, source.height)
-    actionMenuX = Math.max(Style.space(8), Math.min(point.x,
+    showActionMenuAt(target, point.x, point.y)
+  }
+
+  function showActionMenuAt(target, x, y) {
+    if (!target || actionMenuActionsFor(target).length === 0) return
+    actionMenuX = Math.max(Style.space(8), Math.min(x,
       keyCatcher.width - Style.space(172)))
-    actionMenuY = Math.max(Style.space(8), Math.min(point.y,
-      keyCatcher.height - Style.space(target.kind === "node" ? 180 : 142)))
+    actionMenuAnchorY = y
+    actionMenuY = Math.max(Style.space(8), y)
+    actionMenuIndex = 0
     actionMenuTarget = target
+    Qt.callLater(function() {
+      if (!root.actionMenuTarget) return
+      root.actionMenuY = Math.max(Style.space(8), Math.min(root.actionMenuAnchorY,
+        keyCatcher.height - actionMenuCard.height - Style.space(8)))
+    })
+  }
+
+  function actionMenuActionsFor(target) {
+    if (!target) return []
+    var actions = []
+    if (target.kind === "workspace") {
+      if (workspaceCreationReason(target.workspace) === "" && !actionProcess.running
+          && !openProcess.running) actions.push("shell")
+      if (workspaceCanRename(target.workspace)) actions.push("rename")
+      if (workspaceCanRemove(target.workspace)) actions.push("remove")
+      return actions
+    }
+    if (target.kind === "node") {
+      var nodeBusy = nodeShellProcess.running || nodeUpgradeProcess.running
+        || nodeReauthenticateProcess.running || actionProcess.running
+      if (nodeCanReauthenticate(target.node) && !nodeBusy) actions.push("authenticate")
+      else if (target.node.workspace_owner_eligible
+          && nodeIsActionable(target.node.node_id) && activeBoomuxWorkspaceId !== ""
+          && !nodeBusy)
+        actions.push("shell")
+      if (nodeCanUpgrade(target.node) && !nodeBusy) actions.push("update")
+      if (!actionProcess.running && !nodeShellProcess.running
+          && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running)
+        actions.push("remove")
+      return actions
+    }
+    if (itemCanRename(target)) return ["rename", "remove"]
+    return []
+  }
+
+  function moveActionMenu(offset) {
+    if (currentActionMenuActions.length === 0 || offset === 0) return
+    actionMenuIndex = (actionMenuIndex + (offset < 0 ? -1 : 1)
+      + currentActionMenuActions.length) % currentActionMenuActions.length
   }
 
   function closeActionMenu() {
     actionMenuTarget = null
+    actionMenuIndex = 0
   }
 
   function workspaceCanRename(workspace) {
@@ -1580,7 +1638,7 @@ Panel {
 
   function itemCanRename(item) {
     var node = item ? nodeFor(item.node_id) : null
-    return !!item && !!node && node.local && !actionProcess.running
+    return !!item && !!node && node.local && !actionProcess.running && !openProcess.running
   }
 
   function requestRename(target) {
@@ -1700,8 +1758,16 @@ Panel {
     if (item.kind === "launcher")
       return "Remove launcher " + String(item.name)
         + "? This deletes its workspace definition. Applications it already launched keep running."
-    return "Remove Shell " + String(item.name)
+    return "Close Shell " + String(item.name)
       + "? This terminates it if running and deletes its shell definition and retained terminal state. Durable Agent history may remain."
+  }
+
+  function removeConfirmText(item) {
+    if (!item) return "Remove"
+    if (item.kind === "node") return "Forget"
+    if (item.kind === "shell" || item.kind === "command" || item.kind === "agent")
+      return "Close"
+    return "Remove"
   }
 
   function confirmRemoveItem() {
@@ -1730,7 +1796,8 @@ Panel {
     if (!owningWorkspace) return
     pendingAction = { kind: item.kind === "launcher" ? "remove-launcher" : "remove-shell",
       key: item.key, nodeId: item.node_id }
-    actionMessage = "Removing " + String(item.name) + "..."
+    actionMessage = (item.kind === "launcher" ? "Removing " : "Closing ")
+      + String(item.name) + "..."
     actionProcess.command = item.kind === "launcher"
       ? ["boomux", "launcher", "remove", String(item.id), "--workspace",
         String(item.launcher.owner_workspace_id || owningWorkspace.id)]
@@ -1757,6 +1824,7 @@ Panel {
     cancelForm()
     itemToRemove = null
     settingsOpen = true
+    Qt.callLater(function() { settingsBackButton.forceActiveFocus() })
   }
 
   function hideSettings() {
@@ -1812,6 +1880,7 @@ Panel {
       return
     }
     nodeShellAlias = String(node.alias)
+    actionMessage = "Creating Shell on " + nodeShellAlias + "..."
     nodeShellProcess.command = ["boomux", "shell", "create",
       String(activeBoomuxWorkspaceId), "--node", String(node.node_id), "--open"]
     nodeShellProcess.running = true
@@ -1839,14 +1908,6 @@ Panel {
   function formatTimestamp(timestamp) {
     var value = Number(timestamp || 0)
     return value > 0 ? Qt.formatDateTime(new Date(value), "MMM d, HH:mm") : "unknown"
-  }
-
-  function workspaceShellCount(workspace) {
-    if (!workspace.shells)
-      return WorkspaceModel.userShellCount(shells, workspace.node_id, workspace.id)
-    return workspace.shells.filter(function(shell) {
-      return shellOwner(shell.owner) !== "schedule"
-    }).length
   }
 
   function workspaceActiveAgentCount(workspace) {
@@ -2641,9 +2702,10 @@ Panel {
         root.actionMessage = "Shell created on " + root.nodeShellAlias
         root.refresh()
       } else {
-        root.showNotice("Shell creation failed", root.processError(
+        root.actionMessage = root.processError(
           nodeShellStderr.text || nodeShellStdout.text,
-          "Could not create a Shell on " + root.nodeShellAlias),
+          "Could not create a Shell on " + root.nodeShellAlias)
+        root.showNotice("Shell creation failed", root.actionMessage,
           root.currentNoticeScreen(), true)
       }
     }
@@ -2736,7 +2798,7 @@ Panel {
         root.actionMessage = "Starting " + String(pending.hostName || "Agent") + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
       else if (action === "remove-launcher") root.actionMessage = "Launcher removed"
-      else if (action === "remove-shell") root.actionMessage = "Shell removed"
+      else if (action === "remove-shell") root.actionMessage = "Shell closed"
       else if (action === "remove-workspace") root.actionMessage = "Workspace removed"
       else if (action === "rename-workspace") root.actionMessage = "Workspace renamed"
       else if (action === "rename-launcher") root.actionMessage = "Launcher renamed"
@@ -3032,21 +3094,17 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editing || workspaceDropdown.popupOpen || root.renameTarget !== null
+      blocked: root.editing || root.settingsOpen || root.renameTarget !== null
       onMoveRequested: function(dx, dy) {
-        if (root.settingsOpen) return
-        if (root.actionMenuTarget) return
         if (root.itemToRemove && (dx !== 0 || dy !== 0))
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
-        else if (dy !== 0) root.moveSelection(dy)
+        else root.movePanelCursor(dx, dy)
       }
       onActivateRequested: {
-        if (root.settingsOpen) return
-        if (root.actionMenuTarget) return
         if (root.itemToRemove) {
           if (removeItemDialog.selectedIndex === 0) root.cancelRemoveItem()
           else root.confirmRemoveItem()
-        } else root.activateSelected()
+        } else root.activatePanelCursor()
       }
       onCloseRequested: {
         if (root.itemToRemove) root.cancelRemoveItem()
@@ -3055,17 +3113,17 @@ Panel {
         else root.close()
       }
       onTabRequested: function(direction) {
-        if (root.settingsOpen) return
-        if (root.actionMenuTarget) return
         if (root.itemToRemove)
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
-        else root.cycleTab(direction)
+        else if (root.actionMenuTarget) root.moveActionMenu(direction)
+        else root.cycleFocusSection(direction)
       }
       onTextKey: function(text) {
-        if (root.itemToRemove || root.actionMenuTarget || root.settingsOpen) return
+        if (root.itemToRemove || root.actionMenuTarget) return
         if (text === "r" || text === "R") root.refreshInstalledState()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("nodes")
+        else if (text === "m" || text === "M") root.showCursorActionMenu()
         else if ((text === "a" || text === "A") && root.activeTab === "nodes"
             && root.federationAvailable) root.createNode()
         else if (text === "n" || text === "N") root.showForm("workspace")
@@ -3073,10 +3131,20 @@ Panel {
           root.dismissAgent(root.selectedItem)
       }
 
-      Column {
+      Flickable {
+        id: settingsScroll
         visible: root.settingsOpen
-        width: parent.width
-        spacing: Style.space(12)
+        anchors.fill: parent
+        contentHeight: settingsColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        Keys.onEscapePressed: root.hideSettings()
+
+        Column {
+          id: settingsColumn
+          width: settingsScroll.width
+          spacing: Style.space(12)
 
         Row {
           width: parent.width
@@ -3097,6 +3165,10 @@ Panel {
             text: "×"
             tooltipText: "Back to Boomux"
             bordered: true
+            focusable: true
+            KeyNavigation.tab: settingsLeftButton
+            KeyNavigation.backtab: settingsConfigButton
+            onActiveFocusChanged: root.revealSettingsItem(settingsBackButton)
             foreground: root.foreground
             onClicked: root.hideSettings()
           }
@@ -3112,18 +3184,28 @@ Panel {
           width: parent.width
           spacing: Style.space(8)
           Button {
+            id: settingsLeftButton
             width: (parent.width - parent.spacing) / 2
             text: "Left"
             selected: root.paneSide === "left"
             bordered: true
+            focusable: true
+            KeyNavigation.tab: settingsRightButton
+            KeyNavigation.backtab: settingsBackButton
+            onActiveFocusChanged: root.revealSettingsItem(settingsLeftButton)
             foreground: root.foreground
             onClicked: root.persistPaneSettings({ side: "left" })
           }
           Button {
+            id: settingsRightButton
             width: (parent.width - parent.spacing) / 2
             text: "Right"
             selected: root.paneSide === "right"
             bordered: true
+            focusable: true
+            KeyNavigation.tab: settingsWidthDownButton
+            KeyNavigation.backtab: settingsLeftButton
+            onActiveFocusChanged: root.revealSettingsItem(settingsRightButton)
             foreground: root.foreground
             onClicked: root.persistPaneSettings({ side: "right" })
           }
@@ -3139,9 +3221,15 @@ Panel {
           width: parent.width
           spacing: Style.space(8)
           Button {
+            id: settingsWidthDownButton
             width: Style.space(42)
             text: "−"
             bordered: true
+            focusable: true
+            KeyNavigation.tab: settingsWidthUpButton
+            KeyNavigation.backtab: settingsRightButton
+            onActiveFocusChanged: root.revealSettingsItem(settingsWidthDownButton)
+            enabled: root.paneWidth > Style.space(280)
             foreground: root.foreground
             onClicked: root.persistPaneSettings({ paneWidth: root.paneWidth - 20 })
           }
@@ -3156,9 +3244,15 @@ Panel {
             verticalAlignment: Text.AlignVCenter
           }
           Button {
+            id: settingsWidthUpButton
             width: Style.space(42)
             text: "+"
             bordered: true
+            focusable: true
+            KeyNavigation.tab: settingsConfigButton
+            KeyNavigation.backtab: settingsWidthDownButton
+            onActiveFocusChanged: root.revealSettingsItem(settingsWidthUpButton)
+            enabled: root.paneWidth < Style.space(520)
             foreground: root.foreground
             onClicked: root.persistPaneSettings({ paneWidth: root.paneWidth + 20 })
           }
@@ -3167,22 +3261,36 @@ Panel {
         PanelSeparator { foreground: root.foreground }
 
         Button {
+          id: settingsConfigButton
           width: parent.width
           text: "Open Boomux config"
           iconText: ""
           tooltipText: "Run boomux config edit in a native terminal"
           bordered: true
+          focusable: true
+          KeyNavigation.tab: settingsBackButton
+          KeyNavigation.backtab: settingsWidthUpButton
+          onActiveFocusChanged: root.revealSettingsItem(settingsConfigButton)
           enabled: root.cliAvailable
           foreground: root.foreground
           onClicked: root.openBoomuxConfig()
         }
+        }
       }
 
-      Column {
-        id: contentColumn
+      Flickable {
+        id: contentScroll
         visible: !root.settingsOpen
-        width: parent.width
-        spacing: Style.space(10)
+        anchors.fill: parent
+        contentHeight: contentColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+        Column {
+          id: contentColumn
+          width: Math.max(0, contentScroll.width - Style.space(8))
+          spacing: Style.space(10)
 
         Row {
           width: parent.width
@@ -3190,42 +3298,33 @@ Panel {
           spacing: Style.space(8)
 
           BoomuxIcon {
-            width: Style.space(28)
-            height: Style.space(28)
+            width: Style.space(26)
+            height: Style.space(26)
             anchors.verticalCenter: parent.verticalCenter
             color: root.blockedCount > 0 ? root.urgent
               : (root.completedCount > 0 ? Color.accent : root.foreground)
             lit: root.blockedCount > 0 || root.completedCount > 0
           }
           Column {
-            width: parent.width - headerActions.width - Style.space(36)
+            width: parent.width - headerActions.width - Style.space(34)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 0
-            Row {
+            Text {
+              id: boomuxHeaderTitle
               width: parent.width
-              spacing: Style.space(5)
-              Text {
-                id: boomuxHeaderTitle
-                text: "BOOMUX"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
-              }
-              Text {
-                visible: root.cliVersion !== ""
-                anchors.baseline: boomuxHeaderTitle.baseline
-                text: "v" + root.cliVersion
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
+              text: "BOOMUX"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
             }
             Text {
               width: parent.width
-              text: root.activeBoomuxWorkspaceName !== ""
-                ? "active · " + root.activeBoomuxWorkspaceName
-                : (root.online ? root.workspaces.length + " Workspaces" : "offline")
+              text: (root.cliVersion !== "" ? "v" + root.cliVersion + " · " : "")
+                + (root.activeBoomuxWorkspaceName !== ""
+                  ? "active · " + root.activeBoomuxWorkspaceName
+                  : (root.online ? root.workspaces.length + " Workspaces" : "offline"))
               color: root.activeBoomuxWorkspaceName !== "" ? Color.accent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -3235,9 +3334,9 @@ Panel {
           Row {
             id: headerActions
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(4)
+            spacing: Style.space(3)
             Button {
-              width: Style.space(32)
+              width: Style.space(30)
               height: Style.space(30)
               iconText: ""
               tooltipText: "Open Boomux settings"
@@ -3248,7 +3347,7 @@ Panel {
               onClicked: root.showSettings()
             }
             Button {
-              width: Style.space(32)
+              width: Style.space(30)
               height: Style.space(30)
               iconText: ""
               tooltipText: "Open Boomux TUI"
@@ -3260,7 +3359,7 @@ Panel {
               onClicked: root.openDashboard()
             }
             Button {
-              width: Style.space(32)
+              width: Style.space(30)
               height: Style.space(30)
               text: "×"
               tooltipText: "Close Boomux pane"
@@ -3925,12 +4024,6 @@ Panel {
               clip: true
               boundsBehavior: Flickable.StopAtBounds
               ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              footer: Item {
-                width: workspaceTreeList.width
-                height: root.expandedWorkspaceKey === "" ? 0
-                  : Math.max(0, workspaceTreeList.height - Style.space(48))
-              }
-
               delegate: Rectangle {
                 id: workspaceTreeDelegate
                 required property var modelData
@@ -3941,16 +4034,35 @@ Panel {
                   modelData.key === root.expandedWorkspaceKey
                 readonly property bool workspaceDefault: modelData.is_global
                   && modelData.id === root.workspaceSelectionAppliedId
+                readonly property bool cursorSelected: root.focusSection === "workspaces"
+                  && index === root.selectedWorkspaceIndex
                 readonly property var treeItems: WorkspaceModel.workspaceTreeItems(modelData)
+                readonly property int visibleShellCount: modelData.shells
+                  ? treeItems.filter(function(item) { return item.kind !== "launcher" }).length
+                  : WorkspaceModel.userShellCount(root.shells, modelData.node_id, modelData.id)
                 readonly property int rowHeight: Style.space(48)
+                function revealTreeItem(itemIndex) {
+                  var item = treeItemRepeater.itemAt(itemIndex)
+                  if (!item) return
+                  var point = item.mapToItem(workspaceTreeList.contentItem, 0, 0)
+                  var maximumY = Math.max(0,
+                    workspaceTreeList.contentHeight - workspaceTreeList.height)
+                  if (point.y < workspaceTreeList.contentY)
+                    workspaceTreeList.contentY = Math.max(0, point.y)
+                  else if (point.y + item.height > workspaceTreeList.contentY
+                      + workspaceTreeList.height)
+                    workspaceTreeList.contentY = Math.min(maximumY,
+                      point.y + item.height - workspaceTreeList.height)
+                }
                 width: ListView.view.width
                 height: rowHeight + (workspaceExpanded ? childColumn.implicitHeight : 0)
                 radius: Style.cornerRadius
                 color: workspaceActive
                   ? Util.alpha(Color.accent, 0.16)
+                  : (cursorSelected ? Style.selectedFillFor(root.foreground, Color.accent)
                   : (workspaceExpanded ? Util.alpha(root.foreground, 0.055)
                     : (workspaceRowMouse.containsMouse
-                      ? Util.alpha(root.foreground, 0.04) : "transparent"))
+                      ? Util.alpha(root.foreground, 0.04) : "transparent")))
                 clip: true
 
                 Behavior on height {
@@ -3983,7 +4095,12 @@ Panel {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)
+                    onClicked: {
+                      root.focusSection = "workspaces"
+                      root.selectedWorkspaceIndex = workspaceTreeDelegate.index
+                      root.selectedWorkspaceItemIndex = 0
+                      root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)
+                    }
                   }
                 }
 
@@ -4020,10 +4137,12 @@ Panel {
                   }
                   Text {
                     width: parent.width
-                    text: root.workspaceShellCount(modelData) + " Shell"
-                      + (root.workspaceShellCount(modelData) === 1 ? "" : "s")
+                    text: workspaceTreeDelegate.visibleShellCount + " Shell"
+                      + (workspaceTreeDelegate.visibleShellCount === 1 ? "" : "s")
                       + " · " + root.workspaceVisibleAgentCount(modelData) + " Agent"
                       + (root.workspaceVisibleAgentCount(modelData) === 1 ? "" : "s")
+                      + (workspaceTreeDelegate.workspaceDefault ? " · default" : "")
+                      + (Number(modelData.attention_count || 0) > 0 ? " · attention" : "")
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -4053,8 +4172,8 @@ Panel {
                   width: visible ? implicitWidth : 0
                   Button {
                     id: workspaceMenuButton
-                    width: Style.space(22)
-                    height: Style.space(22)
+                    width: Style.space(32)
+                    height: Style.space(32)
                     text: "⋮"
                     tooltipText: "Workspace actions"
                     bordered: false
@@ -4077,6 +4196,10 @@ Panel {
                   hoverEnabled: true
                   enabled: root.workspaceCanOpen(workspaceTreeDelegate.modelData)
                   cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onEntered: {
+                    root.focusSection = "workspaces"
+                    root.selectedWorkspaceIndex = index
+                  }
                   onClicked: root.activateWorkspaceRow(workspaceTreeDelegate.modelData)
                 }
 
@@ -4102,19 +4225,26 @@ Panel {
                   }
 
                   Repeater {
+                    id: treeItemRepeater
                     model: workspaceTreeDelegate.treeItems
                     delegate: Rectangle {
                       id: treeItemDelegate
                       required property var modelData
+                      required property int index
                       readonly property bool terminalFocused:
                         WorkspaceModel.workspaceTreeItemFocused(
                           modelData, root.activeBoomuxTerminalKey)
                       width: childColumn.width
                       height: Style.space(38)
                       radius: Style.cornerRadius
+                      readonly property bool cursorSelected:
+                        root.focusSection === "workspace-items"
+                        && workspaceTreeDelegate.index === root.selectedWorkspaceIndex
+                        && index === root.selectedWorkspaceItemIndex
                       color: terminalFocused ? Util.alpha(Color.accent, 0.045)
+                        : (cursorSelected ? Style.selectedFillFor(root.foreground, Color.accent)
                         : (treeItemMouse.containsMouse
-                          ? Util.alpha(root.foreground, 0.035) : "transparent")
+                          ? Util.alpha(root.foreground, 0.035) : "transparent"))
                       opacity: treeItemMouse.enabled ? 1 : 0.48
 
                       Text {
@@ -4149,6 +4279,7 @@ Panel {
                           width: parent.width
                           text: String(modelData.kind) + " · " + String(modelData.status)
                             + (modelData.node_alias === "local" ? "" : " · " + modelData.node_alias)
+                            + (modelData.status === "exited" ? " · open starts a new run" : "")
                           color: root.dim
                           font.family: root.fontFamily
                           font.pixelSize: Math.max(8, Style.font.caption - 1)
@@ -4175,16 +4306,24 @@ Panel {
                           modelData.kind === "launcher"
                             ? "remote_launcher_invocation" : "remote_pty_attachment")
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        ToolTip.visible: containsMouse && modelData.status === "exited"
+                        ToolTip.text: "Opening this item starts a new run"
+                        onEntered: {
+                          root.focusSection = "workspace-items"
+                          root.selectedWorkspaceIndex = workspaceTreeDelegate.index
+                          root.selectedWorkspaceItemIndex = index
+                        }
                         onClicked: root.openWorkspaceTreeItem(modelData)
                       }
                       Button {
                         id: treeItemMenuButton
+                        visible: root.itemCanRename(modelData)
                         z: 1
                         anchors.right: parent.right
                         anchors.rightMargin: Style.space(5)
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Style.space(18)
-                        height: Style.space(18)
+                        width: Style.space(32)
+                        height: Style.space(32)
                         text: "⋮"
                         tooltipText: "Item actions"
                         bordered: false
@@ -4230,11 +4369,7 @@ Panel {
             xAxis.enabled: false
             dragThreshold: 0
             property real startingHeight: root.workspaceTreeHeight
-            onActiveChanged: {
-              if (active) startingHeight = root.workspaceTreeHeight
-              else if (root.expandedWorkspaceKey !== "")
-                root.positionWorkspace(root.expandedWorkspaceKey)
-            }
+            onActiveChanged: if (active) startingHeight = root.workspaceTreeHeight
             onTranslationChanged: if (active)
               root.setWorkspaceTreeHeight(startingHeight + translation.y)
           }
@@ -4276,81 +4411,65 @@ Panel {
             id: agentColumn
             width: parent.width
             spacing: Style.space(6)
-            Column {
+            Row {
               visible: root.webLifecycleSupported
               width: parent.width
+              height: Style.space(34)
               spacing: Style.space(6)
+              Text {
+                width: parent.width - webActions.width - parent.spacing
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Tailnet Web · " + (webStartProcess.running ? "starting"
+                  : (webStopProcess.running ? "stopping" : (root.webRunning ? "live" : "off")))
+                color: root.webRunning ? Color.accent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
               Row {
-                width: parent.width
-                PanelSectionHeader {
-                  width: parent.width - webStatusLabel.width
-                  text: "TAILNET WEB"
+                id: webActions
+                width: root.webRunning ? Style.space(142) : Style.space(86)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(5)
+                Button {
+                  width: root.webRunning ? Style.space(76) : Style.space(86)
+                  height: Style.space(30)
+                  text: webStartProcess.running ? "Starting"
+                    : (root.webRunning ? "Open" : "Start Web")
+                  iconText: root.webRunning ? "↗" : ""
+                  tooltipText: root.webRunning ? root.webDashboardUrl
+                    : "Publish the dashboard and OpenCode through Tailscale"
+                  bordered: true
+                  active: root.webRunning
+                  focusable: true
+                  enabled: root.webRunning || (root.online && !webStartProcess.running
+                    && !webStopProcess.running)
                   foreground: root.foreground
-                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(4)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.webRunning ? root.openWeb() : root.startWeb()
                 }
-                Text {
-                  id: webStatusLabel
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: webStartProcess.running ? "STARTING"
-                    : (webStopProcess.running ? "STOPPING"
-                      : (root.webRunning ? "LIVE" : "OFF"))
-                  color: root.webRunning ? Color.accent : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-              }
-              Row {
-                width: parent.width
-                spacing: Style.space(6)
-                Text {
-                  width: parent.width - webActions.width - parent.spacing
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Access agents through Tailnet."
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-                Row {
-                  id: webActions
-                  width: root.webRunning ? Style.space(142) : Style.space(86)
-                  spacing: Style.space(5)
-                  Button {
-                    width: root.webRunning ? Style.space(76) : Style.space(86)
-                    height: Style.space(30)
-                    text: webStartProcess.running ? "Starting"
-                      : (root.webRunning ? "Open" : "Start Web")
-                    iconText: root.webRunning ? "↗" : ""
-                    tooltipText: root.webRunning
-                      ? root.webDashboardUrl
-                      : "Publish the dashboard and OpenCode through Tailscale"
-                    bordered: true
-                    active: root.webRunning
-                    enabled: root.webRunning || (root.online && !webStartProcess.running
-                      && !webStopProcess.running)
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(4)
-                    verticalPadding: Style.space(1)
-                    onClicked: root.webRunning ? root.openWeb() : root.startWeb()
-                  }
-                  Button {
-                    visible: root.webRunning
-                    width: Style.space(61)
-                    height: Style.space(30)
-                    text: webStopProcess.running ? "Stopping" : "Stop"
-                    tooltipText: "Stop Web and remove only Boomux-owned Tailscale routes"
-                    bordered: true
-                    enabled: !webStartProcess.running && !webStopProcess.running
-                    foreground: root.foreground
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(4)
-                    verticalPadding: Style.space(1)
-                    onClicked: root.stopWeb()
-                  }
+                Button {
+                  visible: root.webRunning
+                  width: Style.space(61)
+                  height: Style.space(30)
+                  text: webStopProcess.running ? "Stopping" : "Stop"
+                  tooltipText: "Stop Web and remove only Boomux-owned Tailscale routes"
+                  bordered: true
+                  focusable: true
+                  enabled: !webStartProcess.running && !webStopProcess.running
+                  foreground: root.foreground
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(4)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.stopWeb()
                 }
               }
+            }
+            PanelSeparator {
+              visible: root.webLifecycleSupported
+              foreground: root.foreground
             }
             Row {
               width: parent.width
@@ -4387,8 +4506,7 @@ Panel {
               id: agentList
               visible: root.paneAgents.length > 0
               width: parent.width
-              implicitHeight: Math.min(contentHeight, Math.max(Style.space(150),
-                panel.height - workspaceTreeColumn.implicitHeight - Style.space(380)))
+              implicitHeight: Math.min(contentHeight, Style.space(700))
               model: root.paneAgents
               spacing: Style.space(4)
               clip: true
@@ -4404,246 +4522,12 @@ Panel {
                 terminalFocused: WorkspaceModel.agentFocused(
                   modelData, root.activeBoomuxTerminalKey)
                 onHovered: {
+                  root.focusSection = "lower"
                   root.selectedIndex = index
                   root.selectedAgentKey = modelData.key
                 }
                 onActivated: root.openAgent(modelData)
                 onDismissed: root.dismissAgent(modelData)
-              }
-            }
-          }
-        }
-
-        Item {
-          visible: root.cliAvailable && root.activeTab === "workspaces" && !root.editing
-          width: parent.width
-          implicitHeight: workspaceColumn.implicitHeight
-
-          Column {
-            id: workspaceColumn
-            width: parent.width
-            spacing: Style.space(6)
-            Row {
-              width: parent.width
-              PanelSectionHeader {
-                width: parent.width - newWorkspaceButton.width
-                anchors.verticalCenter: parent.verticalCenter
-                text: "WORKSPACES"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-              Button {
-                id: newWorkspaceButton
-                text: "Create Workspace"
-                iconText: "+"
-                tooltipText: "Create workspace"
-                bordered: true
-                foreground: root.foreground
-                fontSize: Style.font.caption
-                iconSize: Style.font.body
-                horizontalPadding: Style.space(6)
-                verticalPadding: Style.space(2)
-                onClicked: root.showForm("workspace")
-              }
-            }
-            Text {
-              visible: root.visibleWorkspaces.length === 0
-              width: parent.width
-              text: root.error !== "" ? root.error : "No Boomux workspaces"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              horizontalAlignment: Text.AlignHCenter
-              topPadding: Style.space(18)
-              bottomPadding: Style.space(18)
-            }
-            Dropdown {
-              id: workspaceDropdown
-              visible: root.visibleWorkspaces.length > 0
-              width: parent.width
-              label: "Select Workspace"
-              value: root.selectedWorkspaceKey
-              options: root.visibleWorkspaces.map(function(workspace) {
-                return {
-                  value: String(workspace.key),
-                  label: root.workspaceSelectionLabel(workspace)
-                }
-              })
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onChanged: function(value) { root.selectWorkspace(value) }
-            }
-
-            BorderSurface {
-              visible: root.workspaceDetail !== null
-              width: parent.width
-              implicitHeight: detailColumn.implicitHeight + Style.space(18)
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.025)
-              borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
-              radius: Style.cornerRadius
-
-              Column {
-                id: detailColumn
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: Style.space(9)
-                spacing: Style.space(6)
-
-                Text {
-                  width: parent.width
-                  text: root.workspaceDetail ? String(root.workspaceDetail.name) : ""
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  width: parent.width
-                  text: root.workspaceDetail && root.workspaceDetail.is_global
-                    ? "Coordinator Workspace · directories are placement-specific"
-                    : (root.workspaceDetail && root.workspaceDetail.default_cwd
-                      ? root.compactPath(root.workspaceDetail.default_cwd) : "No default directory")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideMiddle
-                }
-
-                Button {
-                  width: parent.width
-                  text: "Create Shell"
-                  iconText: "+"
-                  tooltipText: root.workspaceCreationReason(root.workspaceDetail)
-                    || "Create Shell in selected Workspace"
-                  bordered: true
-                  enabled: root.workspaceCreationReason(root.workspaceDetail) === ""
-                  foreground: root.foreground
-                  fontSize: Style.font.caption
-                  iconSize: Style.font.body
-                  onClicked: root.showForm("shell")
-                }
-
-                Button {
-                  width: parent.width
-                  text: "Remove Workspace"
-                  tooltipText: "Remove this Workspace and all managed resources"
-                  bordered: true
-                  enabled: root.workspaceCanRemove(root.workspaceDetail)
-                  foreground: root.urgent
-                  fontSize: Style.font.caption
-                  onClicked: root.requestRemoveWorkspace(root.workspaceDetail)
-                }
-
-                PanelSectionHeader {
-                  width: parent.width
-                  text: "ITEMS"
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                }
-
-                Text {
-                  visible: root.workspaceItems.length === 0
-                  width: parent.width
-                  text: "Empty workspace · create a Shell or start an Agent"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  horizontalAlignment: Text.AlignHCenter
-                  topPadding: Style.space(10)
-                  bottomPadding: Style.space(10)
-                }
-
-                ListView {
-                  id: itemList
-                  width: parent.width
-                  implicitHeight: Math.min(contentHeight, Style.space(170))
-                  model: root.workspaceItems
-                  spacing: Style.space(3)
-                  clip: true
-                  boundsBehavior: Flickable.StopAtBounds
-                  ScrollBar.vertical: ScrollBar {
-                    policy: itemList.contentHeight > itemList.height
-                      ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
-                  }
-                  delegate: Rectangle {
-                    required property var modelData
-                    width: ListView.view.width
-                    height: Style.space(54)
-                    radius: Style.cornerRadius
-                    color: itemMouse.containsMouse
-                      ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-                      : "transparent"
-                    Text {
-                      id: kindGlyph
-                      anchors.left: parent.left
-                      anchors.leftMargin: Style.space(9)
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: modelData.kind === "agent" ? "●"
-                        : (modelData.kind === "command" ? ">" : (modelData.kind === "launcher" ? "↗" : "○"))
-                      color: modelData.status === "blocked" ? root.urgent
-                        : (modelData.status === "working" || modelData.status === "running" ? Color.accent : root.dim)
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                    }
-                    Column {
-                      anchors.left: kindGlyph.right
-                      anchors.leftMargin: Style.space(10)
-                      anchors.right: itemMenuButton.left
-                      anchors.rightMargin: Style.space(8)
-                      anchors.verticalCenter: parent.verticalCenter
-                      spacing: Style.space(1)
-                      Text {
-                        width: parent.width
-                        text: String(modelData.name) + "  ·  " + String(modelData.kind)
-                        color: root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.body
-                        elide: Text.ElideRight
-                      }
-                      Text {
-                        width: parent.width
-                        text: "Workspace: " + String(root.workspaceDetail.name)
-                          + " · " + String(modelData.status) + (modelData.detail
-                          ? " · " + (modelData.kind === "shell"
-                            ? root.compactPath(modelData.detail) : String(modelData.detail)) : "")
-                          + (!modelData.node_local ? " · Node: " + String(modelData.node_alias) : "")
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideMiddle
-                      }
-                    }
-                    MouseArea {
-                      id: itemMouse
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      enabled: root.resourceIsActionable(modelData,
-                        modelData.kind === "launcher" ? "remote_launcher_invocation" : "remote_pty_attachment")
-                      onClicked: root.openWorkspaceItem(modelData)
-                    }
-                    Button {
-                      id: itemMenuButton
-                      z: 1
-                      anchors.right: parent.right
-                      anchors.rightMargin: Style.space(8)
-                      anchors.verticalCenter: parent.verticalCenter
-                      width: Style.space(28)
-                      height: Style.space(28)
-                      text: "⋮"
-                      tooltipText: "Item actions"
-                      bordered: true
-                      enabled: !actionProcess.running && !openProcess.running
-                      foreground: root.foreground
-                      fontSize: Style.font.body
-                      horizontalPadding: Style.space(6)
-                      verticalPadding: Style.space(2)
-                      onClicked: root.showActionMenu(modelData, itemMenuButton)
-                    }
-                  }
-                }
               }
             }
           }
@@ -4755,6 +4639,7 @@ Panel {
                   anchors.bottom: parent.bottom
                   hoverEnabled: true
                   onEntered: {
+                    root.focusSection = "lower"
                     root.selectedIndex = index
                     root.selectedNodeId = modelData.node_id
                   }
@@ -4772,8 +4657,8 @@ Panel {
                   spacing: Style.space(4)
                   Button {
                     id: nodeMenuButton
-                    width: Style.space(28)
-                    height: Style.space(30)
+                    width: Style.space(32)
+                    height: Style.space(32)
                     text: "⋮"
                     tooltipText: root.nodeCanReauthenticate(modelData)
                       ? "Action required: authenticate this Node"
@@ -4877,12 +4762,13 @@ Panel {
                   wrapMode: Text.Wrap
                 }
                 Text {
-                  visible: root.nodeVersionDirection(root.selectedNode) === "newer"
+                  visible: root.nodeNextStep(root.selectedNode) !== ""
                   width: parent.width
-                  text: "Control machine update needed"
-                  color: root.urgent
+                  text: root.nodeNextStep(root.selectedNode)
+                  color: root.nodeHealthColor(root.selectedNode)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
                 }
                 Text {
                   visible: root.selectedNode && !root.selectedNode.workspace_owner_eligible
@@ -4901,6 +4787,47 @@ Panel {
           }
         }
 
+        }
+      }
+
+      BorderSurface {
+        visible: root.actionMessage !== "" && !root.itemToRemove
+          && !root.renameTarget && !root.actionMenuTarget
+        z: 7
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: Style.space(8)
+        height: Style.space(34)
+        color: Color.background
+        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        radius: Style.cornerRadius
+
+        Text {
+          id: actionStatusText
+          anchors.left: parent.left
+          anchors.right: dismissStatusButton.left
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: Style.space(9)
+          anchors.rightMargin: Style.space(6)
+          text: root.actionMessage
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+        Button {
+          id: dismissStatusButton
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(28)
+          height: Style.space(28)
+          text: "×"
+          tooltipText: "Dismiss status"
+          bordered: false
+          foreground: root.dim
+          onClicked: root.actionMessage = ""
+        }
       }
 
       Item {
@@ -4914,6 +4841,7 @@ Panel {
         }
 
         Rectangle {
+          id: actionMenuCard
           x: root.actionMenuX
           y: root.actionMenuY
           width: Style.space(164)
@@ -4935,23 +4863,35 @@ Panel {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
               width: parent.width
               text: "Create Shell"
+              tooltipText: root.actionMenuTarget
+                ? root.workspaceCreationReason(root.actionMenuTarget.workspace) : ""
               bordered: false
+              hasCursor: root.currentActionMenuAction === "shell"
+              leftAlign: true
               foreground: root.foreground
               enabled: visible && root.workspaceCreationReason(root.actionMenuTarget.workspace) === ""
               onClicked: root.runActionMenuAction("shell")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("shell") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
                 && !root.nodeCanReauthenticate(root.actionMenuTarget.node)
               width: parent.width
               text: "Create Shell"
+              tooltipText: root.activeBoomuxWorkspaceId === ""
+                ? "Show a Boomux Workspace first" : "Create a Shell on this Node"
               bordered: false
+              hasCursor: root.currentActionMenuAction === "shell"
+              leftAlign: true
               foreground: root.foreground
               enabled: visible && root.actionMenuTarget.node.workspace_owner_eligible
                 && root.nodeIsActionable(root.actionMenuTarget.node.node_id)
                 && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
                 && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
               onClicked: root.runActionMenuAction("shell")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("shell") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
@@ -4959,11 +4899,15 @@ Panel {
               width: parent.width
               text: "Authenticate"
               bordered: false
+              hasCursor: root.currentActionMenuAction === "authenticate"
+              leftAlign: true
               foreground: root.urgent
               enabled: visible && !nodeReauthenticateProcess.running
                 && !nodeUpgradeProcess.running && !nodeShellProcess.running
                 && !actionProcess.running
               onClicked: root.runActionMenuAction("authenticate")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("authenticate") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
@@ -4971,44 +4915,60 @@ Panel {
               width: parent.width
               text: "Update"
               bordered: false
+              hasCursor: root.currentActionMenuAction === "update"
+              leftAlign: true
               foreground: root.urgent
               enabled: visible && !nodeUpgradeProcess.running && !nodeShellProcess.running
                 && !nodeReauthenticateProcess.running && !actionProcess.running
               onClicked: root.runActionMenuAction("update")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("update") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind !== "node"
               width: parent.width
               text: "Rename"
               bordered: false
+              hasCursor: root.currentActionMenuAction === "rename"
+              leftAlign: true
               foreground: root.foreground
               enabled: root.actionMenuTarget && (root.actionMenuTarget.kind === "workspace"
                 ? root.workspaceCanRename(root.actionMenuTarget.workspace)
                 : root.itemCanRename(root.actionMenuTarget))
               onClicked: root.runActionMenuAction("rename")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("rename") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind !== "node"
               width: parent.width
               text: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
                 ? "Remove Workspace" : (root.actionMenuTarget
-                  && root.actionMenuTarget.kind === "launcher" ? "Remove Launcher" : "Remove Shell")
+                  && root.actionMenuTarget.kind === "launcher" ? "Remove Launcher" : "Close Shell")
               bordered: false
+              hasCursor: root.currentActionMenuAction === "remove"
+              leftAlign: true
               foreground: root.urgent
               enabled: root.actionMenuTarget && (root.actionMenuTarget.kind === "workspace"
                 ? root.workspaceCanRemove(root.actionMenuTarget.workspace)
                 : root.itemCanRename(root.actionMenuTarget))
               onClicked: root.runActionMenuAction("remove")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("remove") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
               width: parent.width
               text: "Forget Node"
               bordered: false
+              hasCursor: root.currentActionMenuAction === "remove"
+              leftAlign: true
               foreground: root.urgent
               enabled: visible && !actionProcess.running && !nodeShellProcess.running
                 && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
               onClicked: root.runActionMenuAction("remove")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("remove") }
             }
           }
         }
@@ -5042,7 +5002,8 @@ Panel {
             Text {
               width: parent.width
               text: "Rename " + (root.renameTarget && root.renameTarget.kind === "workspace"
-                ? "Workspace" : "item")
+                ? "Workspace" : (root.renameTarget && root.renameTarget.kind === "launcher"
+                  ? "Launcher" : "Shell"))
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -5055,6 +5016,8 @@ Panel {
               onTextEdited: root.renameError = ""
               onAccepted: root.confirmRename()
               Keys.onEscapePressed: root.cancelRename()
+              KeyNavigation.tab: renameCancelButton
+              KeyNavigation.backtab: renameConfirmButton
             }
             Text {
               visible: root.renameError !== ""
@@ -5068,17 +5031,25 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
               Button {
+                id: renameCancelButton
                 width: (parent.width - parent.spacing) / 2
                 text: "Cancel"
                 bordered: true
+                focusable: true
+                KeyNavigation.tab: renameConfirmButton
+                KeyNavigation.backtab: renameField
                 foreground: root.foreground
                 Keys.onEscapePressed: root.cancelRename()
                 onClicked: root.cancelRename()
               }
               Button {
+                id: renameConfirmButton
                 width: (parent.width - parent.spacing) / 2
                 text: "Rename"
                 bordered: true
+                focusable: true
+                KeyNavigation.tab: renameField
+                KeyNavigation.backtab: renameCancelButton
                 foreground: Color.accent
                 enabled: renameField.text.trim() !== "" && !actionProcess.running
                 Keys.onEscapePressed: root.cancelRename()
@@ -5095,7 +5066,7 @@ Panel {
         opened: root.itemToRemove !== null
         z: 10
         message: root.removeItemMessage(root.itemToRemove)
-        confirmText: "Remove"
+        confirmText: root.removeConfirmText(root.itemToRemove)
         background: Color.background
         foreground: root.foreground
         scrim: Util.alpha(Color.background, 0.72)
@@ -5138,6 +5109,7 @@ Panel {
       ? !!root.completedAgents[agent.key] || root.attentionRevision(agent) > 0 : false
     readonly property bool actionable: agent && root.resourceIsActionable(agent,
       "remote_pty_attachment")
+    readonly property bool openable: actionable && root.agentShellRetained(agent)
 
     height: Style.space(54)
     radius: Style.cornerRadius
@@ -5212,8 +5184,7 @@ Panel {
     MouseArea {
       id: agentMouse
       anchors.fill: parent
-      enabled: agentRow.actionable || (agentRow.dismissible
-        && root.agentCanAcknowledge(agent))
+      enabled: agentRow.openable
       hoverEnabled: true
       onEntered: agentRow.hovered()
       onClicked: agentRow.activated()

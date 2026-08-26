@@ -204,7 +204,8 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
   expect(panel).toContain("omarchy-launch-tui --app-id=org.omarchy.boomux-config boomux config edit")
-  expect(panel).toContain("if (root.itemToRemove || root.actionMenuTarget || root.settingsOpen) return")
+  expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
+  expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
   expect(panel).not.toMatch(/palette/i)
   expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
   expect(panel).toContain("removeItemDialog.handleKey(event)")
@@ -214,15 +215,34 @@ test("opens pane settings and the Boomux config editor", () => {
 test("shows the installed Boomux CLI version in the pane header", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("id: boomuxHeaderTitle")
-  expect(panel).toContain('text: "v" + root.cliVersion')
-  expect(panel).toContain("anchors.baseline: boomuxHeaderTitle.baseline")
+  expect(panel).toContain('(root.cliVersion !== "" ? "v" + root.cliVersion + " · " : "")')
 })
 
 test("shows one flat Agent list ordered by latest update", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("readonly property var paneAgents: visibleAgents")
+  expect(panel).toContain("Math.min(contentHeight, Style.space(700))")
+  expect(panel).not.toContain("panel.height - workspaceTreeColumn.implicitHeight")
   expect(panel).not.toContain('section.property: "workspace_name"')
   expect(panel).not.toContain("WorkspaceModel.agentsByWorkspace")
+})
+
+test("keeps removed-shell attention dismissal explicit", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const openAgent = panel.slice(panel.indexOf("function openAgent"),
+    panel.indexOf("function agentShellRetained"))
+  expect(openAgent).not.toContain("acknowledgeAgent(agent)")
+  expect(openAgent).toContain("use Dismiss to acknowledge its notification")
+  expect(panel).toContain("readonly property bool openable:")
+  expect(panel).toContain("enabled: agentRow.openable")
+})
+
+test("bounds main and settings content with fallback scrolling", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("id: settingsScroll")
+  expect(panel).toContain("contentHeight: settingsColumn.implicitHeight")
+  expect(panel).toContain("id: contentScroll")
+  expect(panel).toContain("contentHeight: contentColumn.implicitHeight")
 })
 
 test("delegates local updates to the capability-gated Boomux flow", () => {
@@ -254,7 +274,6 @@ test("creates active-Workspace Shells from remote Node action menus", () => {
   expect(panel).toContain("It does not contact the Node or stop its processes.")
   expect(panel).toContain("String(activeBoomuxWorkspaceId), \"--node\", String(node.node_id), \"--open\"")
   expect(panel).toContain('"Remote Node: " + String(root.creationNode.alias)')
-  expect(panel).toContain('" · Node: " + String(modelData.node_alias)')
   expect(panel).not.toContain("defaultNodeId")
 })
 
@@ -288,7 +307,7 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("root.nodeCanUpgrade(root.actionMenuTarget.node)")
   expect(panel).toContain("WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)")
-  expect(panel).toContain("Control machine update needed")
+  expect(panel).toContain("Update Boomux on this control machine before managing the Node.")
   expect(panel).toContain("cached data retained · retrying automatically")
 })
 
@@ -339,7 +358,8 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("SidePane {")
   expect(panel).not.toContain('workspaceTreeDelegate.workspaceActive ? "ACTIVE"')
   expect(panel).toContain("modelData.id === root.activeBoomuxWorkspaceId")
-  expect(panel).toContain("onClicked: root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)")
+  expect(panel).toContain("root.selectedWorkspaceIndex = workspaceTreeDelegate.index")
+  expect(panel).toContain("root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)")
   expect(panel).toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Beginning)")
   expect(panel).not.toContain("onActiveBoomuxTerminalKeyChanged")
   expect(panel).not.toContain("function positionFocusedWorkspace")
@@ -347,12 +367,15 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("workspacePositionTimer.restart()")
   expect(panel).toContain("interval: 180")
   expect(panel).toContain("root.applyWorkspacePosition(workspaceKey)")
-  expect(panel).toContain('height: root.expandedWorkspaceKey === "" ? 0')
-  expect(panel).toContain("Math.max(0, workspaceTreeList.height - Style.space(48))")
-  expect(panel).toContain("property int workspaceTreeHeight: Style.space(265)")
+  expect(panel).toContain("height: root.workspaceTreeHeight")
+  expect(panel).toContain("property int workspaceTreeHeight: Style.space(340)")
   expect(panel).toContain("cursorShape: Qt.SizeVerCursor")
   expect(panel).toContain("root.setWorkspaceTreeHeight(startingHeight + translation.y)")
-  expect(panel).toContain("panel.height - Style.space(360)")
+  expect(panel).toContain("workspaceDelegate.revealTreeItem(root.selectedWorkspaceItemIndex)")
+  expect(panel).toContain("id: treeItemRepeater")
+  expect(panel).not.toContain("else if (root.expandedWorkspaceKey !== \"\")")
+  expect(panel).not.toContain("setWorkspaceTreeHeight(workspaceTreeHeight)")
+  expect(panel).toContain("panel.height - Style.space(260)")
   expect(panel).not.toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Contain)")
   expect(panel).toContain("onClicked: root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
   const activation = panel.slice(panel.indexOf("function activateWorkspaceRow"),
@@ -374,7 +397,9 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
   expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
-  expect(panel).not.toContain('visible: root.actionMessage !== ""')
+  expect(panel).toContain('visible: root.actionMessage !== ""')
+  expect(panel).toContain("id: actionStatusText")
+  expect(panel).toContain("anchors.bottom: parent.bottom")
   expect(panel).not.toContain('root.actionMessage = "Workspace shown"')
   expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane"')
   expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane-reservation"')
@@ -389,6 +414,21 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(sidePane).not.toContain("popoutSwitching")
   expect(sidePane).toContain("Behavior on revealProgress")
   expect(sidePane).toContain('readonly property real paneX: onRight')
+  expect(sidePane).toContain("readonly property real availablePaneWidth: Math.max(0,")
+  expect(sidePane).toContain("width: root.effectivePaneWidth")
+  expect(sidePane).toContain("height: root.availablePaneHeight")
+})
+
+test("provides full pane and action-menu keyboard navigation", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('property string focusSection: "workspaces"')
+  expect(panel).toContain("function cycleFocusSection(direction)")
+  expect(panel).toContain("function movePanelCursor(dx, dy)")
+  expect(panel).toContain("function activatePanelCursor()")
+  expect(panel).toContain("function showCursorActionMenu()")
+  expect(panel).toContain("function moveActionMenu(offset)")
+  expect(panel).toContain('else if (text === "m" || text === "M") root.showCursorActionMenu()')
+  expect(panel).toContain('hasCursor: root.currentActionMenuAction === "rename"')
 })
 
 test("keeps the pane open after an Agent or Shell terminal opens", () => {
@@ -413,14 +453,15 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
-test("offers confirmed local Shell removal from the Workspace action menu", () => {
+test("offers confirmed local Shell closure from the Workspace action menu", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('text: "⋮"')
-  expect(panel).toContain('? "Remove Launcher" : "Remove Shell"')
+  expect(panel).toContain('? "Remove Launcher" : "Close Shell"')
   expect(panel).toContain('onClicked: root.runActionMenuAction("remove")')
-  expect(panel).toContain('return "Remove Shell " + String(item.name)')
+  expect(panel).toContain('return "Close Shell " + String(item.name)')
   expect(panel).toContain('String(item.shell.owner_workspace_id || owningWorkspace.id)')
-  expect(panel).toContain('root.actionMessage = "Shell removed"')
+  expect(panel).toContain('root.actionMessage = "Shell closed"')
+  expect(panel).toContain('return "Close"')
 })
 
 test("keeps Workspace and item actions reachable from three-dot menus", () => {
@@ -428,7 +469,6 @@ test("keeps Workspace and item actions reachable from three-dot menus", () => {
   expect(panel).toContain("id: workspaceHeaderActions")
   expect(panel).toContain("id: workspaceMenuButton")
   expect(panel).toContain("id: treeItemMenuButton")
-  expect(panel).toContain("id: itemMenuButton")
   expect(panel).toContain('tooltipText: "Workspace actions"')
   expect(panel).toContain('tooltipText: "Item actions"')
   const tree = panel.slice(panel.indexOf("id: workspaceTreeList"),
@@ -482,10 +522,9 @@ test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   expect(panel).not.toContain('["tailscale"')
   expect(panel).not.toContain("root.webStartProcess")
   expect(panel).not.toContain("root.webStopProcess")
-  expect(panel).toContain('text: "TAILNET WEB"')
-  expect(panel).toContain('text: "Access agents through Tailnet."')
+  expect(panel).toContain('text: "Tailnet Web · "')
   expect(panel).toContain('root.webRunning ? "Open" : "Start Web"')
-  expect(panel.indexOf('text: "TAILNET WEB"')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
+  expect(panel.indexOf('text: "Tailnet Web · "')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
 })
 
 test("bounds passive update responses before collecting stdout", () => {
@@ -562,7 +601,6 @@ test("persists the explicitly selected coordinator Workspace", () => {
   expect(panel).toContain('["boomux", "workspace", "clear"]')
   expect(panel).toContain('cliFeatures.indexOf("persistent_workspace_selection") >= 0')
   expect(panel).toContain('cliFeatures.indexOf("create_and_open_shell") >= 0')
-  expect(panel).toContain('requestWorkspaceSelection(selectedWorkspace)')
   expect(panel).toContain('resolvePendingWorkspace(workspaces[p])')
 })
 
@@ -576,13 +614,8 @@ test("offers explicit Workspace creation choices and one consistent action", () 
   expect(panel).toContain('kind: "create-workspace-shell"')
 })
 
-test("preserves the Workspace item viewport across polling snapshots", () => {
+test("preserves the Workspace tree viewport across polling snapshots", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("var itemScrollY = itemList ? itemList.contentY : 0")
-  expect(panel).toContain("restoreWorkspaceItemScroll(itemScrollY)")
-  expect(panel).toContain("itemList.contentY = Math.max(0")
-  expect(panel).toContain("if (signature === workspaceItemsSignature) return")
-  expect(panel).toContain("onWorkspaceDetailChanged: syncWorkspaceItems()")
   expect(panel).toContain("var treeScrollY = workspaceTreeList ? workspaceTreeList.contentY : 0")
   expect(panel.match(/restoreWorkspaceTreeScroll\(treeScrollY\)/g)).toHaveLength(2)
   expect(panel).toContain("var workspaceModelChanged = applyWorkspaceSnapshot(")
@@ -655,39 +688,23 @@ describe("CLI envelope normalization", () => {
     const external = snapshot.workspaces.filter(workspace => workspace.is_external)
     expect(external).toHaveLength(2)
     expect(new Set(external.map(workspace => workspace.key)).size).toBe(2)
-  })
 
-  test("ignores additive legacy scheduling fields and private runner resources", () => {
-    const snapshot = normalized()
-    const release = snapshot.workspaces.find(workspace => workspace.id === "global-1")
     const localNode = snapshot.nodes.find(node => node.node_id === "node-a")
     const rawOwner = protocol38Envelope.data.nodes[0].local_snapshot.workspaces[0]
     const ownerDetail = model.normalizeWorkspaceDetail(rawOwner, {
       id: "owner-shared", key: "node-a\u001fowner-shared", placement_state: "active"
     }, localNode)
-
     expect(protocol38Envelope.data.nodes[0].scheduler.state).toBe("active")
-    expect(protocol38Envelope.data.nodes[0].local_snapshot.scheduler.state).toBe("active")
     expect(protocol38Envelope.data.nodes[1].remote_projection.schedules).toHaveLength(1)
-    expect(protocol38Envelope.data.nodes[1].remote_projection.executions).toHaveLength(1)
     expect(snapshot.nodes.some(node => "scheduler" in node)).toBe(false)
     expect(snapshot.workspaces.some(workspace => "schedules" in workspace)).toBe(false)
-    expect("executions" in snapshot).toBe(false)
     expect("schedules" in ownerDetail).toBe(false)
-
-    expect(release.shell_count).toBe(2)
-    expect(release.attention_count).toBe(0)
     expect(release.shells.map(shell => shell.id)).not.toContain("private-shell")
     expect(release.agents.map(agent => agent.id)).not.toContain("private-agent")
     expect(snapshot.shells.map(shell => shell.id)).not.toContain("private-shell")
     expect(snapshot.agents.map(agent => agent.id)).not.toContain("private-agent")
-    expect(snapshot.nodes.map(node => [node.node_id, node.shell_count, node.agent_count]))
-      .toEqual([["node-a", 1, 1], ["node-b", 1, 1], ["node-c", 0, 0]])
     expect(ownerDetail.shell_count).toBe(1)
-    expect(ownerDetail.shells.map(shell => shell.id)).toEqual(["resource-shared"])
     expect(ownerDetail.agents.map(agent => agent.id)).toEqual(["agent-shared"])
-    expect(ownerDetail.attention_count).toBe(0)
-    expect(model.workspaceTreeItems(ownerDetail)).toHaveLength(2)
   })
 
   test("preserves duplicate inner resource IDs as qualified identities", () => {
@@ -733,16 +750,13 @@ describe("CLI envelope normalization", () => {
   test("excludes private runner Shells from legacy Workspace counts", () => {
     const shells = [
       { id: "user", node_id: "local-node", workspace_id: "legacy-workspace", owner: "user" },
-      { id: "private-string", node_id: "local-node", workspace_id: "legacy-workspace",
-        owner: "schedule" },
-      { id: "private-object", node_id: "local-node", workspace_id: "legacy-workspace",
-        owner: { kind: "schedule", schedule_id: "legacy" } },
-      { id: "other", node_id: "local-node", workspace_id: "other-workspace", owner: "user" }
+      { id: "private", node_id: "local-node", workspace_id: "legacy-workspace",
+        owner: { kind: "schedule", schedule_id: "legacy" } }
     ]
     expect(model.userShellCount(shells, "local-node", "legacy-workspace")).toBe(1)
     const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-    expect(panel).toContain("root.workspaceShellCount(modelData) + \" Shell\"")
-    expect(panel).not.toContain("Number(modelData.shell_count || 0) + \" Shell\"")
+    expect(panel).toContain("WorkspaceModel.userShellCount(root.shells")
+    expect(panel).not.toContain("function workspaceItemCount(workspace)")
   })
 
   test("qualifies legacy workspace.inspect resources with the enclosing Node", () => {

@@ -170,6 +170,10 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
+- Keyboard navigation cycles between the Workspace tree, expanded Workspace
+  items, and the lower view. Arrow keys move within a section, Enter activates,
+  and `M` opens the focused resource's action menu. Menus must retain an enabled
+  keyboard cursor and restore the prior section when dismissed.
 - Keep **Create Node** at Nodes-section scope; do not add a Node filter.
 - Keep **Update** beside the affected remote Node's **Create Shell** action. Show
   it only for an older helper with both local and observed remote upgrade
@@ -192,8 +196,8 @@ or lifecycle observation.
 - Highlight only the Hyprland-presented special Workspace as active. Persisted
   default and expanded Workspace state must remain visually distinct.
 - The divider above the lower tabs resizes the Workspace viewport vertically.
-  Clamp it so both the tree and lower section retain usable space, and reposition
-  the expanded Workspace when dragging ends.
+  Clamp it so both the tree and lower section retain usable space, and preserve
+  the tree's current scroll position when dragging ends.
 - Mark a focused Workspace item only from the exact qualified Shell identity of
   Hyprland's active managed terminal. Never mark a launcher or match by name.
   Focus styling must remain a subtle accent and must not reorder Agent rows.
@@ -210,6 +214,8 @@ or lifecycle observation.
   arrows, and text shortcuts instead of leaking input to the panel below.
 - Bound every dynamic list with clipping and a scrollbar. The panel content
   height is capped, so unbounded repeaters can make actions inaccessible.
+- Keep a bounded outer scroll fallback for short displays and render user-action
+  progress or errors in the pane rather than relying only on transient notices.
 - Display paths under `$HOME` with `~` to reduce noise and avoid exposing a
   personal absolute path in screenshots.
 - Keep the yellow spark visible only for blocked or completed attention at

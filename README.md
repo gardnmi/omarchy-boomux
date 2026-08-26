@@ -8,7 +8,7 @@ terminals, monitoring Agents, and checking Nodes.
 > Install Boomux first and ensure `boomux` is available on `PATH`.
 
 <p align="center">
-  <img src="assets/boomux-workspace-desktop.png" width="500" alt="Boomux persistent side pane showing redacted Workspaces and Agents">
+  <img src="assets/boomux-workspace-desktop.png" width="100%" alt="Boomux persistent side pane beside an active tiled Workspace">
 </p>
 
 ## Highlights
@@ -63,13 +63,17 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Workspace row | Select and present that Workspace |
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact managed terminal |
-| Trash icon | Confirm removal of the local resource |
-| `Tab` or `1` / `2` | Switch Agents and Nodes |
+| Three-dot menu | Rename or confirm the resource-specific destructive action |
+| `Tab` / `Shift-Tab` | Move between Workspaces, expanded items, and the lower view |
+| Arrow keys or `H` / `J` / `K` / `L` | Move within the focused section; expand or collapse Workspaces |
+| `Enter` or `Space` | Activate the focused row or menu action |
+| `M` | Open actions for the focused Workspace, item, or Node |
+| `1` / `2` | Switch Agents and Nodes |
 | `A` in Nodes | Open guided Node setup |
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
 | Authenticate in Nodes | Open interactive authentication for an existing registered Node |
 | Update in Nodes | Reconnect, verify, and update an older remote Boomux helper in a native terminal |
-| Trash icon in Nodes | Confirm removal of the local Node registration without contacting the remote Node |
+| Forget Node | Confirm removal of the local Node registration without contacting the remote Node |
 | `D` in Agents | Dismiss the selected notification |
 | `N` | Create a Workspace |
 | `R` | Refresh |
@@ -138,7 +142,7 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
   unavailable. The guided Node update is the only stale-row exception because
   Boomux reconnects and verifies the exact registered Node before replacement.
 - Destructive local actions require confirmation and use exact resource IDs.
-- Removing a Shell can terminate its process and delete retained terminal state.
+- Closing a Shell can terminate its process and delete retained terminal state.
   Removing a launcher does not stop applications it already started.
 - The plugin never reads credentials, attachment environments, or remote terminal
   content.
