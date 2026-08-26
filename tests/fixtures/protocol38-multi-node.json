@@ -24,6 +24,7 @@
             "revision": 2,
             "name": "release-local",
             "default_cwd": "/home/a/release",
+            "attention_count": 1,
             "shells": [{
               "id": {"node_id": "node-a", "inner_id": "resource-shared"},
               "revision": 2,
@@ -34,6 +35,16 @@
               "owner": {"kind": "user"},
               "status": "running",
               "run": {"id": {"node_id": "node-a", "inner_id": "run-shared"}, "generation": 1, "started_at_ms": 10, "ended_at_ms": null, "exit_reason": null, "output_revision": 1, "environment_has_run_id": true}
+            }, {
+              "id": {"node_id": "node-a", "inner_id": "private-shell"},
+              "revision": 1,
+              "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
+              "name": "schedule-runner",
+              "cwd": "/home/a/release",
+              "command": ["opencode"],
+              "owner": {"kind": "schedule", "schedule_id": "legacy-schedule"},
+              "status": "running",
+              "run": {"id": {"node_id": "node-a", "inner_id": "private-run"}, "generation": 1, "started_at_ms": 11, "ended_at_ms": null}
             }],
             "launchers": [{
               "id": {"node_id": "node-a", "inner_id": "resource-shared"},
@@ -55,24 +66,24 @@
               "started_at_ms": 10,
               "ended_at_ms": null,
               "observation": {"revision": 3, "state": "working", "authority": "lifecycle_integration", "evidence": "host", "confidence": 100, "observed_at_ms": 30}
+            }, {
+              "id": {"node_id": "node-a", "inner_id": "private-agent"},
+              "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
+              "shell_id": {"node_id": "node-a", "inner_id": "private-shell"},
+              "run_id": {"node_id": "node-a", "inner_id": "private-run"},
+              "name": "scheduled-agent",
+              "integration": "opencode",
+              "started_at_ms": 11,
+              "observation": {"revision": 1, "state": "working", "observed_at_ms": 31},
+              "attention": {"reason": "blocked", "observation": {"revision": 1, "state": "blocked", "observed_at_ms": 31}}
             }],
             "schedules": [{
-              "id": {"node_id": "node-a", "inner_id": "resource-shared"},
+              "id": {"node_id": "node-a", "inner_id": "legacy-schedule"},
               "workspace_id": {"node_id": "node-a", "inner_id": "owner-shared"},
               "name": "nightly",
-              "cwd": "/home/a/release",
               "integration": "opencode",
-              "session": "fresh",
               "trigger": {"cron": "0 1 * * *", "timezone": "UTC"},
-              "state": "enabled",
-              "overlap_policy": "skip",
-              "revision": 1,
-              "prompt_revision": 1,
-              "trigger_revision": 1,
-              "created_at_ms": 1,
-              "updated_at_ms": 1,
-              "evaluation_frontier_ms": 1,
-              "next_occurrence": {"trigger_revision": 1, "scheduled_at_ms": 1000}
+              "state": "enabled"
             }]
           }],
           "focused_terminal": null,
@@ -102,8 +113,8 @@
           "shells": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "tests", "owner": {"kind": "user"}, "status": "running", "run_id": {"node_id": "node-b", "inner_id": "run-shared"}, "generation": 1, "started_at_ms": 20}],
           "launchers": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "deploy"}],
           "agents": [{"id": {"node_id": "node-b", "inner_id": "agent-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "shell_id": {"node_id": "node-b", "inner_id": "resource-shared"}, "run_id": {"node_id": "node-b", "inner_id": "run-shared"}, "name": "remote-agent", "integration": "pi", "state": "idle", "observation_revision": 4, "observed_at_ms": 40, "started_at_ms": 20}],
-          "schedules": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "nightly", "integration": "pi", "state": "enabled", "trigger": {"cron": "0 2 * * *", "timezone": "UTC"}, "revision": 1, "prompt_revision": 1, "trigger_revision": 1, "created_at_ms": 1, "updated_at_ms": 1, "next_occurrence": {"trigger_revision": 1, "scheduled_at_ms": 2000}}],
-          "executions": [{"id": {"node_id": "node-b", "inner_id": "resource-shared"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "schedule_id": {"node_id": "node-b", "inner_id": "resource-shared"}, "revision": 1, "state": "active", "dispatch_kind": "manual", "schedule_revision": 1, "prompt_revision": 1, "trigger_revision": 1, "requested_at_ms": 50, "started_at_ms": 51, "shell_id": {"node_id": "node-b", "inner_id": "resource-shared"}, "run_id": {"node_id": "node-b", "inner_id": "run-shared"}, "agent_id": {"node_id": "node-b", "inner_id": "agent-shared"}}],
+          "schedules": [{"id": {"node_id": "node-b", "inner_id": "legacy-schedule"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "name": "nightly", "integration": "pi", "state": "enabled"}],
+          "executions": [{"id": {"node_id": "node-b", "inner_id": "legacy-execution"}, "workspace_id": {"node_id": "node-b", "inner_id": "owner-shared"}, "schedule_id": {"node_id": "node-b", "inner_id": "legacy-schedule"}, "state": "active"}],
           "executions_truncated": false,
           "scheduler": {"state": "active", "max_concurrent": 2, "active_executions": 1}
         }

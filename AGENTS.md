@@ -65,21 +65,18 @@ through a shell. Do not invoke Boomux private transport commands.
 
 ## Runtime Model
 
-The sliding pane has a persistent expandable Workspace tree and three lower views:
+The sliding pane has a persistent expandable Workspace tree and two lower views:
 
 - **Workspace tree**: coordinated and external Workspaces, with the currently
   presented Hyprland special Workspace highlighted independently from the
   persisted default; a separate chevron expands Shells, commands, and launchers,
   while the row itself stores the default and opens the Workspace
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
-  durable attention, ordered by their latest authoritative update;
-  schedule-owned Agents
-  are excluded by shell ownership; capability-gated section controls can start,
+  durable attention, ordered by their latest authoritative update; private
+  runner-owned Agents are excluded by shell ownership; capability-gated controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
-- **Schedules**: a global Schedule selector with prompt-free details, bounded
-  latest-run status, scheduler health, and explicit Run/Pause/Resume actions
 - **Nodes**: a health and version table with selected-Node route, helper and
-  control versions, protocol, freshness, scheduler state, workload, eligibility,
+  control versions, protocol, freshness, workload, eligibility,
   exact identity, guided creation, guided reauthentication, guided upgrade, and
   local registration removal
 
@@ -96,7 +93,7 @@ metadata rather than a filter or Node-first path. Every stable health value (`un
 Cached stale rows are presentation only and all owner-dependent actions are
 disabled. Guided Node upgrade is the sole stale-row exception: it must use the
 exact registered Node ID and delegate live route, authentication, identity, and
-replacement validation to Boomux. Scheduler health is Node-specific.
+replacement validation to Boomux.
 
 Never merge owner Workspaces by name. Global membership comes only from explicit
 placements; unlinked owner Workspaces remain qualified external singletons.
@@ -109,9 +106,10 @@ Workspace items are projected as:
 - `command`: a shell with a stored exact command vector
 - `launcher`: a detached workspace launcher
 
-Schedule-owned shells are private runner infrastructure. Exclude them from
-ordinary workspace items and exclude their Agents from the Agents view. Keep
-Schedule, execution, shell, run, and Agent IDs distinct.
+Legacy mixed-version snapshots can include schedule-owned Shells as private
+runner infrastructure. Preserve string and object owner parsing only to exclude
+those Shells from Workspace items and their Agents from the Agents view. Do not
+otherwise expose or process scheduled work.
 
 Agent creation means creating and opening a command-backed shell with the exact
 available executable returned by `integration.status` for the selected Node.
@@ -138,8 +136,8 @@ or lifecycle observation.
   Pass the exact Node ID as one argv element; never interpolate it into a shell
   command.
 - Consume federation through `boomux node snapshot --json`. Pass exact `--node`
-  context to every supported remote open, inspect, host service, attention,
-  Schedule, execution, and mutation command. Never queue an offline action.
+  context to every supported remote open, inspect, host service, attention, and
+  mutation command. Never queue an offline action.
 - Opening an exited shell or command starts a new run. Preserve clear status in
   the item row and document this behavior.
 - Acknowledge Agent attention only after `boomux open` succeeds, the user
@@ -159,17 +157,6 @@ or lifecycle observation.
   `web.status`, and `web.stop`; use only those exact Boomux JSON commands.
   Starting Web is allowed only while the passive daemon check is currently
   online.
-- Gate Schedule polling and actions on advertised JSON commands plus daemon
-  protocol 25 or newer. Poll only after the passive daemon-status check.
-- Treat **Run Now** as explicit authorization to start Agent and tool activity.
-  Pause affects future dispatch only and must not be presented as cancellation.
-- Do not fetch Schedule prompts. Do not infer Agent lifecycle from execution
-  state or outcome, and do not use execution failures to light the Agent spark.
-- Open only through public `boomux execution open <exact-execution-id>`, which
-  revalidates exact-run attachment or exact linked-session resume. Do not open
-  Schedule runner shells directly.
-- Do not expose execution Cancel, Schedule Remove, or Schedule Edit until their
-  public exact-ID safety and confirmation flows are implemented.
 
 ## UI Conventions
 
@@ -199,8 +186,8 @@ or lifecycle observation.
   a native terminal.
 - Keep Node rows card-like and scannable: name plus one compact health/version
   line and a small action group. The selected summary shows route, runtime, and
-  combined workload; health detail, scheduler activity, control-version warnings,
-  and eligibility failures appear only when exceptional. Do not restore a dense
+  combined workload; health detail, control-version warnings, and eligibility
+  failures appear only when exceptional. Do not restore a dense
   diagnostics table or an always-visible metadata wall.
 - Highlight only the Hyprland-presented special Workspace as active. Persisted
   default and expanded Workspace state must remain visually distinct.
@@ -238,11 +225,9 @@ program logic; messages are suitable only for display.
 Polling currently checks daemon status once per second and fetches Agent, shell,
 and Workspace snapshots only while the daemon is running. With protocol 38 it
 groups one combined Node snapshot by coordinator Workspace; protocol 37 uses the
-same read with owner-local grouping. It then performs live exact execution reads
-for the selected Schedule. Older daemons retain the local list polling path.
-Schedule and latest execution snapshots are fetched only while the Schedules
-tab is open. A future event-driven implementation should retain the
-passive-daemon invariant and handle cursor expiry by reacquiring a baseline.
+same read with owner-local grouping. Older daemons retain the local list polling
+path. A future event-driven implementation should retain the passive-daemon
+invariant and handle cursor expiry by reacquiring a baseline.
 
 Workspace inspection must preserve selection by structural Node/workspace key.
 If a new selection arrives while an inspection is running, issue the latest
@@ -288,7 +273,7 @@ work here.
 - `preview.png` is the marketplace image; keep it in the repository root.
 - README image URLs should use stable files under `assets/`. Use a new filename
   if GitHub serves stale image content for an unchanged path.
-- Show Agents, Workspaces, Schedules, and Nodes views after meaningful UI changes.
+- Show Agents, Workspaces, and Nodes views after meaningful UI changes.
 - Do not expose personal absolute paths, secrets, private session titles, or
   terminal contents.
 - To demonstrate the yellow spark, temporarily force the **deployed test copy**

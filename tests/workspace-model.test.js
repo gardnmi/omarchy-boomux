@@ -53,14 +53,26 @@ test("marks only an Agent backed by the exact focused Shell", () => {
   expect(model.agentFocused({ shell_key: "node-a\u001fshell" }, "")).toBe(false)
 })
 
-test("builds compact Workspace tree items without schedule-owned Shells", () => {
+test("keeps mixed-version private runner Shells and Agents out of user views", () => {
+  const shells = [
+    { id: "private-object", node_id: "node-a", owner: { kind: "schedule" } },
+    { id: "private-string", node_id: "node-a", owner: "schedule" },
+    { id: "private-object", node_id: "node-b", owner: { kind: "user" } }
+  ]
+  expect(model.agentHasPrivateOwner(
+    { node_id: "node-a", shell_id: "private-object" }, shells)).toBe(true)
+  expect(model.agentHasPrivateOwner(
+    { node_id: "node-a", shell_id: "private-string" }, shells)).toBe(true)
+  expect(model.agentHasPrivateOwner(
+    { node_id: "node-b", shell_id: "private-object" }, shells)).toBe(false)
+
   const items = model.workspaceTreeItems({
     shells: [
       { id: "shell", key: "node\u001fshell", node_id: "node", node_alias: "local",
         name: "terminal", owner: "user", status: "running", cwd: "/tmp" },
       { id: "command", node_id: "node", node_alias: "local", name: "server",
         owner: "user", status: { exited: 2 }, command: ["bun", "run", "dev"] },
-      { id: "scheduled", node_id: "node", name: "private", owner: "schedule",
+      { id: "private", node_id: "node", name: "private", owner: { kind: "schedule" },
         status: "running" }
     ],
     launchers: [{ id: "launcher", node_id: "node", node_alias: "local", name: "browser",
@@ -196,7 +208,7 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).not.toMatch(/palette/i)
   expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
   expect(panel).toContain("removeItemDialog.handleKey(event)")
-  expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
+  expect(panel).not.toContain('root.activeTab === "schedules"')
 })
 
 test("shows the installed Boomux CLI version in the pane header", () => {
@@ -355,7 +367,11 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(activation).toContain("if (!presentationOnly) requestWorkspaceSelection(workspace)")
   expect(panel).toContain("root.startPendingWorkspaceOpen()")
   expect(panel).not.toContain("&& !actionProcess.running\n                  cursorShape")
-  expect(panel).toContain('var tabs = ["agents", "schedules", "nodes"]')
+  expect(panel).toContain('var tabs = ["agents", "nodes"]')
+  expect(panel).toContain('else if (text === "2") root.selectTab("nodes")')
+  expect(panel).not.toContain('root.selectTab("schedules")')
+  expect(panel).not.toContain('text === "3"')
+  expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
   expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
   expect(panel).not.toContain('visible: root.actionMessage !== ""')
@@ -378,23 +394,23 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
 test("keeps the pane open after an Agent or Shell terminal opens", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   const completion = panel.slice(panel.indexOf("id: openProcess"),
-    panel.indexOf("id: executionOpenProcess"))
+    panel.indexOf("id: acknowledgeProcess"))
   expect(completion).toContain('root.actionMessage = ""')
   expect(completion).not.toContain("root.close()")
 })
 
-test("keeps the pane open and shows ten scrollable Schedule runs", () => {
+test("does not expose scheduled work UI, polling, or commands", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  const completion = panel.slice(panel.indexOf("id: executionOpenProcess"),
-    panel.indexOf("id: acknowledgeProcess"))
-  expect(completion).toContain('root.actionMessage = ""')
-  expect(completion).not.toContain("root.close()")
-  expect(panel).toContain('schedule.id, "--limit", "10", "--json"')
-  expect(panel).toContain('text: "LAST 10 RUNS"')
-  expect(panel).toContain("id: executionHistoryList")
-  expect(panel).toContain("model: root.selectedExecutions")
-  expect(panel).toContain("ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }")
-  expect(panel).toContain("root.openExecution(modelData)")
+  const manifest = require("../manifest.json")
+  const snapshot = normalized()
+  expect(panel).not.toMatch(/scheduleListProcess|executionListProcess|executionOpenProcess/)
+  expect(panel).not.toMatch(/\["boomux", "schedule"|\["boomux", "execution"/)
+  expect(panel).not.toContain('text: "Schedules"')
+  expect(panel).not.toContain("LAST 10 RUNS")
+  expect("schedules" in snapshot).toBe(false)
+  expect("executions" in snapshot).toBe(false)
+  expect(manifest.version).toBe("2.0.0")
+  expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
 test("offers confirmed local Shell removal from the Workspace action menu", () => {
@@ -452,8 +468,8 @@ test("shows passive Workspace notices", () => {
 
 test("documents actual keyboard navigation and configuration mutation", () => {
   const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
-  expect(readme).toContain("Switch Agents, Schedules, and Nodes")
-  expect(readme).not.toContain("Select an Agent, workspace, Schedule, or Node")
+  expect(readme).toContain("Switch Agents and Nodes")
+  expect(readme).not.toContain("Schedules")
   expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
   expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
 })
@@ -612,7 +628,6 @@ describe("CLI envelope normalization", () => {
       observed_capabilities: ["observed_node_helper_version", "node_upgrade_coordination"],
       workspace_owner_eligible: false,
       workspace_owner_unavailable_reason: "authentication required",
-      scheduler: { state: "offline", active_executions: 0, max_concurrent: 2 },
       remote_projection: null
     }] })
     expect(snapshot.nodes[0]).toMatchObject({
@@ -630,26 +645,55 @@ describe("CLI envelope normalization", () => {
     expect(release.shells.map(shell => [shell.node_id, shell.id])).toEqual([
       ["node-a", "resource-shared"], ["node-b", "resource-shared"]
     ])
-    expect(release.schedules.map(schedule => schedule.workspace_name)).toEqual([
-      "release", "release"
-    ])
     expect(release.placements[1].default_cwd).toBe("/srv/release")
     expect(snapshot.nodes.map(node => [node.workspace_count, node.shell_count,
-      node.agent_count, node.launcher_count, node.schedule_count])).toEqual([
-      [1, 1, 1, 1, 1],
-      [1, 1, 1, 1, 1],
-      [0, 0, 0, 0, 0]
+      node.agent_count, node.launcher_count])).toEqual([
+      [1, 1, 1, 1],
+      [1, 1, 1, 1],
+      [0, 0, 0, 0]
     ])
     const external = snapshot.workspaces.filter(workspace => workspace.is_external)
     expect(external).toHaveLength(2)
     expect(new Set(external.map(workspace => workspace.key)).size).toBe(2)
   })
 
+  test("ignores additive legacy scheduling fields and private runner resources", () => {
+    const snapshot = normalized()
+    const release = snapshot.workspaces.find(workspace => workspace.id === "global-1")
+    const localNode = snapshot.nodes.find(node => node.node_id === "node-a")
+    const rawOwner = protocol38Envelope.data.nodes[0].local_snapshot.workspaces[0]
+    const ownerDetail = model.normalizeWorkspaceDetail(rawOwner, {
+      id: "owner-shared", key: "node-a\u001fowner-shared", placement_state: "active"
+    }, localNode)
+
+    expect(protocol38Envelope.data.nodes[0].scheduler.state).toBe("active")
+    expect(protocol38Envelope.data.nodes[0].local_snapshot.scheduler.state).toBe("active")
+    expect(protocol38Envelope.data.nodes[1].remote_projection.schedules).toHaveLength(1)
+    expect(protocol38Envelope.data.nodes[1].remote_projection.executions).toHaveLength(1)
+    expect(snapshot.nodes.some(node => "scheduler" in node)).toBe(false)
+    expect(snapshot.workspaces.some(workspace => "schedules" in workspace)).toBe(false)
+    expect("executions" in snapshot).toBe(false)
+    expect("schedules" in ownerDetail).toBe(false)
+
+    expect(release.shell_count).toBe(2)
+    expect(release.attention_count).toBe(0)
+    expect(release.shells.map(shell => shell.id)).not.toContain("private-shell")
+    expect(release.agents.map(agent => agent.id)).not.toContain("private-agent")
+    expect(snapshot.shells.map(shell => shell.id)).not.toContain("private-shell")
+    expect(snapshot.agents.map(agent => agent.id)).not.toContain("private-agent")
+    expect(snapshot.nodes.map(node => [node.node_id, node.shell_count, node.agent_count]))
+      .toEqual([["node-a", 1, 1], ["node-b", 1, 1], ["node-c", 0, 0]])
+    expect(ownerDetail.shell_count).toBe(1)
+    expect(ownerDetail.shells.map(shell => shell.id)).toEqual(["resource-shared"])
+    expect(ownerDetail.agents.map(agent => agent.id)).toEqual(["agent-shared"])
+    expect(ownerDetail.attention_count).toBe(0)
+    expect(model.workspaceTreeItems(ownerDetail)).toHaveLength(2)
+  })
+
   test("preserves duplicate inner resource IDs as qualified identities", () => {
     const snapshot = normalized()
     expect(new Set(snapshot.shells.map(shell => shell.key)).size).toBe(2)
     expect(new Set(snapshot.agents.map(agent => agent.key)).size).toBe(2)
-    expect(new Set(snapshot.schedules.map(schedule => schedule.key)).size).toBe(2)
     const release = snapshot.workspaces.find(workspace => workspace.is_global)
     expect(new Set(release.launchers.map(launcher => launcher.key)).size).toBe(2)
     const localShell = snapshot.shells.find(shell => shell.node_id === "node-a")
@@ -662,7 +706,6 @@ describe("CLI envelope normalization", () => {
     expect(model.agentMatchesShell(remoteAgent, localShell)).toBe(false)
     expect(model.acknowledgementIdentity(localAgent, 3).agentKey)
       .not.toBe(model.acknowledgementIdentity(remoteAgent, 3).agentKey)
-    expect(snapshot.executions[0].schedule_key).toBe("node-b\u001fresource-shared")
   })
 
   test("rejects a relationship whose qualified Node does not match its projection", () => {
@@ -687,6 +730,21 @@ describe("CLI envelope normalization", () => {
     ])
   })
 
+  test("excludes private runner Shells from legacy Workspace counts", () => {
+    const shells = [
+      { id: "user", node_id: "local-node", workspace_id: "legacy-workspace", owner: "user" },
+      { id: "private-string", node_id: "local-node", workspace_id: "legacy-workspace",
+        owner: "schedule" },
+      { id: "private-object", node_id: "local-node", workspace_id: "legacy-workspace",
+        owner: { kind: "schedule", schedule_id: "legacy" } },
+      { id: "other", node_id: "local-node", workspace_id: "other-workspace", owner: "user" }
+    ]
+    expect(model.userShellCount(shells, "local-node", "legacy-workspace")).toBe(1)
+    const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+    expect(panel).toContain("root.workspaceShellCount(modelData) + \" Shell\"")
+    expect(panel).not.toContain("Number(modelData.shell_count || 0) + \" Shell\"")
+  })
+
   test("qualifies legacy workspace.inspect resources with the enclosing Node", () => {
     const snapshot = normalized(protocol37Envelope)
     const workspace = snapshot.workspaces[0]
@@ -700,8 +758,7 @@ describe("CLI envelope normalization", () => {
         cwd: "/tmp/legacy", command: ["printf", "%s", "safe"] }],
       agents: [{ id: "agent", workspace_id: "legacy-workspace", shell_id: "shared",
         run_id: "run", name: "agent", integration: "opencode",
-        observation: { revision: 1, state: "working", observed_at_ms: 1 } }],
-      schedules: []
+        observation: { revision: 1, state: "working", observed_at_ms: 1 } }]
     }, workspace, node)
     expect(detail.shells[0].key).toBe("local-node\u001fshared")
     expect(detail.launchers[0].key).toBe("local-node\u001fshared")
@@ -790,24 +847,6 @@ describe("qualified commands and action gates", () => {
 })
 
 describe("request identity", () => {
-  test("retains the selected exact run until its focused refresh replaces it", () => {
-    const current = [
-      { id: "exact-local", schedule_key: "node-a\u001fschedule" },
-      { id: "old-remote", schedule_key: "node-b\u001fother" }
-    ]
-    const snapshot = [
-      { id: "stale-selected", schedule_key: "node-a\u001fschedule" },
-      { id: "fresh-remote", schedule_key: "node-b\u001fother" }
-    ]
-
-    expect(model.mergeSnapshotExecutions(current, snapshot,
-      "node-a\u001fschedule")).toEqual([
-      { id: "fresh-remote", schedule_key: "node-b\u001fother" },
-      { id: "exact-local", schedule_key: "node-a\u001fschedule" }
-    ])
-    expect(model.mergeSnapshotExecutions(current, snapshot, "")).toBe(snapshot)
-  })
-
   test("queues project discovery for the latest rapidly selected Node", () => {
     const requested = model.projectDiscoveryIdentity("node-b")
     const active = model.projectDiscoveryIdentity("node-a")

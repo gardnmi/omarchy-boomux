@@ -1,20 +1,19 @@
 # Boomux for Omarchy
 
 A persistent Omarchy side pane for navigating Boomux Workspaces, opening managed
-terminals, monitoring Agents, and checking Schedules and Nodes.
+terminals, monitoring Agents, and checking Nodes.
 
 > [!IMPORTANT]
 > This plugin does not work without [Boomux](https://github.com/gardnmi/boomux).
 > Install Boomux first and ensure `boomux` is available on `PATH`.
 
 <p align="center">
-  <img src="assets/boomux-workspace-desktop.png" width="100%" alt="Boomux persistent side pane beside an active tiled Workspace">
+  <img src="assets/boomux-workspace-desktop.png" width="500" alt="Boomux persistent side pane showing redacted Workspaces and Agents">
 </p>
 
 ## Highlights
 
-- Keeps an expandable multi-Workspace tree visible above Agent, Schedule, and
-  Node views.
+- Keeps an expandable multi-Workspace tree visible above Agent and Node views.
 - Shows the installed Boomux CLI version in the pane header.
 - Lists active Agents in one flat, most-recently-updated-first view.
 - Delegates available Boomux upgrades to the CLI's verified guided updater.
@@ -24,11 +23,9 @@ terminals, monitoring Agents, and checking Schedules and Nodes.
   the pane instead of covering them.
 - Presents coordinated Workspaces immediately through Boomux's Hyprland desktop
   integration.
-- Shows the active Workspace, focused managed terminal, Agent attention, Node
-  health, and scheduler state.
+- Shows the active Workspace, focused managed terminal, Agent attention, and
+  Node health.
 - Opens exact Shells and Agents while keeping the pane visible.
-- Keeps the pane visible when opening Schedule runs and shows the latest ten in
-  a bounded scrollable history.
 - Uses compact, confirmed removal actions for local Workspaces, Shells, and
   launchers.
 
@@ -67,7 +64,7 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact managed terminal |
 | Trash icon | Confirm removal of the local resource |
-| `Tab` or `1` / `2` / `3` | Switch Agents, Schedules, and Nodes |
+| `Tab` or `1` / `2` | Switch Agents and Nodes |
 | `A` in Nodes | Open guided Node setup |
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
 | Authenticate in Nodes | Open interactive authentication for an existing registered Node |
@@ -102,8 +99,8 @@ Use the gear button to:
 - Open `boomux config edit` in a native terminal.
 
 The Nodes view lists registered remote Nodes with route, helper and control
-versions, protocol, freshness, scheduler state, resource counts, and Workspace
-eligibility. Its **Create Shell** action uses the exact selected remote Node and
+versions, protocol, freshness, resource counts, and Workspace eligibility. Its
+**Create Shell** action uses the exact selected remote Node and
 the currently active Boomux Workspace; paths and commands are resolved on that
 Node.
 
@@ -143,8 +140,8 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 - Destructive local actions require confirmation and use exact resource IDs.
 - Removing a Shell can terminate its process and delete retained terminal state.
   Removing a launcher does not stop applications it already started.
-- The plugin never reads Schedule prompts, credentials, attachment environments,
-  or remote terminal content.
+- The plugin never reads credentials, attachment environments, or remote terminal
+  content.
 - The plugin never invokes SSH itself. Guided Node setup and updates run through
   Boomux in a native terminal so authentication and confirmation stay interactive.
 - New Boomux versions own release discovery through `boomux update status`; the
