@@ -187,7 +187,8 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
   content.
 - The plugin never invokes SSH itself. Guided Node setup, updates, and uninstall
   run through Boomux in a native terminal so authentication and confirmation
-  stay interactive.
+  stay interactive. Omarchy presents these plugin-owned terminal dialogs as
+  centered floating windows.
 - New Boomux versions own release discovery through `boomux update status`; the
   plugin opens `boomux update` in a native terminal and passively checks update
   status afterward so completion or failure remains visible in the pane. It never

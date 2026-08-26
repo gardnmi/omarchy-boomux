@@ -203,7 +203,7 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.persistPaneSettings({ side: "right" })')
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
-  expect(panel).toContain("omarchy-launch-tui --app-id=org.omarchy.boomux-config boomux config edit")
+  expect(panel).toContain("omarchy-launch-tui --app-id=TUI.float boomux config edit")
   expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
   expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
   expect(panel).not.toMatch(/palette/i)
@@ -297,7 +297,7 @@ test("delegates local updates to the capability-gated Boomux flow", () => {
   expect(panel).not.toContain('root.actionMessage = "Boomux update finished"')
   expect(panel).not.toContain('localUpdateProcess.command = ["curl"')
   expect(model.guidedLocalUpdateCommand()).toEqual([
-    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-update", "boomux", "update"
+    "omarchy-launch-tui", "--app-id=TUI.float", "boomux", "update"
   ])
 })
 
@@ -332,7 +332,7 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
     { stale: true, current: false, health: "authentication_required" }),
     "0.30.1", features)).toBe(true)
   expect(model.guidedNodeUpgradeCommand(remote.node_id)).toEqual([
-    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-upgrade",
+    "omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "__guided-node-upgrade", "node;$(false)"
   ])
   expect(model.nodeCanUpgrade(Object.assign({}, remote,
@@ -346,6 +346,9 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain("root.nodeCanUpgrade(root.actionMenuTarget.node)")
   expect(panel).toContain("WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)")
+  const updateNode = panel.match(/function updateNode\(node\) \{[\s\S]*?\n  \}/)?.[0]
+  expect(updateNode).toBeDefined()
+  expect(updateNode).not.toContain("close()")
   expect(panel).toContain("Update Boomux on this control machine before managing the Node.")
   expect(panel).toContain("cached data retained · retrying automatically")
 })
@@ -363,13 +366,13 @@ test("clearly separates guided Node uninstall from local registration forget", (
   expect(model.nodeCanUninstall(remote, [], 48)).toBe(false)
   expect(model.nodeCanUninstall(remote, features, 47)).toBe(false)
   expect(model.guidedNodeUninstallCommand(remote.node_id)).toEqual([
-    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-uninstall",
+    "omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "node", "uninstall", "node;$(false)"
   ])
 
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('text: "Uninstall Boomux"')
-  expect(panel).toContain('return "Uninstall and Forget"')
+  expect(panel).toContain('return "Uninstall"')
   expect(panel).toContain('return "Just Forget"')
   expect(panel).toContain("preserves durable state and configuration")
   expect(panel).toContain("It does not contact the Node or stop its processes.")
@@ -390,7 +393,7 @@ test("offers exact guided reauthentication only for authentication-required Node
   expect(model.nodeCanReauthenticate(remote, [], 38)).toBe(false)
   expect(model.nodeCanReauthenticate(remote, features, 37)).toBe(false)
   expect(model.guidedNodeReauthenticateCommand(remote.node_id)).toEqual([
-    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-reauthenticate",
+    "omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "__guided-node-reauthenticate", "node;$(false)"
   ])
 
@@ -516,7 +519,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.2.0")
+  expect(manifest.version).toBe("2.2.1")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -699,7 +702,7 @@ test("preserves the Workspace tree viewport across polling snapshots", () => {
 test("keeps guided Node setup feedback visible", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain(
-    "omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add"
+    "omarchy-launch-tui --app-id=TUI.float boomux __guided-node-add"
   )
   const createNode = panel.match(/function createNode\(\) \{[\s\S]*?\n  \}/)?.[0]
   expect(createNode).toBeDefined()
