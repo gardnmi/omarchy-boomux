@@ -220,7 +220,6 @@ Panel {
   readonly property var selectedExecutions: executions.filter(function(execution) {
     return execution.schedule_key === selectedScheduleKey
   })
-  readonly property var latestExecution: selectedExecutions.length > 0 ? selectedExecutions[0] : null
   readonly property var visibleProjects: filterProjects()
   readonly property var selectedProject: selectedProjectIndex >= 0
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
@@ -1015,7 +1014,7 @@ Panel {
       executionError = ""
     } catch (exception) {
       executions = []
-      executionError = "Could not read the last Schedule run"
+      executionError = "Could not read Schedule runs"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
   }
@@ -2476,7 +2475,7 @@ Panel {
     executionRequestedScheduleKey = schedule.key
     executionActiveScheduleKey = schedule.key
     executionListProcess.command = ["boomux", "execution", "list", "--schedule",
-      schedule.id, "--limit", "1", "--json"]
+      schedule.id, "--limit", "10", "--json"]
     var args = nodeArgs(schedule.node_id, "remote_scheduled_execution_observation")
     if (args === null) return
     executionListProcess.command = executionListProcess.command.concat(args)
@@ -3084,7 +3083,6 @@ Panel {
         return
       }
       root.actionMessage = ""
-      root.close()
     }
   }
 
@@ -5146,7 +5144,7 @@ Panel {
 
                 PanelSectionHeader {
                   width: parent.width
-                  text: "LAST RUN"
+                  text: "LAST 10 RUNS"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                 }
@@ -5161,7 +5159,7 @@ Panel {
                   wrapMode: Text.Wrap
                 }
                 Text {
-                  visible: root.latestExecution === null && root.executionError === ""
+                  visible: root.selectedExecutions.length === 0 && root.executionError === ""
                   width: parent.width
                   text: "No runs yet"
                   color: root.dim
@@ -5171,67 +5169,71 @@ Panel {
                   topPadding: Style.space(8)
                   bottomPadding: Style.space(8)
                 }
-                Rectangle {
-                  visible: root.latestExecution !== null
+                ListView {
+                  id: executionHistoryList
+                  visible: root.selectedExecutions.length > 0
                   width: parent.width
-                  height: Style.space(54)
-                  radius: Style.cornerRadius
-                  color: lastRunMouse.containsMouse && root.executionCanOpen(root.latestExecution)
-                    ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-                    : "transparent"
-                  Text {
-                    id: executionGlyph
-                    anchors.left: parent.left
-                    anchors.leftMargin: Style.space(7)
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: root.latestExecution
-                      && (root.latestExecution.state === "active" || root.latestExecution.state === "starting") ? "●" : "○"
-                    color: root.latestExecution
-                      && (root.latestExecution.state === "dispatch_failed" || root.latestExecution.state === "interrupted")
-                      ? root.urgent
-                      : (root.latestExecution
-                        && (root.latestExecution.state === "active" || root.latestExecution.state === "starting")
-                        ? Color.accent : root.dim)
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-                  Column {
-                    anchors.left: executionGlyph.right
-                    anchors.leftMargin: Style.space(9)
-                    anchors.right: parent.right
-                    anchors.rightMargin: Style.space(7)
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(1)
+                  height: Math.min(contentHeight, Style.space(180))
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  model: root.selectedExecutions
+                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                  delegate: Rectangle {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: Style.space(54)
+                    radius: Style.cornerRadius
+                    color: executionMouse.containsMouse && root.executionCanOpen(modelData)
+                      ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                      : "transparent"
                     Text {
-                      width: parent.width
-                      text: root.latestExecution ? String(root.latestExecution.state) + " · "
-                        + root.formatTimestamp(root.latestExecution.started_at_ms || root.latestExecution.requested_at_ms) : ""
-                      color: root.latestExecution
-                        && (root.latestExecution.state === "dispatch_failed" || root.latestExecution.state === "interrupted")
-                        ? root.urgent : root.foreground
+                      id: executionGlyph
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.space(7)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: modelData.state === "active" || modelData.state === "starting" ? "●" : "○"
+                      color: modelData.state === "dispatch_failed" || modelData.state === "interrupted"
+                        ? root.urgent
+                        : (modelData.state === "active" || modelData.state === "starting"
+                          ? Color.accent : root.dim)
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
                     }
-                    Text {
-                      width: parent.width
-                      text: root.latestExecution
-                        ? root.executionDetail(root.latestExecution)
-                          + (root.executionCanOpen(root.latestExecution) ? " · click to open" : " · unavailable")
-                        : ""
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
+                    Column {
+                      anchors.left: executionGlyph.right
+                      anchors.leftMargin: Style.space(9)
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(12)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(1)
+                      Text {
+                        width: parent.width
+                        text: String(modelData.state) + " · "
+                          + root.formatTimestamp(modelData.started_at_ms || modelData.requested_at_ms)
+                        color: modelData.state === "dispatch_failed" || modelData.state === "interrupted"
+                          ? root.urgent : root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        width: parent.width
+                        text: root.executionDetail(modelData)
+                          + (root.executionCanOpen(modelData) ? " · click to open" : " · unavailable")
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
                     }
-                  }
-                  MouseArea {
-                    id: lastRunMouse
-                    anchors.fill: parent
-                    enabled: root.executionCanOpen(root.latestExecution)
-                      && !executionOpenProcess.running && !actionProcess.running
-                    hoverEnabled: true
-                    onClicked: root.openExecution(root.latestExecution)
+                    MouseArea {
+                      id: executionMouse
+                      anchors.fill: parent
+                      enabled: root.executionCanOpen(modelData)
+                        && !executionOpenProcess.running && !actionProcess.running
+                      hoverEnabled: true
+                      onClicked: root.openExecution(modelData)
+                    }
                   }
                 }
               }

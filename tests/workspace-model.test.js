@@ -383,6 +383,20 @@ test("keeps the pane open after an Agent or Shell terminal opens", () => {
   expect(completion).not.toContain("root.close()")
 })
 
+test("keeps the pane open and shows ten scrollable Schedule runs", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const completion = panel.slice(panel.indexOf("id: executionOpenProcess"),
+    panel.indexOf("id: acknowledgeProcess"))
+  expect(completion).toContain('root.actionMessage = ""')
+  expect(completion).not.toContain("root.close()")
+  expect(panel).toContain('schedule.id, "--limit", "10", "--json"')
+  expect(panel).toContain('text: "LAST 10 RUNS"')
+  expect(panel).toContain("id: executionHistoryList")
+  expect(panel).toContain("model: root.selectedExecutions")
+  expect(panel).toContain("ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }")
+  expect(panel).toContain("root.openExecution(modelData)")
+})
+
 test("offers confirmed local Shell removal from the Workspace action menu", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('text: "⋮"')
