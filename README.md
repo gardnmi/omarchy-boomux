@@ -178,10 +178,11 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 - The plugin never invokes SSH itself. Guided Node setup and updates run through
   Boomux in a native terminal so authentication and confirmation stay interactive.
 - New Boomux versions own release discovery through `boomux update status`; the
-  plugin opens `boomux update` in a native terminal and never downloads,
-  authorizes, or replaces Boomux itself. Older compatible Boomux versions retain
-  a bounded release-page check. Plugin update discovery uses the fixed published
-  manifest URL.
+  plugin opens `boomux update` in a native terminal and passively checks update
+  status afterward so completion or failure remains visible in the pane. It never
+  downloads, authorizes, or replaces Boomux itself. Older compatible Boomux
+  versions retain a bounded release-page check. Plugin update discovery uses the
+  fixed published manifest URL.
 
 ## Maintenance
 

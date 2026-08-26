@@ -130,7 +130,9 @@ or lifecycle observation.
   published manifest URL. Cap each direct response before collecting stdout and
   do not follow redirects; failures remain silent. **Create Node** and **Update**
   may only launch Boomux's guided setup or upgrade wrapper in a local native
-  terminal. **Authenticate** may likewise launch only Boomux's guided
+  terminal. After launching a local Boomux update, poll only `update status` and
+  report whether the expected installed version appeared; never treat terminal
+  launch as update success. **Authenticate** may likewise launch only Boomux's guided
   reauthentication wrapper for an `authentication_required` Node when the local
   CLI advertises `node_reauthentication` and daemon protocol 38 is available.
   Pass the exact Node ID as one argv element; never interpolate it into a shell
