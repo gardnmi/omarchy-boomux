@@ -55,6 +55,9 @@ Panel {
   property string latestBoomuxVersion: ""
   property string latestBoomuxUrl: ""
   property string boomuxUpdateAction: ""
+  property bool localUpdateVerificationPending: false
+  property int localUpdateVerificationAttempts: 0
+  property string localUpdateExpectedVersion: ""
   property string pluginVersion: ""
   property string latestPluginVersion: ""
   readonly property bool boomuxUpdateAvailable:
@@ -2287,10 +2290,40 @@ Panel {
       latestBoomuxVersion = String(data.latest || "")
       latestBoomuxUrl = String(data.release_url || boomuxRepositoryUrl + "/releases")
       boomuxUpdateAction = String(data.recommended_action || "")
+      if (localUpdateVerificationPending) {
+        var current = String(data.current || "")
+        if (localUpdateExpectedVersion !== ""
+            && !WorkspaceModel.versionIsNewer(localUpdateExpectedVersion, current)) {
+          localUpdateVerificationPending = false
+          localUpdateVerificationTimer.stop()
+          actionMessage = "Boomux updated to " + current
+          showNotice("Boomux update complete", actionMessage,
+            currentNoticeScreen(), false)
+          refreshInstalledState()
+        } else {
+          continueLocalUpdateVerification()
+        }
+      }
     } catch (exception) {
+      if (localUpdateVerificationPending) {
+        continueLocalUpdateVerification()
+        return
+      }
       latestBoomuxVersion = ""
       latestBoomuxUrl = ""
       boomuxUpdateAction = ""
+    }
+  }
+
+  function continueLocalUpdateVerification() {
+    localUpdateVerificationAttempts++
+    if (localUpdateVerificationAttempts >= 60) {
+      localUpdateVerificationPending = false
+      actionMessage = "Boomux update did not complete · run boomux update in a terminal to review the error"
+      showNotice("Boomux update did not complete", actionMessage,
+        currentNoticeScreen(), true)
+    } else {
+      localUpdateVerificationTimer.restart()
     }
   }
 
@@ -2300,6 +2333,7 @@ Panel {
       Qt.openUrlExternally(latestBoomuxUrl || boomuxRepositoryUrl + "/releases")
       return
     }
+    actionMessage = "Opening guided Boomux update..."
     localUpdateProcess.command = WorkspaceModel.guidedLocalUpdateCommand()
     localUpdateProcess.running = true
   }
@@ -2447,7 +2481,19 @@ Panel {
     stdout: StdioCollector { id: localUpdateStatusStdout; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode === 0) root.parseLocalUpdateStatus(localUpdateStatusStdout.text)
+      else if (root.localUpdateVerificationPending) root.continueLocalUpdateVerification()
       else boomuxUpdateProcess.running = true
+    }
+  }
+
+  Timer {
+    id: localUpdateVerificationTimer
+    interval: 2000
+    repeat: false
+    onTriggered: {
+      if (!root.localUpdateVerificationPending) return
+      if (localUpdateStatusProcess.running) restart()
+      else localUpdateStatusProcess.running = true
     }
   }
 
@@ -2753,10 +2799,16 @@ Panel {
     id: localUpdateProcess
     onExited: function(exitCode) {
       if (exitCode === 0) {
+        root.actionMessage = "Boomux update running in terminal..."
+        root.localUpdateExpectedVersion = root.latestBoomuxVersion
+        root.localUpdateVerificationAttempts = 0
+        root.localUpdateVerificationPending = true
+        localUpdateVerificationTimer.restart()
         root.showNotice("Guided Boomux update opened",
-          "Complete the update in the terminal, then press R to refresh the pane.",
+          "Waiting for the installed version to change.",
           root.currentNoticeScreen(), false)
       } else {
+        root.actionMessage = "Could not open the Boomux update terminal"
         root.showNotice("Boomux update failed",
           "The guided update terminal could not be opened", root.currentNoticeScreen(), true)
       }
