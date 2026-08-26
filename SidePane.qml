@@ -33,9 +33,15 @@ PanelWindow {
   readonly property real bottomInset: barPos === "bottom" ? barH + margin : margin
   readonly property real sideInset: ((barPos === "left" && !onRight)
     || (barPos === "right" && onRight)) ? barW + margin : margin
+  readonly property real availablePaneWidth: Math.max(0,
+    screenW - sideInset - margin)
+  readonly property real availablePaneHeight: Math.max(0,
+    screenH - topInset - bottomInset)
+  readonly property real effectivePaneWidth: Math.min(paneWidth, availablePaneWidth)
   readonly property real paneX: onRight
-    ? screenW - paneWidth - sideInset : sideInset
-  readonly property real closedX: onRight ? screenW + Style.space(8) : -paneWidth - Style.space(8)
+    ? screenW - effectivePaneWidth - sideInset : sideInset
+  readonly property real closedX: onRight ? screenW + Style.space(8)
+    : -effectivePaneWidth - Style.space(8)
   property real revealProgress: open ? 1 : 0
 
   function close() {
@@ -89,8 +95,7 @@ PanelWindow {
     screen: root.screen
     visible: root.open && root.screen !== null
     color: "transparent"
-    implicitWidth: Math.ceil(root.sideInset + Math.min(root.paneWidth,
-      Math.max(Style.space(240), root.screenW - root.sideInset - root.margin)))
+    implicitWidth: Math.ceil(root.sideInset + root.effectivePaneWidth)
     exclusionMode: ExclusionMode.Normal
     exclusiveZone: implicitWidth
     anchors {
@@ -109,8 +114,8 @@ PanelWindow {
     id: card
     x: root.closedX + (root.paneX - root.closedX) * root.revealProgress
     y: root.topInset
-    width: Math.min(root.paneWidth, Math.max(Style.space(240), root.screenW - root.sideInset - root.margin))
-    height: Math.max(Style.space(240), root.screenH - root.topInset - root.bottomInset)
+    width: root.effectivePaneWidth
+    height: root.availablePaneHeight
     color: Color.popups.background
     borderSpec: root.borderSpec
     padding: root.padding

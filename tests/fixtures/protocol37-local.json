@@ -16,7 +16,6 @@
       "observed_capabilities": ["combined_node_snapshot", "node_qualified_dashboard"],
       "workspace_owner_eligible": false,
       "workspace_owner_unavailable_reason": null,
-      "scheduler": {"state": "active", "max_concurrent": 4, "active_executions": 0},
       "local_snapshot": {
         "workspaces": [{
           "id": {"node_id": "local-node", "inner_id": "legacy-workspace"},
@@ -25,11 +24,9 @@
           "default_cwd": "/tmp/legacy",
           "shells": [],
           "launchers": [],
-          "agents": [],
-          "schedules": []
+          "agents": []
         }],
-        "focused_terminal": null,
-        "scheduler": {"state": "active", "max_concurrent": 4, "active_executions": 0}
+        "focused_terminal": null
       },
       "remote_projection": null
     }],

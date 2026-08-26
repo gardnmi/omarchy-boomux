@@ -182,6 +182,16 @@ function shellOwner(owner) {
   return owner && owner.kind === "schedule" ? "schedule" : "user"
 }
 
+function agentHasPrivateOwner(agent, shells) {
+  if (!agent || !agent.shell_id) return false
+  for (var i = 0; i < shells.length; i++) {
+    var shell = shells[i]
+    if (shell && shell.node_id === agent.node_id && shell.id === agent.shell_id)
+      return shellOwner(shell.owner) === "schedule"
+  }
+  return false
+}
+
 function shellStatus(status) {
   if (typeof status === "string") return status
   return status && status.exited !== undefined ? "exited" : "unknown"
@@ -249,43 +259,6 @@ function normalizeLauncher(source, node, workspaceId, workspaceName, workspaceKe
   })
 }
 
-function normalizeSchedule(source, node, workspaceName) {
-  var id = qualifiedId(source.id, node.node_id, "Schedule ID")
-  var workspaceId = qualifiedId(source.workspace_id, node.node_id, "Schedule Workspace ID")
-  var trigger = source.trigger || {}
-  return Object.assign({}, source, {
-    id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
-    node_alias: node.alias, node_local: node.local, node_current: node.current,
-    node_stale: node.stale, workspace_id: workspaceId,
-    workspace_key: resourceKey(node.node_id, workspaceId),
-    workspace_name: String(source.workspace_name || workspaceName || "unknown"),
-    cron: String(source.cron || trigger.cron || ""),
-    timezone: String(source.timezone || trigger.timezone || ""),
-    session_mode: source.session_mode
-      || (source.session && source.session.continue ? "continue" : "fresh"),
-    cwd: source.cwd || (node.local ? "" : "remote path available on owner")
-  })
-}
-
-function optionalQualifiedId(value, nodeId, field) {
-  return value === null || value === undefined ? "" : qualifiedId(value, nodeId, field)
-}
-
-function normalizeExecution(source, node) {
-  var id = qualifiedId(source.id, node.node_id, "execution ID")
-  var scheduleId = qualifiedId(source.schedule_id, node.node_id, "execution Schedule ID")
-  return Object.assign({}, source, {
-    id: id, key: resourceKey(node.node_id, id), node_id: node.node_id,
-    node_alias: node.alias, node_local: node.local, node_current: node.current,
-    node_stale: node.stale, schedule_id: scheduleId,
-    schedule_key: resourceKey(node.node_id, scheduleId),
-    workspace_id: qualifiedId(source.workspace_id, node.node_id, "execution Workspace ID"),
-    shell_id: optionalQualifiedId(source.shell_id, node.node_id, "execution Shell ID"),
-    run_id: optionalQualifiedId(source.run_id, node.node_id, "execution run ID"),
-    agent_id: optionalQualifiedId(source.agent_id, node.node_id, "execution Agent ID")
-  })
-}
-
 function ownerKey(nodeId, workspaceId) {
   return "owner\u001f" + String(nodeId || "") + "\u001f" + resourceId(workspaceId)
 }
@@ -314,13 +287,12 @@ function unavailableNode(nodeId) {
     stale: true,
     observed_capabilities: [],
     workspace_owner_eligible: false,
-    workspace_owner_unavailable_reason: "Node is not registered",
-    scheduler: { state: "offline", active_executions: 0, max_concurrent: 0 }
+    workspace_owner_unavailable_reason: "Node is not registered"
   }
 }
 
 function workspaceResources(owner, globalId, globalName, workspaceKey, placementState) {
-  var fields = ["shells", "launchers", "agents", "schedules"]
+  var fields = ["shells", "launchers", "agents"]
   var result = {}
   for (var f = 0; f < fields.length; f++) {
     var field = fields[f]
@@ -340,7 +312,7 @@ function workspaceResources(owner, globalId, globalName, workspaceKey, placement
 function groupedWorkspace(global, ownerWorkspaces, nodes, claimed) {
   var key = globalKey(global.id)
   var placements = []
-  var shells = [], launchers = [], agents = [], schedules = []
+  var shells = [], launchers = [], agents = []
   var attentionCount = 0
   for (var p = 0; p < (global.placements || []).length; p++) {
     var source = global.placements[p]
@@ -359,7 +331,6 @@ function groupedWorkspace(global, ownerWorkspaces, nodes, claimed) {
     shells = shells.concat(resources.shells)
     launchers = launchers.concat(resources.launchers)
     agents = agents.concat(resources.agents)
-    schedules = schedules.concat(resources.schedules)
     attentionCount += owner ? Number(owner.attention_count || 0) : 0
     placements.push(Object.assign({}, source, {
       workspace_id: resourceId(source.workspace_id),
@@ -380,10 +351,8 @@ function groupedWorkspace(global, ownerWorkspaces, nodes, claimed) {
     shells: shells,
     launchers: launchers,
     agents: agents,
-    schedules: schedules,
     shell_count: shells.length,
     launcher_count: launchers.length,
-    schedule_count: schedules.length,
     attention_count: attentionCount
   })
 }
@@ -417,8 +386,7 @@ function externalWorkspace(external, ownerWorkspaces, nodes, claimed) {
     node_stale: node.stale,
     available: !!external.available && node.current && !node.stale,
     shell_count: resources.shells.length,
-    launcher_count: resources.launchers.length,
-    schedule_count: resources.schedules.length
+    launcher_count: resources.launchers.length
   })
 }
 
@@ -463,7 +431,7 @@ function groupSnapshot(data, ownerWorkspaces, nodes) {
 
 function normalizeNodeSnapshot(data) {
   if (!data || !Array.isArray(data.nodes)) throw new Error("missing Nodes")
-  var nodes = [], ownerWorkspaces = [], executions = []
+  var nodes = [], ownerWorkspaces = []
   for (var n = 0; n < data.nodes.length; n++) {
     var rawNode = data.nodes[n]
     if (!rawNode || typeof rawNode.node_id !== "string" || typeof rawNode.alias !== "string")
@@ -488,10 +456,7 @@ function normalizeNodeSnapshot(data) {
       workspace_count: 0,
       shell_count: 0,
       agent_count: 0,
-      launcher_count: 0,
-      schedule_count: 0,
-      scheduler: rawNode.scheduler
-        || { state: "offline", active_executions: 0, max_concurrent: 0 }
+      launcher_count: 0
     }
     nodes.push(node)
     var projection = node.local ? rawNode.local_snapshot : rawNode.remote_projection
@@ -500,7 +465,6 @@ function normalizeNodeSnapshot(data) {
     var projectedShells = node.local ? [] : (projection.shells || [])
     var projectedLaunchers = node.local ? [] : (projection.launchers || [])
     var projectedAgents = node.local ? [] : (projection.agents || [])
-    var projectedSchedules = node.local ? [] : (projection.schedules || [])
     for (var w = 0; w < projectedWorkspaces.length; w++) {
       var rawWorkspace = projectedWorkspaces[w]
       var workspaceId = qualifiedId(rawWorkspace.id, node.node_id, "Workspace ID")
@@ -509,7 +473,7 @@ function normalizeNodeSnapshot(data) {
         id: workspaceId, key: workspaceKey, node_id: node.node_id,
         node_alias: node.alias, node_local: node.local, node_current: node.current,
         node_stale: node.stale, node_health: node.health,
-        shells: [], launchers: [], agents: [], schedules: []
+        shells: [], launchers: [], agents: []
       })
       if (node.local) {
         workspace.shells = (rawWorkspace.shells || []).map(function(item) {
@@ -520,9 +484,6 @@ function normalizeNodeSnapshot(data) {
         })
         workspace.agents = (rawWorkspace.agents || []).map(function(item) {
           return normalizeAgent(item, node, rawWorkspace.name)
-        })
-        workspace.schedules = (rawWorkspace.schedules || []).map(function(item) {
-          return normalizeSchedule(item, node, rawWorkspace.name)
         })
       } else {
         workspace.shells = projectedShells.filter(function(item) {
@@ -540,42 +501,31 @@ function normalizeNodeSnapshot(data) {
         }).map(function(item) {
           return normalizeAgent(item, node, rawWorkspace.name)
         })
-        workspace.schedules = projectedSchedules.filter(function(item) {
-          return qualifiedMatches(item.workspace_id, node.node_id, workspaceId)
-        }).map(function(item) {
-          return normalizeSchedule(item, node, rawWorkspace.name)
-        })
       }
       workspace.shell_count = workspace.shells.length
       workspace.launcher_count = workspace.launchers.length
-      workspace.schedule_count = workspace.schedules.length
       node.workspace_count++
       node.shell_count += workspace.shells.filter(function(shell) {
-        return shell.owner !== "schedule"
+        return shellOwner(shell.owner) !== "schedule"
       }).length
-      node.agent_count += workspace.agents.length
+      node.agent_count += workspace.agents.filter(function(agent) {
+        return !agentHasPrivateOwner(agent, workspace.shells)
+      }).length
       node.launcher_count += workspace.launchers.length
-      node.schedule_count += workspace.schedules.length
       ownerWorkspaces.push(workspace)
     }
-    var projectedExecutions = node.local ? [] : (projection.executions || [])
-    for (var e = 0; e < projectedExecutions.length; e++)
-      executions.push(normalizeExecution(projectedExecutions[e], node))
   }
   var workspaces = groupSnapshot(data, ownerWorkspaces, nodes)
-  var shells = [], agents = [], schedules = []
+  var shells = [], agents = []
   for (var g = 0; g < workspaces.length; g++) {
     shells = shells.concat(workspaces[g].shells || [])
     agents = agents.concat(workspaces[g].agents || [])
-    schedules = schedules.concat(workspaces[g].schedules || [])
   }
   return {
     nodes: nodes,
     workspaces: workspaces,
     shells: shells,
     agents: agents,
-    schedules: schedules,
-    executions: executions,
     focused_terminal: normalizeFocusedTerminal(data.focused_terminal)
   }
 }
@@ -591,15 +541,6 @@ function normalizeFocusedTerminal(source) {
     node_id: String(source.shell.node_id),
     shell_id: String(source.shell.inner_id)
   }
-}
-
-function mergeSnapshotExecutions(current, snapshot, retainedScheduleKey) {
-  if (!retainedScheduleKey) return snapshot
-  return snapshot.filter(function(execution) {
-    return execution.schedule_key !== retainedScheduleKey
-  }).concat(current.filter(function(execution) {
-    return execution.schedule_key === retainedScheduleKey
-  }))
 }
 
 function normalizeWorkspaceDetail(source, workspace, node) {
@@ -630,9 +571,6 @@ function normalizeWorkspaceDetail(source, workspace, node) {
   })
   detail.agents = (source.agents || []).map(function(agent) {
     return ownership(normalizeAgent(agent, node, detail.name))
-  })
-  detail.schedules = (source.schedules || []).map(function(schedule) {
-    return ownership(normalizeSchedule(schedule, node, detail.name))
   })
   return detail
 }
@@ -910,11 +848,9 @@ if (typeof module !== "undefined") module.exports = {
   normalizeAgent: normalizeAgent,
   normalizeShell: normalizeShell,
   normalizeLauncher: normalizeLauncher,
-  normalizeSchedule: normalizeSchedule,
-  normalizeExecution: normalizeExecution,
+  agentHasPrivateOwner: agentHasPrivateOwner,
   normalizeFocusedTerminal: normalizeFocusedTerminal,
   normalizeNodeSnapshot: normalizeNodeSnapshot,
-  mergeSnapshotExecutions: mergeSnapshotExecutions,
   normalizeWorkspaceDetail: normalizeWorkspaceDetail,
   snapshotSupportsGlobalWorkspaces: snapshotSupportsGlobalWorkspaces,
   ownerKey: ownerKey,
