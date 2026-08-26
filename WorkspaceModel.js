@@ -48,6 +48,11 @@ function guidedNodeUpgradeCommand(nodeId) {
     "boomux", "__guided-node-upgrade", String(nodeId)]
 }
 
+function guidedLocalUpdateCommand() {
+  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-update",
+    "boomux", "update"]
+}
+
 function nodeCanReauthenticate(node, cliFeatures, daemonProtocolVersion) {
   return !!node && !!node.node_id && !node.local
     && node.health === "authentication_required"
@@ -95,20 +100,6 @@ function agentsByLastUpdated(agents) {
   return agents.slice().sort(function(left, right) {
     var difference = agentUpdatedAt(right) - agentUpdatedAt(left)
     if (difference !== 0) return difference
-    var leftKey = String(left.key || left.id || "")
-    var rightKey = String(right.key || right.id || "")
-    return leftKey < rightKey ? -1 : (leftKey > rightKey ? 1 : 0)
-  })
-}
-
-function agentsByWorkspace(agents) {
-  return agents.slice().sort(function(left, right) {
-    var leftWorkspace = String(left.workspace_name || "").toLowerCase()
-    var rightWorkspace = String(right.workspace_name || "").toLowerCase()
-    if (leftWorkspace !== rightWorkspace) return leftWorkspace < rightWorkspace ? -1 : 1
-    var leftName = String(left.name || "").toLowerCase()
-    var rightName = String(right.name || "").toLowerCase()
-    if (leftName !== rightName) return leftName < rightName ? -1 : 1
     var leftKey = String(left.key || left.id || "")
     var rightKey = String(right.key || right.id || "")
     return leftKey < rightKey ? -1 : (leftKey > rightKey ? 1 : 0)
@@ -895,11 +886,11 @@ if (typeof module !== "undefined") module.exports = {
   versionDirection: versionDirection,
   nodeCanUpgrade: nodeCanUpgrade,
   guidedNodeUpgradeCommand: guidedNodeUpgradeCommand,
+  guidedLocalUpdateCommand: guidedLocalUpdateCommand,
   nodeCanReauthenticate: nodeCanReauthenticate,
   guidedNodeReauthenticateCommand: guidedNodeReauthenticateCommand,
   agentUpdatedAt: agentUpdatedAt,
   agentsByLastUpdated: agentsByLastUpdated,
-  agentsByWorkspace: agentsByWorkspace,
   agentFocused: agentFocused,
   relativeTime: relativeTime,
   resourceId: resourceId,

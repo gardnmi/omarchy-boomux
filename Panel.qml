@@ -56,6 +56,7 @@ Panel {
   property string cliVersion: ""
   property string latestBoomuxVersion: ""
   property string latestBoomuxUrl: ""
+  property string boomuxUpdateAction: ""
   property string pluginVersion: ""
   property string latestPluginVersion: ""
   readonly property bool boomuxUpdateAvailable:
@@ -69,6 +70,8 @@ Panel {
   property bool scheduleCommandsSupported: false
   property bool projectListSupported: false
   property bool integrationStatusSupported: false
+  property bool localUpdateStatusSupported: false
+  property bool guidedLocalUpdateSupported: false
   property bool shellNameSuggestionSupported: false
   property bool webLifecycleSupported: false
   property bool focusEventsSupported: false
@@ -167,7 +170,7 @@ Panel {
       && ((agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
         || attentionRevision(agent) > 0)
   }))
-  readonly property var paneAgents: WorkspaceModel.agentsByWorkspace(visibleAgents)
+  readonly property var paneAgents: visibleAgents
   readonly property var selectedWorkspace: {
     for (var i = 0; i < workspaces.length; i++)
       if (workspaces[i].key === selectedWorkspaceKey) return workspaces[i]
@@ -284,7 +287,6 @@ Panel {
       pluginVersion = ""
     }
     capabilityProcess.running = true
-    boomuxUpdateProcess.running = true
     pluginUpdateProcess.running = true
     desktopWorkspaceProcess.running = true
     desktopTerminalProcess.running = true
@@ -624,6 +626,9 @@ Panel {
       })
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
       integrationStatusSupported = data.json_commands.indexOf("integration.status") >= 0
+      localUpdateStatusSupported = data.json_commands.indexOf("update.status") >= 0
+        && cliFeatures.indexOf("local_update_status") >= 0
+      guidedLocalUpdateSupported = cliFeatures.indexOf("guided_local_update") >= 0
       shellNameSuggestionSupported = data.json_commands.indexOf("shell.suggest-name") >= 0
       webLifecycleSupported = ["web.start", "web.status", "web.stop"].every(function(command) {
         return data.json_commands.indexOf(command) >= 0
@@ -639,11 +644,15 @@ Panel {
       globalWorkspacesSupported = federationSupported
         && cliFeatures.indexOf("global_workspaces") >= 0
         && cliFeatures.indexOf("multi_node_workspace_placements") >= 0
+      if (localUpdateStatusSupported) localUpdateStatusProcess.running = true
+      else boomuxUpdateProcess.running = true
     } catch (exception) {
       cliVersion = ""
       scheduleCommandsSupported = false
       projectListSupported = false
       integrationStatusSupported = false
+      localUpdateStatusSupported = false
+      guidedLocalUpdateSupported = false
       shellNameSuggestionSupported = false
       webLifecycleSupported = false
       focusEventsSupported = false
@@ -2427,6 +2436,29 @@ Panel {
     }
   }
 
+  function parseLocalUpdateStatus(raw) {
+    try {
+      var data = parseEnvelope(raw, "update.status")
+      latestBoomuxVersion = String(data.latest || "")
+      latestBoomuxUrl = String(data.release_url || boomuxRepositoryUrl + "/releases")
+      boomuxUpdateAction = String(data.recommended_action || "")
+    } catch (exception) {
+      latestBoomuxVersion = ""
+      latestBoomuxUrl = ""
+      boomuxUpdateAction = ""
+    }
+  }
+
+  function startLocalUpdate() {
+    if (localUpdateProcess.running) return
+    if (!guidedLocalUpdateSupported || boomuxUpdateAction !== "run_update") {
+      Qt.openUrlExternally(latestBoomuxUrl || boomuxRepositoryUrl + "/releases")
+      return
+    }
+    localUpdateProcess.command = WorkspaceModel.guidedLocalUpdateCommand()
+    localUpdateProcess.running = true
+  }
+
   function parsePluginRelease(raw) {
     try {
       latestPluginVersion = String(JSON.parse(String(raw || "")).version || "")
@@ -2565,6 +2597,16 @@ Panel {
     stdout: StdioCollector { id: boomuxUpdateStdout; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode === 0) root.parseBoomuxRelease(boomuxUpdateStdout.text)
+    }
+  }
+
+  Process {
+    id: localUpdateStatusProcess
+    command: ["boomux", "update", "status", "--json"]
+    stdout: StdioCollector { id: localUpdateStatusStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.parseLocalUpdateStatus(localUpdateStatusStdout.text)
+      else boomuxUpdateProcess.running = true
     }
   }
 
@@ -2912,6 +2954,20 @@ Panel {
         root.showNotice("Node update failed", root.processError(
           nodeUpgradeStderr.text || nodeUpgradeStdout.text,
           "Could not update " + root.nodeUpgradeAlias), root.currentNoticeScreen(), true)
+      }
+    }
+  }
+
+  Process {
+    id: localUpdateProcess
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.showNotice("Guided Boomux update opened",
+          "Complete the update in the terminal, then press R to refresh the pane.",
+          root.currentNoticeScreen(), false)
+      } else {
+        root.showNotice("Boomux update failed",
+          "The guided update terminal could not be opened", root.currentNoticeScreen(), true)
       }
     }
   }
@@ -3460,14 +3516,25 @@ Panel {
             width: parent.width - headerActions.width - Style.space(36)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 0
-            Text {
+            Row {
               width: parent.width
-              text: "BOOMUX"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              font.bold: true
-              elide: Text.ElideRight
+              spacing: Style.space(5)
+              Text {
+                id: boomuxHeaderTitle
+                text: "BOOMUX"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+              Text {
+                visible: root.cliVersion !== ""
+                anchors.baseline: boomuxHeaderTitle.baseline
+                text: "v" + root.cliVersion
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
             Text {
               width: parent.width
@@ -3545,12 +3612,29 @@ Panel {
               visible: root.boomuxUpdateAvailable
               width: parent.width
               text: "Boomux " + root.cliVersion + " → " + root.latestBoomuxVersion
-              iconText: "↗"
-              tooltipText: "Open the latest Boomux release"
+              iconText: root.guidedLocalUpdateSupported
+                && root.boomuxUpdateAction === "run_update" ? "↑" : "↗"
+              tooltipText: root.guidedLocalUpdateSupported
+                && root.boomuxUpdateAction === "run_update"
+                ? "Open the guided Boomux update"
+                : (root.boomuxUpdateAction === "use_package_manager"
+                  ? "Update with the package manager that installed Boomux"
+                : "Open the latest Boomux release"
+                )
               bordered: true
               foreground: root.foreground
-              onClicked: Qt.openUrlExternally(root.latestBoomuxUrl
-                || root.boomuxRepositoryUrl + "/releases")
+              enabled: !localUpdateProcess.running
+              onClicked: root.startLocalUpdate()
+            }
+            Text {
+              visible: root.boomuxUpdateAvailable
+                && root.boomuxUpdateAction === "use_package_manager"
+              width: parent.width
+              text: "Update with the AUR or package helper that installed Boomux."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
             }
             Button {
               visible: root.pluginUpdateAvailable
@@ -4634,25 +4718,6 @@ Panel {
               clip: true
               boundsBehavior: Flickable.StopAtBounds
               currentIndex: root.activeTab === "agents" ? root.selectedIndex : -1
-              section.property: "workspace_name"
-              section.criteria: ViewSection.FullString
-              section.delegate: Rectangle {
-                required property string section
-                width: ListView.view.width
-                height: Style.space(26)
-                color: "transparent"
-                Text {
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: section.toUpperCase()
-                  color: root.activeBoomuxWorkspaceName === section ? Color.accent : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Math.max(8, Style.font.caption - 1)
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-              }
               ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
               delegate: AgentRow {
                 required property var modelData

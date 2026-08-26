@@ -15,6 +15,9 @@ terminals, monitoring Agents, and checking Schedules and Nodes.
 
 - Keeps an expandable multi-Workspace tree visible above Agent, Schedule, and
   Node views.
+- Shows the installed Boomux CLI version in the pane header.
+- Lists active Agents in one flat, most-recently-updated-first view.
+- Delegates available Boomux upgrades to the CLI's verified guided updater.
 - Provides three-dot action menus for Workspaces, items, and Nodes, including
   creation, rename, guided recovery, and confirmed removal actions when supported.
 - Reserves the left or right screen edge so Hyprland tiles applications beside
@@ -142,8 +145,11 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
   or remote terminal content.
 - The plugin never invokes SSH itself. Guided Node setup and updates run through
   Boomux in a native terminal so authentication and confirmation stay interactive.
-- Its only direct network activity is a bounded update check against fixed GitHub
-  release and manifest URLs.
+- New Boomux versions own release discovery through `boomux update status`; the
+  plugin opens `boomux update` in a native terminal and never downloads,
+  authorizes, or replaces Boomux itself. Older compatible Boomux versions retain
+  a bounded release-page check. Plugin update discovery uses the fixed published
+  manifest URL.
 
 ## Maintenance
 

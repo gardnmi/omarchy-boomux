@@ -47,25 +47,6 @@ test("sorts Agents by their latest authoritative update", () => {
   expect(agents.map(agent => agent.key)).toEqual(["older", "attention", "newer"])
 })
 
-test("keeps pane Agent order stable across focus and observation changes", () => {
-  const agents = [
-    { key: "other", name: "review", workspace_name: "zeta", global_workspace_id: "other",
-      observation: { observed_at_ms: 300 } },
-    { key: "active-old", name: "worker", workspace_name: "alpha", global_workspace_id: "active",
-      observation: { observed_at_ms: 100 } },
-    { key: "active-new", name: "author", workspace_name: "alpha", global_workspace_id: "active",
-      observation: { observed_at_ms: 200 } }
-  ]
-  expect(model.agentsByWorkspace(agents).map(agent => agent.key)).toEqual([
-    "active-new", "active-old", "other"
-  ])
-  agents[1].observation.observed_at_ms = 500
-  expect(model.agentsByWorkspace(agents).map(agent => agent.key)).toEqual([
-    "active-new", "active-old", "other"
-  ])
-  expect(agents.map(agent => agent.key)).toEqual(["other", "active-old", "active-new"])
-})
-
 test("marks only an Agent backed by the exact focused Shell", () => {
   expect(model.agentFocused({ shell_key: "node-a\u001fshell" }, "node-a\u001fshell")).toBe(true)
   expect(model.agentFocused({ shell_key: "node-b\u001fshell" }, "node-a\u001fshell")).toBe(false)
@@ -216,6 +197,37 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
   expect(panel).toContain("removeItemDialog.handleKey(event)")
   expect(panel).toContain('root.activeTab === "schedules" && root.selectedSchedule')
+})
+
+test("shows the installed Boomux CLI version in the pane header", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("id: boomuxHeaderTitle")
+  expect(panel).toContain('text: "v" + root.cliVersion')
+  expect(panel).toContain("anchors.baseline: boomuxHeaderTitle.baseline")
+})
+
+test("shows one flat Agent list ordered by latest update", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("readonly property var paneAgents: visibleAgents")
+  expect(panel).not.toContain('section.property: "workspace_name"')
+  expect(panel).not.toContain("WorkspaceModel.agentsByWorkspace")
+})
+
+test("delegates local updates to the capability-gated Boomux flow", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('data.json_commands.indexOf("update.status") >= 0')
+  expect(panel).toContain('cliFeatures.indexOf("guided_local_update") >= 0')
+  expect(panel).toContain('command: ["boomux", "update", "status", "--json"]')
+  expect(panel).toContain("WorkspaceModel.guidedLocalUpdateCommand()")
+  expect(panel).toContain('boomuxUpdateAction !== "run_update"')
+  expect(panel).toContain("Guided Boomux update opened")
+  expect(panel).toContain("Complete the update in the terminal, then press R to refresh the pane.")
+  expect(panel).toContain("Update with the AUR or package helper that installed Boomux.")
+  expect(panel).not.toContain('root.actionMessage = "Boomux update finished"')
+  expect(panel).not.toContain('localUpdateProcess.command = ["curl"')
+  expect(model.guidedLocalUpdateCommand()).toEqual([
+    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-update", "boomux", "update"
+  ])
 })
 
 test("creates active-Workspace Shells from remote Node action menus", () => {
