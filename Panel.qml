@@ -260,6 +260,13 @@ Panel {
   implicitWidth: desktopIndicator.implicitWidth
   implicitHeight: desktopIndicator.implicitHeight
 
+  Shortcut {
+    sequence: "Meta+B"
+    context: Qt.ApplicationShortcut
+    enabled: root.opened
+    onActivated: root.close()
+  }
+
   Component.onCompleted: {
     try {
       pluginVersion = String(JSON.parse(pluginManifest.text()).version || "")
@@ -3102,11 +3109,13 @@ Panel {
       anchors.fill: parent
       blocked: root.editing || root.settingsOpen || root.renameTarget !== null
       onMoveRequested: function(dx, dy) {
+        panel.indicateKeyboardFocus()
         if (root.itemToRemove && (dx !== 0 || dy !== 0))
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
         else root.movePanelCursor(dx, dy)
       }
       onActivateRequested: {
+        panel.indicateKeyboardFocus()
         if (root.itemToRemove) {
           if (removeItemDialog.selectedIndex === 0) root.cancelRemoveItem()
           else root.confirmRemoveItem()
@@ -3119,12 +3128,14 @@ Panel {
         else root.close()
       }
       onTabRequested: function(direction) {
+        panel.indicateKeyboardFocus()
         if (root.itemToRemove)
           removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
         else if (root.actionMenuTarget) root.moveActionMenu(direction)
         else root.cycleFocusSection(direction)
       }
       onTextKey: function(text) {
+        panel.indicateKeyboardFocus()
         if (root.itemToRemove || root.actionMenuTarget) return
         if (text === "r" || text === "R") root.refreshInstalledState()
         else if (text === "1") root.selectTab("agents")
@@ -3318,7 +3329,7 @@ Panel {
             Text {
               id: boomuxHeaderTitle
               width: parent.width
-              text: "BOOMUX"
+              text: panel.focusIndicatorVisible ? "BOOMUX · KEYBOARD" : "BOOMUX"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title

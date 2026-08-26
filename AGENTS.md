@@ -172,6 +172,8 @@ or lifecycle observation.
   pane owns keyboard focus, or its IPC toggle should hide it.
 - The IPC `focus`, `open`, and `show` actions must re-acquire keyboard focus when
   the persistent pane is already open. They must not toggle or reset pane state.
+- Show a bounded keyboard-focus activity indicator when the pane is summoned or
+  receives keyboard navigation. It must expire rather than claim stale focus.
 - Keyboard navigation cycles between the Workspace tree, expanded Workspace
   items, and the lower view. Arrow keys move within a section, Enter activates,
   and `M` opens the focused resource's action menu. Menus must retain an enabled

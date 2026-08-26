@@ -21,6 +21,8 @@ PanelWindow {
   property Item focusTarget: null
   property bool focusPrimed: false
   property bool focusGrabPending: false
+  property bool focusIndicatorVisible: false
+  property bool focusRemapping: false
 
   default property alias contentItem: contentHolder.children
 
@@ -57,14 +59,21 @@ PanelWindow {
 
   function requestKeyboardFocus() {
     if (!open) return
+    indicateKeyboardFocus()
     focusPrimeTimer.stop()
     focusPrimed = false
     focusGrabPending = true
-    Qt.callLater(beginFocusGrab)
+    focusRemapping = true
+    focusReacquireTimer.restart()
+  }
+
+  function indicateKeyboardFocus() {
+    focusIndicatorVisible = true
+    focusIndicatorTimer.restart()
   }
 
   screen: anchorWindow ? anchorWindow.screen : null
-  visible: open || revealProgress > 0
+  visible: !focusRemapping && (open || revealProgress > 0)
   color: "transparent"
   exclusionMode: ExclusionMode.Ignore
   anchors { top: true; bottom: true; left: true; right: true }
@@ -87,17 +96,23 @@ PanelWindow {
   }
   onOpenChanged: {
     if (open) {
+      indicateKeyboardFocus()
+      focusRemapping = false
       focusPrimed = false
       beginFocusPrime()
       if (focusTarget) Qt.callLater(function() {
         if (root.open && root.focusTarget) root.focusTarget.forceActiveFocus()
       })
     } else {
+      focusReacquireTimer.stop()
       focusGrabReleaseTimer.stop()
       focusGrab.active = false
       focusPrimeTimer.stop()
       focusGrabPending = false
       focusPrimed = false
+      focusRemapping = false
+      focusIndicatorTimer.stop()
+      focusIndicatorVisible = false
     }
   }
 
@@ -125,6 +140,22 @@ PanelWindow {
     id: focusGrabReleaseTimer
     interval: 125
     onTriggered: focusGrab.active = false
+  }
+
+  Timer {
+    id: focusIndicatorTimer
+    interval: 1800
+    onTriggered: root.focusIndicatorVisible = false
+  }
+
+  Timer {
+    id: focusReacquireTimer
+    interval: 50
+    onTriggered: {
+      if (!root.open) return
+      root.focusPrimed = false
+      root.focusRemapping = false
+    }
   }
 
   PanelWindow {
@@ -158,6 +189,15 @@ PanelWindow {
     padding: root.padding
     radius: Style.cornerRadius
     opacity: root.revealProgress
+
+    Rectangle {
+      anchors.fill: parent
+      z: 10
+      color: "transparent"
+      radius: parent.radius
+      border.width: root.focusIndicatorVisible ? Math.max(1, Style.space(2)) : 0
+      border.color: Color.accent
+    }
 
     MouseArea {
       anchors.fill: parent
