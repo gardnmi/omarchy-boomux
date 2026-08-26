@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
@@ -19,6 +20,7 @@ PanelWindow {
     Math.max(1, Style.space(2)))
   property Item focusTarget: null
   property bool focusPrimed: false
+  property bool focusGrabPending: false
 
   default property alias contentItem: contentHolder.children
 
@@ -55,11 +57,10 @@ PanelWindow {
 
   function requestKeyboardFocus() {
     if (!open) return
+    focusPrimeTimer.stop()
     focusPrimed = false
-    beginFocusPrime()
-    if (focusTarget) Qt.callLater(function() {
-      if (root.open && root.focusTarget) root.focusTarget.forceActiveFocus()
-    })
+    focusGrabPending = true
+    Qt.callLater(beginFocusGrab)
   }
 
   screen: anchorWindow ? anchorWindow.screen : null
@@ -79,7 +80,11 @@ PanelWindow {
     NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
   }
 
-  onBackingWindowVisibleChanged: beginFocusPrime()
+  onBackingWindowVisibleChanged: {
+    beginFocusPrime()
+    if (backingWindowVisible && focusGrabPending)
+      Qt.callLater(beginFocusGrab)
+  }
   onOpenChanged: {
     if (open) {
       focusPrimed = false
@@ -88,7 +93,10 @@ PanelWindow {
         if (root.open && root.focusTarget) root.focusTarget.forceActiveFocus()
       })
     } else {
+      focusGrabReleaseTimer.stop()
+      focusGrab.active = false
       focusPrimeTimer.stop()
+      focusGrabPending = false
       focusPrimed = false
     }
   }
@@ -97,6 +105,25 @@ PanelWindow {
     id: focusPrimeTimer
     interval: 75
     onTriggered: if (root.open) root.focusPrimed = true
+  }
+
+  function beginFocusGrab() {
+    if (!open || !backingWindowVisible || !focusGrabPending) return
+    focusGrabPending = false
+    focusGrab.active = true
+    focusGrabReleaseTimer.restart()
+    if (focusTarget) focusTarget.forceActiveFocus()
+  }
+
+  HyprlandFocusGrab {
+    id: focusGrab
+    windows: [root]
+  }
+
+  Timer {
+    id: focusGrabReleaseTimer
+    interval: 125
+    onTriggered: focusGrab.active = false
   }
 
   PanelWindow {
