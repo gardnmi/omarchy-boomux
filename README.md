@@ -27,6 +27,8 @@ terminals, monitoring Agents, and checking Schedules and Nodes.
 - Shows the active Workspace, focused managed terminal, Agent attention, Node
   health, and scheduler state.
 - Opens exact Shells and Agents while keeping the pane visible.
+- Keeps the pane visible when opening Schedule runs and shows the latest ten in
+  a bounded scrollable history.
 - Uses compact, confirmed removal actions for local Workspaces, Shells, and
   launchers.
 
