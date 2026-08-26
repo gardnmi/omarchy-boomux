@@ -20,6 +20,7 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color keyboardCursorFill: Util.alpha(foreground, 0.065)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string boomuxRepositoryUrl: "https://github.com/gardnmi/boomux"
@@ -1460,6 +1461,7 @@ Panel {
 
   function openWorkspace(workspace, noticeScreen, presentationOnly) {
     if (!workspaceCanOpen(workspace) || actionProcess.running) return
+    panel.exitKeyboardMode()
     var availablePlacements = workspace.is_global ? workspace.placements.filter(function(placement) {
       return placement.available
     }).length : 1
@@ -1480,6 +1482,7 @@ Panel {
   function openShell(shell, agent) {
     if (!shell || !shell.id || openProcess.running
         || !resourceIsActionable(shell, "remote_pty_attachment")) return
+    panel.exitKeyboardMode()
     pendingOpenAgent = agent || null
     pendingOpenKey = resourceKey(shell.node_id, shell.id)
     pendingOpenRunKey = resourceKey(shell.node_id,
@@ -1561,6 +1564,7 @@ Panel {
     if (item.kind === "launcher") {
       if (actionProcess.running || !resourceIsActionable(item,
           "remote_launcher_invocation")) return
+      panel.exitKeyboardMode()
       pendingAction = { kind: "invoke-launcher", key: item.key, nodeId: item.node_id }
       actionMessage = "Launching " + String(item.name) + "..."
       var owner = nodeFor(item.node_id)
@@ -1647,6 +1651,7 @@ Panel {
     var allowed = target.kind === "workspace"
       ? workspaceCanRename(target.workspace) : itemCanRename(target)
     if (!allowed) return
+    panel.enterKeyboardMode()
     renameError = ""
     renameTarget = target
   }
@@ -1719,6 +1724,7 @@ Panel {
     var node = item ? nodeFor(item.node_id) : null
     if (!item || !node || !node.local
         || actionProcess.running || openProcess.running) return
+    panel.enterKeyboardMode()
     removeItemDialog.selectedIndex = 0
     itemToRemove = item
   }
@@ -1732,6 +1738,7 @@ Panel {
 
   function requestRemoveWorkspace(workspace) {
     if (!workspaceCanRemove(workspace)) return
+    panel.enterKeyboardMode()
     removeItemDialog.selectedIndex = 0
     itemToRemove = { kind: "workspace", workspace: workspace }
   }
@@ -1739,6 +1746,7 @@ Panel {
   function requestForgetNode(node) {
     if (!node || node.local || actionProcess.running || nodeShellProcess.running
         || nodeUpgradeProcess.running || nodeReauthenticateProcess.running) return
+    panel.enterKeyboardMode()
     removeItemDialog.selectedIndex = 0
     itemToRemove = { kind: "node", node: node }
   }
@@ -1821,6 +1829,7 @@ Panel {
   }
 
   function showSettings() {
+    panel.enterKeyboardMode()
     cancelForm()
     itemToRemove = null
     settingsOpen = true
@@ -2045,6 +2054,7 @@ Panel {
         return
       }
     }
+    panel.enterKeyboardMode()
     formMode = mode
     actionMessage = ""
     nameFieldEdited = false
@@ -2302,6 +2312,17 @@ Panel {
     }
   }
 
+  function focusPane() {
+    if (opened && panel.keyboardMode) {
+      panel.exitKeyboardMode()
+      return
+    }
+    if (!opened) open()
+    Qt.callLater(function() {
+      if (root.opened) panel.enterKeyboardMode()
+    })
+  }
+
   onOpenedChanged: if (opened) {
     refreshInstalledState()
     if (expandedWorkspaceKey === "") {
@@ -2309,7 +2330,6 @@ Panel {
       if (initialWorkspace) expandedWorkspaceKey = initialWorkspace.key
     }
     positionActiveWorkspace()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   } else {
     workspacePositionTimer.stop()
     pendingWorkspacePositionKey = ""
@@ -2332,11 +2352,13 @@ Panel {
   IpcHandler {
     target: root.ipcTarget
 
+    function focus(): void { root.focusPane() }
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
+    function releaseFocus(): void { panel.exitKeyboardMode() }
   }
 
   Connections {
@@ -3089,6 +3111,7 @@ Panel {
     open: root.opened
     side: root.paneSide
     paneWidth: root.paneWidth
+    focusColor: root.urgent
     focusTarget: keyCatcher
 
     PanelKeyCatcher {
@@ -4059,7 +4082,7 @@ Panel {
                 radius: Style.cornerRadius
                 color: workspaceActive
                   ? Util.alpha(Color.accent, 0.16)
-                  : (cursorSelected ? Style.selectedFillFor(root.foreground, Color.accent)
+                  : (cursorSelected ? root.keyboardCursorFill
                   : (workspaceExpanded ? Util.alpha(root.foreground, 0.055)
                     : (workspaceRowMouse.containsMouse
                       ? Util.alpha(root.foreground, 0.04) : "transparent")))
@@ -4242,7 +4265,7 @@ Panel {
                         && workspaceTreeDelegate.index === root.selectedWorkspaceIndex
                         && index === root.selectedWorkspaceItemIndex
                       color: terminalFocused ? Util.alpha(Color.accent, 0.045)
-                        : (cursorSelected ? Style.selectedFillFor(root.foreground, Color.accent)
+                        : (cursorSelected ? root.keyboardCursorFill
                         : (treeItemMouse.containsMouse
                           ? Util.alpha(root.foreground, 0.035) : "transparent"))
                       opacity: treeItemMouse.enabled ? 1 : 0.48
@@ -5110,12 +5133,14 @@ Panel {
     readonly property bool actionable: agent && root.resourceIsActionable(agent,
       "remote_pty_attachment")
     readonly property bool openable: actionable && root.agentShellRetained(agent)
+    readonly property bool keyboardSelected: selected && panel.keyboardMode
+      && root.focusSection === "lower" && root.activeTab === "agents"
 
     height: Style.space(54)
     radius: Style.cornerRadius
-    color: terminalFocused ? Util.alpha(Color.accent, 0.05)
-      : (selected ? Util.alpha(root.foreground, 0.025)
-        : (agentMouse.containsMouse ? Util.alpha(root.foreground, 0.035) : "transparent"))
+    color: keyboardSelected ? root.keyboardCursorFill
+      : (terminalFocused ? Util.alpha(Color.accent, 0.05)
+      : ((selected || agentMouse.containsMouse) ? root.keyboardCursorFill : "transparent"))
     border.width: terminalFocused ? 1 : 0
     border.color: Util.alpha(Color.accent, 0.42)
     opacity: agent && agent.node_stale ? 0.66 : 1
