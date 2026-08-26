@@ -1802,7 +1802,7 @@ Panel {
 
   function removeConfirmText(item) {
     if (!item) return "Remove"
-    if (item.kind === "node-uninstall") return "Uninstall and Forget"
+    if (item.kind === "node-uninstall") return "Uninstall"
     if (item.kind === "node") return "Just Forget"
     if (item.kind === "shell" || item.kind === "command" || item.kind === "agent")
       return "Close"
@@ -1879,7 +1879,7 @@ Panel {
 
   function openBoomuxConfig() {
     if (!bar || !cliAvailable) return
-    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-config boomux config edit")
+    bar.run("omarchy-launch-tui --app-id=TUI.float boomux config edit")
     close()
   }
 
@@ -1911,7 +1911,7 @@ Panel {
 
   function createNode() {
     if (!bar || !federationAvailable) return
-    bar.run("omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add")
+    bar.run("omarchy-launch-tui --app-id=TUI.float boomux __guided-node-add")
   }
 
   function createShellOnNode(node) {
@@ -1938,7 +1938,6 @@ Panel {
     nodeUpgradeAlias = String(node.alias)
     nodeUpgradeProcess.command = WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)
     nodeUpgradeProcess.running = true
-    close()
   }
 
   function reauthenticateNode(node) {

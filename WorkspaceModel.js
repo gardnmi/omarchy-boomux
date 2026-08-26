@@ -49,7 +49,7 @@ function nodeCanUpgrade(node, controlVersion, cliFeatures) {
 }
 
 function guidedNodeUpgradeCommand(nodeId) {
-  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-upgrade",
+  return ["omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "__guided-node-upgrade", String(nodeId)]
 }
 
@@ -61,12 +61,12 @@ function nodeCanUninstall(node, cliFeatures, daemonProtocolVersion) {
 }
 
 function guidedNodeUninstallCommand(nodeId) {
-  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-uninstall",
+  return ["omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "node", "uninstall", String(nodeId)]
 }
 
 function guidedLocalUpdateCommand() {
-  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-update",
+  return ["omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "update"]
 }
 
@@ -78,7 +78,7 @@ function nodeCanReauthenticate(node, cliFeatures, daemonProtocolVersion) {
 }
 
 function guidedNodeReauthenticateCommand(nodeId) {
-  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-reauthenticate",
+  return ["omarchy-launch-tui", "--app-id=TUI.float",
     "boomux", "__guided-node-reauthenticate", String(nodeId)]
 }
 
