@@ -229,6 +229,7 @@ test("re-focuses an already-open pane through an idempotent IPC action", () => {
   expect(sidePane).toContain("function requestKeyboardFocus()")
   expect(sidePane).toContain("HyprlandFocusGrab {")
   expect(sidePane).toContain("focusGrab.active = true")
+  expect(sidePane).toContain("focusGrabReleaseTimer.restart()\n    beginFocusPrime()")
   expect(sidePane).toContain("interval: 125")
   expect(sidePane).toContain("focusPrimeTimer.restart()")
   expect(readme).toContain("omarchy-shell io.github.gardnmi.boomux focus")

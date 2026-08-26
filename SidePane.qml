@@ -112,6 +112,7 @@ PanelWindow {
     focusGrabPending = false
     focusGrab.active = true
     focusGrabReleaseTimer.restart()
+    beginFocusPrime()
     if (focusTarget) focusTarget.forceActiveFocus()
   }
 
