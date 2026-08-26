@@ -72,7 +72,7 @@ The sliding pane has a persistent expandable Workspace tree and three lower view
   persisted default; a separate chevron expands Shells, commands, and launchers,
   while the row itself stores the default and opens the Workspace
 - **Agents**: active user-shell Agents plus user-shell Agents with outstanding
-  durable attention, grouped in stable Workspace-and-name order;
+  durable attention, ordered by their latest authoritative update;
   schedule-owned Agents
   are excluded by shell ownership; capability-gated section controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
@@ -125,9 +125,11 @@ or lifecycle observation.
   daemon must remain stopped; the widget must not resurrect it.
 - QML invokes only the local Boomux CLI and daemon for management. It must not
   invoke SSH, contact a Node directly, store credentials, or handle remote
-  bootstrap confirmation. The sole direct network exception is a bounded,
-  read-only startup check against fixed GitHub URLs for the latest Boomux release
-  and published plugin manifest. Cap each response before collecting stdout and
+  bootstrap confirmation. Capability-aware Boomux release discovery must use
+  `boomux update status --json`, and replacement must launch only the guided
+  `boomux update` command. Older compatible clients may retain the bounded,
+  read-only fixed GitHub release check; plugin-version discovery uses the fixed
+  published manifest URL. Cap each direct response before collecting stdout and
   do not follow redirects; failures remain silent. **Create Node** and **Update**
   may only launch Boomux's guided setup or upgrade wrapper in a local native
   terminal. **Authenticate** may likewise launch only Boomux's guided
@@ -186,6 +188,10 @@ or lifecycle observation.
   it only for an older helper with both local and observed remote upgrade
   capabilities. For a newer helper, show **Control machine update needed** and
   no replacement action.
+- Show a local Boomux update only when the latest stable version is newer. When
+  `local_update_status` and `guided_local_update` are advertised, delegate status
+  and authorization to those commands in a native terminal; never download or
+  replace the CLI from QML. Older clients may open only the release page.
 - Replace the unavailable **Create Shell** action with **Authenticate** only for
   an `authentication_required` remote Node when the installed CLI advertises
   `node_reauthentication` and daemon protocol 38 is available. Delegate route,
