@@ -60,6 +60,9 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | --- | --- |
 | Bar icon | Open or close the pane |
 | Right-click bar icon | Refresh |
+| `Super+B` with the bindings below | Open or close the passive pane |
+| `Super+A` with the bindings below | Enter or leave Boomux keyboard mode |
+| `Super+Arrow` in keyboard mode | Return keyboard ownership to Hyprland |
 | Workspace row | Select and present that Workspace |
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact managed terminal |
@@ -84,8 +87,34 @@ For direct keyboard access:
 ```lua
 hl.unbind("SUPER + B")
 o.bind("SUPER + B", "Toggle Boomux panel",
-  "omarchy-shell io.github.gardnmi.boomux toggle")
+  "omarchy-shell io.github.gardnmi.boomux toggle", { release = true })
+o.bind("SUPER + A", "Toggle Boomux panel focus",
+  "omarchy-shell io.github.gardnmi.boomux focus", { release = true })
+
+local function focus_away_from_boomux(direction)
+  return function()
+    hl.exec_cmd("omarchy-shell io.github.gardnmi.boomux releaseFocus")
+    hl.dispatch(hl.dsp.focus({ direction = direction }))
+  end
+end
+
+hl.unbind("SUPER + LEFT")
+hl.unbind("SUPER + RIGHT")
+hl.unbind("SUPER + UP")
+hl.unbind("SUPER + DOWN")
+o.bind("SUPER + LEFT", "Focus on left window", focus_away_from_boomux("l"))
+o.bind("SUPER + RIGHT", "Focus on right window", focus_away_from_boomux("r"))
+o.bind("SUPER + UP", "Focus on above window", focus_away_from_boomux("u"))
+o.bind("SUPER + DOWN", "Focus on below window", focus_away_from_boomux("d"))
 ```
+
+The pane is passive when opened with `Super+B`, so applications keep keyboard
+focus. `Super+A` toggles an explicit keyboard mode, shown by a contrasting
+outline, inner-edge wash, and focus rail. Its neutral row cursor uses the same
+shade as pointer hover. Because layer-shell drawers are not Hyprland windows,
+`Super+Arrow` cannot navigate into the pane; while keyboard mode is active it
+exits the mode and returns keys to the window Hyprland selects.
+Clicking outside the drawer likewise exits keyboard mode without closing it.
 
 Selecting a coordinated Workspace presents its existing Hyprland layer and
 stores it as Boomux's default Workspace. It does not restore every Shell or run

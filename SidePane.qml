@@ -17,8 +17,10 @@ PanelWindow {
   property int padding: Style.spacing.popupPadding
   property var borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border,
     Math.max(1, Style.space(2)))
+  property color focusColor: Color.urgent
   property Item focusTarget: null
-  property bool focusPrimed: false
+  property bool keyboardMode: false
+  property real focusEmphasis: 0
 
   default property alias contentItem: contentHolder.children
 
@@ -49,8 +51,23 @@ PanelWindow {
     else root.open = false
   }
 
-  function beginFocusPrime() {
-    if (open && backingWindowVisible) focusPrimeTimer.restart()
+  function enterKeyboardMode() {
+    if (!open) return
+    keyboardMode = true
+    if (focusTarget) Qt.callLater(function() {
+      if (root.open && root.keyboardMode && root.focusTarget)
+        root.focusTarget.forceActiveFocus()
+    })
+  }
+
+  function exitKeyboardMode() {
+    keyboardMode = false
+  }
+
+  onKeyboardModeChanged: {
+    focusEntryAnimation.stop()
+    if (keyboardMode) focusEntryAnimation.restart()
+    else focusEmphasis = 0
   }
 
   screen: anchorWindow ? anchorWindow.screen : null
@@ -61,33 +78,47 @@ PanelWindow {
 
   WlrLayershell.namespace: "omarchy-boomux-side-pane"
   WlrLayershell.layer: WlrLayer.Overlay
-  WlrLayershell.keyboardFocus: open
-    ? (focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
-    : WlrKeyboardFocus.None
-  mask: Region { item: card }
+  WlrLayershell.keyboardFocus: keyboardMode
+    ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+  mask: Region { item: root.keyboardMode ? keyboardDismissArea : card }
 
   Behavior on revealProgress {
     NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
   }
 
-  onBackingWindowVisibleChanged: beginFocusPrime()
-  onOpenChanged: {
-    if (open) {
-      focusPrimed = false
-      beginFocusPrime()
-      if (focusTarget) Qt.callLater(function() {
-        if (root.open && root.focusTarget) root.focusTarget.forceActiveFocus()
-      })
-    } else {
-      focusPrimeTimer.stop()
-      focusPrimed = false
+  SequentialAnimation {
+    id: focusEntryAnimation
+    PropertyAnimation {
+      target: root
+      property: "focusEmphasis"
+      from: 0.65
+      to: 1
+      duration: 90
+      easing.type: Easing.OutCubic
+    }
+    PropertyAnimation {
+      target: root
+      property: "focusEmphasis"
+      to: 0.92
+      duration: 180
+      easing.type: Easing.OutCubic
     }
   }
 
-  Timer {
-    id: focusPrimeTimer
-    interval: 75
-    onTriggered: if (root.open) root.focusPrimed = true
+  onOpenChanged: {
+    if (!open) exitKeyboardMode()
+  }
+
+  Item {
+    id: keyboardDismissArea
+    anchors.fill: parent
+    visible: root.keyboardMode
+
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.AllButtons
+      onClicked: root.exitKeyboardMode()
+    }
   }
 
   PanelWindow {
@@ -121,6 +152,38 @@ PanelWindow {
     padding: root.padding
     radius: Style.cornerRadius
     opacity: root.revealProgress
+
+    Rectangle {
+      anchors.fill: parent
+      z: 10
+      color: "transparent"
+      radius: parent.radius
+      opacity: root.focusEmphasis
+      border.width: root.keyboardMode ? Math.max(3, Style.space(3)) : 0
+      border.color: root.focusColor
+    }
+
+    Rectangle {
+      visible: root.keyboardMode
+      z: 9
+      x: root.onRight ? 0 : parent.width - width
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: Math.max(18, Style.space(18))
+      color: root.focusColor
+      opacity: 0.12 * root.focusEmphasis
+    }
+
+    Rectangle {
+      visible: root.keyboardMode
+      z: 11
+      x: root.onRight ? 0 : parent.width - width
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: Math.max(7, Style.space(7))
+      color: root.focusColor
+      opacity: root.focusEmphasis
+    }
 
     MouseArea {
       anchors.fill: parent

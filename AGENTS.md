@@ -170,10 +170,23 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
+- Keep drawer visibility separate from keyboard ownership. Opening or toggling
+  the persistent pane is passive; the IPC `focus` action toggles an explicit
+  keyboard mode with a contrasting outline, inner-edge wash, and focus rail.
+- Keyboard mode uses exclusive layer focus until explicit release. Super-modified
+  arrow bindings must invoke the pane's IPC focus release before Hyprland's
+  native directional focus dispatcher.
+- Commit layer keyboard interactivity `None` before releasing keyboard focus.
+  Do not infer keyboard ownership from Hyprland's active-window decoration.
+- While keyboard mode is active, an outside click may be consumed to release
+  keyboard ownership. Passive mode must restore pointer pass-through immediately.
 - Keyboard navigation cycles between the Workspace tree, expanded Workspace
   items, and the lower view. Arrow keys move within a section, Enter activates,
   and `M` opens the focused resource's action menu. Menus must retain an enabled
   keyboard cursor and restore the prior section when dismissed.
+- Workspace and Agent keyboard cursors must use the same neutral fill. Keep it
+  consistent with pointer hover and across keyboard focus changes without adding
+  a focus-color border.
 - Keep **Create Node** at Nodes-section scope; do not add a Node filter.
 - Keep **Update** beside the affected remote Node's **Create Shell** action. Show
   it only for an older helper with both local and observed remote upgrade
@@ -209,7 +222,7 @@ or lifecycle observation.
   must not close Boomux or release its reservation.
 - Use Omarchy `qs.Ui` controls and `Style.space(...)`; follow the active bar
   foreground, urgent color, font, and accent.
-- Set `PanelKeyCatcher.blocked` while text fields own keyboard input.
+- Set the pane key catcher's `blocked` state while text fields own keyboard input.
 - Modal confirmations must consume or explicitly handle Enter, Escape, Tab,
   arrows, and text shortcuts instead of leaking input to the panel below.
 - Bound every dynamic list with clipping and a scrollbar. The panel content
