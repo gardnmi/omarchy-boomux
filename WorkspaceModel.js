@@ -31,15 +31,20 @@ function versionIsNewer(candidate, current) {
   return versionDirection(candidate, current) === "newer"
 }
 
+function hasFeature(values, feature) {
+  if (!values || typeof values.length !== "number") return false
+  for (var i = 0; i < values.length; i++)
+    if (String(values[i]) === feature) return true
+  return false
+}
+
 function nodeCanUpgrade(node, controlVersion, cliFeatures) {
   if (!node || !node.node_id || node.local
       || versionDirection(node.observed_helper_version, controlVersion) !== "older")
     return false
   var required = ["observed_node_helper_version", "node_upgrade_coordination"]
-  var local = Array.isArray(cliFeatures) ? cliFeatures : []
-  var remote = Array.isArray(node.observed_capabilities) ? node.observed_capabilities : []
   return required.every(function(feature) {
-    return local.indexOf(feature) >= 0 && remote.indexOf(feature) >= 0
+    return hasFeature(cliFeatures, feature) && hasFeature(node.observed_capabilities, feature)
   })
 }
 

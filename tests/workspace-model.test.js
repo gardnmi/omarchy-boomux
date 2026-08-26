@@ -253,6 +253,11 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
     observed_capabilities: features
   }
   expect(model.nodeCanUpgrade(remote, "0.30.1", features)).toBe(true)
+  const qmlFeatures = {
+    0: "observed_node_helper_version", 1: "node_upgrade_coordination", length: 2
+  }
+  expect(model.nodeCanUpgrade(Object.assign({}, remote,
+    { observed_capabilities: qmlFeatures }), "0.30.1", qmlFeatures)).toBe(true)
   expect(model.nodeCanUpgrade(Object.assign({}, remote,
     { stale: true, current: false, health: "authentication_required" }),
     "0.30.1", features)).toBe(true)
