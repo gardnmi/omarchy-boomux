@@ -26,8 +26,9 @@ publication.
 
 - Planned minimum released Boomux version: `0.27.0`
 - Stable JSON envelope: `boomux.cli/v1`
-- Current branch-validated daemon protocol: 44; Node helper versions and guided
-  upgrade coordination require protocol 41 capabilities
+- Current branch-validated daemon protocol: 48; Node helper versions and guided
+  upgrade coordination require protocol 41 capabilities, while guided remote
+  uninstall requires protocol 48 uninstall coordination on both Nodes
 - Supported Agent hosts come from `integration.status`; currently OpenCode, Pi,
   Claude Code, Codex, and Kiro CLI through Boomux lifecycle integrations
 
@@ -128,9 +129,12 @@ or lifecycle observation.
   `boomux update` command. Older compatible clients may retain the bounded,
   read-only fixed GitHub release check; plugin-version discovery uses the fixed
   published manifest URL. Cap each direct response before collecting stdout and
-  do not follow redirects; failures remain silent. **Create Node** and **Update**
-  may only launch Boomux's guided setup or upgrade wrapper in a local native
-  terminal. After launching a local Boomux update, poll only `update status` and
+  do not follow redirects; failures remain silent. **Create Node**, **Update**,
+  and **Uninstall Boomux** may only launch Boomux's guided setup, upgrade, or
+  remote uninstall flow in a local native terminal. Remote uninstall must pass
+  the exact registered Node ID as one argv element, remain distinct from
+  local-only **Forget Node**, and never claim success from terminal launch. After
+  launching a local Boomux update, poll only `update status` and
   report whether the expected installed version appeared; never treat terminal
   launch as update success. **Authenticate** may likewise launch only Boomux's guided
   reauthentication wrapper for an `authentication_required` Node when the local
@@ -154,7 +158,9 @@ or lifecycle observation.
   attention, use Boomux attention metadata and provide an acknowledgement path
   that does not pretend the shell is retained.
 - Never overwrite user configuration or install/replace Boomux integrations
-  from the widget.
+  from the widget. Removing current remote integrations is allowed only through
+  the explicitly confirmed, Boomux-owned Node uninstall flow; modified assets
+  and durable data remain under Boomux's preservation contract.
 - Never invoke Tailscale directly. Gate Web controls on advertised `web.start`,
   `web.status`, and `web.stop`; use only those exact Boomux JSON commands.
   Starting Web is allowed only while the passive daemon check is currently

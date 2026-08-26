@@ -53,6 +53,18 @@ function guidedNodeUpgradeCommand(nodeId) {
     "boomux", "__guided-node-upgrade", String(nodeId)]
 }
 
+function nodeCanUninstall(node, cliFeatures, daemonProtocolVersion) {
+  return !!node && !!node.node_id && !node.local && !!node.current && !node.stale
+    && Number(daemonProtocolVersion || 0) >= 48
+    && hasFeature(cliFeatures, "node_uninstall_coordination")
+    && hasFeature(node.observed_capabilities, "node_uninstall_coordination")
+}
+
+function guidedNodeUninstallCommand(nodeId) {
+  return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-uninstall",
+    "boomux", "node", "uninstall", String(nodeId)]
+}
+
 function guidedLocalUpdateCommand() {
   return ["omarchy-launch-tui", "--app-id=org.omarchy.boomux-update",
     "boomux", "update"]
@@ -867,6 +879,8 @@ if (typeof module !== "undefined") module.exports = {
   versionDirection: versionDirection,
   nodeCanUpgrade: nodeCanUpgrade,
   guidedNodeUpgradeCommand: guidedNodeUpgradeCommand,
+  nodeCanUninstall: nodeCanUninstall,
+  guidedNodeUninstallCommand: guidedNodeUninstallCommand,
   guidedLocalUpdateCommand: guidedLocalUpdateCommand,
   nodeCanReauthenticate: nodeCanReauthenticate,
   guidedNodeReauthenticateCommand: guidedNodeReauthenticateCommand,
