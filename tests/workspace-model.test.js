@@ -436,9 +436,10 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
   expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
-  expect(panel).toContain('visible: root.actionMessage !== ""')
-  expect(panel).toContain("id: actionStatusText")
-  expect(panel).toContain("anchors.bottom: parent.bottom")
+  expect(panel).not.toContain("id: actionStatusText")
+  expect(panel).not.toContain('tooltipText: "Dismiss status"')
+  expect(panel).toContain("onActionMessageChanged:")
+  expect(panel).toContain('showNotice("Boomux", actionMessage, currentNoticeScreen(), true)')
   expect(panel).not.toContain('root.actionMessage = "Workspace shown"')
   expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane"')
   expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane-reservation"')
@@ -488,7 +489,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.1.1")
+  expect(manifest.version).toBe("2.1.2")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -535,6 +536,9 @@ test("uses the existing exact launcher path from the Workspace tree", () => {
 test("shows passive Workspace notices", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('WlrLayershell.namespace: "omarchy-boomux-notice"')
+  expect(panel).toContain('x: root.paneSide === "left"')
+  expect(panel).toContain("panel.sideInset + Style.space(18)")
+  expect(panel).toContain("parent.width - width - panel.sideInset - Style.space(18)")
   expect(panel).toContain("if (Date.now() < noticeProtectedUntil) return")
   expect(panel).toContain('showNotice("Workspace opened", pending.name,')
   expect(panel).toContain('showNotice("Workspace open warning", pending.unavailablePlacements + " placement"')
@@ -670,6 +674,15 @@ test("keeps guided Node setup feedback visible", () => {
   expect(panel).toContain(
     "omarchy-launch-tui --app-id=org.omarchy.boomux-node-add boomux __guided-node-add"
   )
+  const createNode = panel.match(/function createNode\(\) \{[\s\S]*?\n  \}/)?.[0]
+  expect(createNode).toBeDefined()
+  expect(createNode).not.toContain("close()")
+})
+
+test("does not show the Boomux TUI header action", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).not.toContain('tooltipText: "Open Boomux TUI"')
+  expect(panel).not.toContain("function openDashboard()")
 })
 
 test("refreshes the installed CLI version after an upgrade", () => {
