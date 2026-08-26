@@ -108,6 +108,7 @@ Panel {
   property string actionMessage: ""
   property string nodeShellAlias: ""
   property string nodeUpgradeAlias: ""
+  property string nodeUninstallAlias: ""
   property string nodeReauthenticateAlias: ""
   property string formMode: ""
   property bool settingsOpen: false
@@ -429,6 +430,10 @@ Panel {
 
   function nodeCanUpgrade(node) {
     return WorkspaceModel.nodeCanUpgrade(node, cliVersion, cliFeatures)
+  }
+
+  function nodeCanUninstall(node) {
+    return WorkspaceModel.nodeCanUninstall(node, cliFeatures, daemonProtocolVersion)
   }
 
   function nodeCanReauthenticate(node) {
@@ -1617,15 +1622,18 @@ Panel {
     }
     if (target.kind === "node") {
       var nodeBusy = nodeShellProcess.running || nodeUpgradeProcess.running
-        || nodeReauthenticateProcess.running || actionProcess.running
+        || nodeUninstallProcess.running || nodeReauthenticateProcess.running
+        || actionProcess.running
       if (nodeCanReauthenticate(target.node) && !nodeBusy) actions.push("authenticate")
       else if (target.node.workspace_owner_eligible
           && nodeIsActionable(target.node.node_id) && activeBoomuxWorkspaceId !== ""
           && !nodeBusy)
         actions.push("shell")
       if (nodeCanUpgrade(target.node) && !nodeBusy) actions.push("update")
+      if (nodeCanUninstall(target.node) && !nodeBusy) actions.push("uninstall")
       if (!actionProcess.running && !nodeShellProcess.running
-          && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running)
+          && !nodeUpgradeProcess.running && !nodeUninstallProcess.running
+          && !nodeReauthenticateProcess.running)
         actions.push("remove")
       return actions
     }
@@ -1721,6 +1729,7 @@ Panel {
       if (action === "shell") createShellOnNode(target.node)
       else if (action === "authenticate") reauthenticateNode(target.node)
       else if (action === "update") updateNode(target.node)
+      else if (action === "uninstall") requestUninstallNode(target.node)
       else if (action === "remove") requestForgetNode(target.node)
       return
     }
@@ -1753,10 +1762,20 @@ Panel {
 
   function requestForgetNode(node) {
     if (!node || node.local || actionProcess.running || nodeShellProcess.running
-        || nodeUpgradeProcess.running || nodeReauthenticateProcess.running) return
+        || nodeUpgradeProcess.running || nodeUninstallProcess.running
+        || nodeReauthenticateProcess.running) return
     panel.enterKeyboardMode()
     removeItemDialog.selectedIndex = 0
     itemToRemove = { kind: "node", node: node }
+  }
+
+  function requestUninstallNode(node) {
+    if (!nodeCanUninstall(node) || actionProcess.running || nodeShellProcess.running
+        || nodeUpgradeProcess.running || nodeUninstallProcess.running
+        || nodeReauthenticateProcess.running) return
+    panel.enterKeyboardMode()
+    removeItemDialog.selectedIndex = 0
+    itemToRemove = { kind: "node-uninstall", node: node }
   }
 
   function cancelRemoveItem() {
@@ -1768,6 +1787,9 @@ Panel {
     if (item.kind === "workspace")
       return "Remove Workspace " + String(item.workspace.name)
         + "? This terminates its running Shells and removes its launchers, retained terminal state, Agent records, attention, and Workspace metadata."
+    if (item.kind === "node-uninstall")
+      return "Uninstall Boomux from remote Node " + String(item.node.alias)
+        + "? This stops every Boomux-managed process on that Node, removes its current Boomux integrations and executable, preserves durable state and configuration, then forgets the local registration. Boomux will show the exact impact and require confirmation in a terminal."
     if (item.kind === "node")
       return "Forget remote Node " + String(item.node.alias)
         + "? This removes only the local registration and cached projection. It does not contact the Node or stop its processes."
@@ -1780,7 +1802,8 @@ Panel {
 
   function removeConfirmText(item) {
     if (!item) return "Remove"
-    if (item.kind === "node") return "Forget"
+    if (item.kind === "node-uninstall") return "Uninstall and Forget"
+    if (item.kind === "node") return "Just Forget"
     if (item.kind === "shell" || item.kind === "command" || item.kind === "agent")
       return "Close"
     return "Remove"
@@ -1799,12 +1822,23 @@ Panel {
     }
     if (item && item.kind === "node") {
       if (item.node.local || actionProcess.running || nodeShellProcess.running
-          || nodeUpgradeProcess.running || nodeReauthenticateProcess.running) return
+          || nodeUpgradeProcess.running || nodeUninstallProcess.running
+          || nodeReauthenticateProcess.running) return
       pendingAction = { kind: "forget-node", key: item.node.node_id }
       actionMessage = "Forgetting " + String(item.node.alias) + "..."
       actionProcess.command = ["boomux", "node", "forget",
         String(item.node.node_id), "--json"]
       actionProcess.running = true
+      return
+    }
+    if (item && item.kind === "node-uninstall") {
+      if (!nodeCanUninstall(item.node) || actionProcess.running || nodeShellProcess.running
+          || nodeUpgradeProcess.running || nodeUninstallProcess.running
+          || nodeReauthenticateProcess.running) return
+      actionMessage = "Opening guided uninstall for " + String(item.node.alias) + "..."
+      nodeUninstallAlias = String(item.node.alias)
+      nodeUninstallProcess.command = WorkspaceModel.guidedNodeUninstallCommand(item.node.node_id)
+      nodeUninstallProcess.running = true
       return
     }
     if (!item || actionProcess.running) return
@@ -1882,7 +1916,8 @@ Panel {
 
   function createShellOnNode(node) {
     if (!node || node.local || nodeShellProcess.running || nodeUpgradeProcess.running
-        || nodeReauthenticateProcess.running || !nodeIsActionable(node.node_id)) return
+        || nodeUninstallProcess.running || nodeReauthenticateProcess.running
+        || !nodeIsActionable(node.node_id)) return
     if (activeBoomuxWorkspaceId === "") {
       showNotice("Shell creation unavailable",
         "Show the Boomux Workspace where the Shell should be created",
@@ -1898,7 +1933,8 @@ Panel {
 
   function updateNode(node) {
     if (!nodeCanUpgrade(node) || nodeUpgradeProcess.running || nodeShellProcess.running
-        || nodeReauthenticateProcess.running || actionProcess.running) return
+        || nodeUninstallProcess.running || nodeReauthenticateProcess.running
+        || actionProcess.running) return
     nodeUpgradeAlias = String(node.alias)
     nodeUpgradeProcess.command = WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)
     nodeUpgradeProcess.running = true
@@ -1907,7 +1943,8 @@ Panel {
 
   function reauthenticateNode(node) {
     if (!nodeCanReauthenticate(node) || nodeReauthenticateProcess.running
-        || nodeUpgradeProcess.running || nodeShellProcess.running || actionProcess.running) return
+        || nodeUpgradeProcess.running || nodeUninstallProcess.running
+        || nodeShellProcess.running || actionProcess.running) return
     nodeReauthenticateAlias = String(node.alias)
     nodeReauthenticateProcess.command
       = WorkspaceModel.guidedNodeReauthenticateCommand(node.node_id)
@@ -2789,6 +2826,22 @@ Panel {
         root.showNotice("Node update failed", root.processError(
           nodeUpgradeStderr.text || nodeUpgradeStdout.text,
           "Could not update " + root.nodeUpgradeAlias), root.currentNoticeScreen(), true)
+      }
+    }
+  }
+
+  Process {
+    id: nodeUninstallProcess
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.actionMessage = "Guided Node uninstall opened for " + root.nodeUninstallAlias
+        root.showNotice("Uninstall and Forget",
+          "Review the impact and confirm the uninstall in the terminal.",
+          root.currentNoticeScreen(), true)
+      } else {
+        root.showNotice("Node uninstall failed",
+          "The guided uninstall terminal could not be opened",
+          root.currentNoticeScreen(), true)
       }
     }
   }
@@ -4728,7 +4781,8 @@ Panel {
                         ? "Update available for this Node" : "Node actions")
                     bordered: true
                     enabled: !nodeShellProcess.running && !nodeUpgradeProcess.running
-                      && !nodeReauthenticateProcess.running && !actionProcess.running
+                      && !nodeUninstallProcess.running && !nodeReauthenticateProcess.running
+                      && !actionProcess.running
                     foreground: root.nodeCanReauthenticate(modelData)
                       || root.nodeCanUpgrade(modelData) ? root.urgent : root.foreground
                     fontSize: Style.font.body
@@ -4910,7 +4964,8 @@ Panel {
               enabled: visible && root.actionMenuTarget.node.workspace_owner_eligible
                 && root.nodeIsActionable(root.actionMenuTarget.node.node_id)
                 && root.activeBoomuxWorkspaceId !== "" && !nodeShellProcess.running
-                && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
+                && !nodeUpgradeProcess.running && !nodeUninstallProcess.running
+                && !nodeReauthenticateProcess.running
               onClicked: root.runActionMenuAction("shell")
               onHovered: function(hovered) { if (hovered)
                 root.actionMenuIndex = root.currentActionMenuActions.indexOf("shell") }
@@ -4925,7 +4980,8 @@ Panel {
               leftAlign: true
               foreground: root.urgent
               enabled: visible && !nodeReauthenticateProcess.running
-                && !nodeUpgradeProcess.running && !nodeShellProcess.running
+                && !nodeUpgradeProcess.running && !nodeUninstallProcess.running
+                && !nodeShellProcess.running
                 && !actionProcess.running
               onClicked: root.runActionMenuAction("authenticate")
               onHovered: function(hovered) { if (hovered)
@@ -4941,7 +4997,8 @@ Panel {
               leftAlign: true
               foreground: root.urgent
               enabled: visible && !nodeUpgradeProcess.running && !nodeShellProcess.running
-                && !nodeReauthenticateProcess.running && !actionProcess.running
+                && !nodeUninstallProcess.running && !nodeReauthenticateProcess.running
+                && !actionProcess.running
               onClicked: root.runActionMenuAction("update")
               onHovered: function(hovered) { if (hovered)
                 root.actionMenuIndex = root.currentActionMenuActions.indexOf("update") }
@@ -4980,14 +5037,33 @@ Panel {
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
+                && root.nodeCanUninstall(root.actionMenuTarget.node)
+              width: parent.width
+              text: "Uninstall Boomux"
+              tooltipText: "Stop remote Boomux processes, remove Boomux, then forget this Node"
+              bordered: false
+              hasCursor: root.currentActionMenuAction === "uninstall"
+              leftAlign: true
+              foreground: root.urgent
+              enabled: visible && !actionProcess.running && !nodeShellProcess.running
+                && !nodeUpgradeProcess.running && !nodeUninstallProcess.running
+                && !nodeReauthenticateProcess.running
+              onClicked: root.runActionMenuAction("uninstall")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("uninstall") }
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
               width: parent.width
               text: "Forget Node"
+              tooltipText: "Remove only the local registration; remote work continues"
               bordered: false
               hasCursor: root.currentActionMenuAction === "remove"
               leftAlign: true
               foreground: root.urgent
               enabled: visible && !actionProcess.running && !nodeShellProcess.running
-                && !nodeUpgradeProcess.running && !nodeReauthenticateProcess.running
+                && !nodeUpgradeProcess.running && !nodeUninstallProcess.running
+                && !nodeReauthenticateProcess.running
               onClicked: root.runActionMenuAction("remove")
               onHovered: function(hovered) { if (hovered)
                 root.actionMenuIndex = root.currentActionMenuActions.indexOf("remove") }

@@ -350,6 +350,33 @@ test("offers exact guided updates only for older capable remote Nodes", () => {
   expect(panel).toContain("cached data retained · retrying automatically")
 })
 
+test("clearly separates guided Node uninstall from local registration forget", () => {
+  const features = ["node_uninstall_coordination"]
+  const remote = {
+    node_id: "node;$(false)", local: false, current: true, stale: false,
+    observed_capabilities: features
+  }
+  expect(model.nodeCanUninstall(remote, features, 48)).toBe(true)
+  expect(model.nodeCanUninstall(Object.assign({}, remote, { current: false }), features, 48)).toBe(false)
+  expect(model.nodeCanUninstall(Object.assign({}, remote, { stale: true }), features, 48)).toBe(false)
+  expect(model.nodeCanUninstall(Object.assign({}, remote, { local: true }), features, 48)).toBe(false)
+  expect(model.nodeCanUninstall(remote, [], 48)).toBe(false)
+  expect(model.nodeCanUninstall(remote, features, 47)).toBe(false)
+  expect(model.guidedNodeUninstallCommand(remote.node_id)).toEqual([
+    "omarchy-launch-tui", "--app-id=org.omarchy.boomux-node-uninstall",
+    "boomux", "node", "uninstall", "node;$(false)"
+  ])
+
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('text: "Uninstall Boomux"')
+  expect(panel).toContain('return "Uninstall and Forget"')
+  expect(panel).toContain('return "Just Forget"')
+  expect(panel).toContain("preserves durable state and configuration")
+  expect(panel).toContain("It does not contact the Node or stop its processes.")
+  expect(panel).toContain("WorkspaceModel.guidedNodeUninstallCommand(item.node.node_id)")
+  expect(panel).not.toContain('actionMessage = "Node uninstalled"')
+})
+
 test("offers exact guided reauthentication only for authentication-required Nodes", () => {
   const features = ["node_reauthentication"]
   const remote = {
@@ -489,7 +516,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.1.2")
+  expect(manifest.version).toBe("2.2.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 

@@ -76,7 +76,8 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
 | Authenticate in Nodes | Open interactive authentication for an existing registered Node |
 | Update in Nodes | Reconnect, verify, and update an older remote Boomux helper in a native terminal |
-| Forget Node | Confirm removal of the local Node registration without contacting the remote Node |
+| Uninstall Boomux | Confirm **Uninstall and Forget**, then review the exact remote process and data impact in a native terminal |
+| Forget Node | Confirm **Just Forget** to remove only the local registration without contacting the remote Node |
 | `D` in Agents | Dismiss the selected notification |
 | `N` | Create a Workspace |
 | `R` | Refresh |
@@ -153,6 +154,14 @@ A newer remote is never downgraded; the pane instead reports **Control machine
 update needed**. Cached transient states remain visible and the guided flow
 revalidates the exact Node live before changing it.
 
+For a current Node that advertises protocol-48 uninstall coordination,
+**Uninstall Boomux** is separate from **Forget Node**. **Uninstall and Forget**
+opens `boomux node uninstall` with the exact Node ID in a native terminal. Boomux
+shows the process, integration, executable, durable-data, configuration, and
+registration impact before requiring confirmation. **Just Forget** never
+contacts the remote Node, stops no remote processes, and removes only the local
+registration and cached projection.
+
 Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 
 ```json
@@ -170,13 +179,15 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 - Remote cached resources stay visible but become non-actionable when stale or
   unavailable. The guided Node update is the only stale-row exception because
   Boomux reconnects and verifies the exact registered Node before replacement.
-- Destructive local actions require confirmation and use exact resource IDs.
+- Destructive actions require confirmation and use exact resource IDs. Remote
+  uninstall requires a second interactive confirmation from Boomux.
 - Closing a Shell can terminate its process and delete retained terminal state.
   Removing a launcher does not stop applications it already started.
 - The plugin never reads credentials, attachment environments, or remote terminal
   content.
-- The plugin never invokes SSH itself. Guided Node setup and updates run through
-  Boomux in a native terminal so authentication and confirmation stay interactive.
+- The plugin never invokes SSH itself. Guided Node setup, updates, and uninstall
+  run through Boomux in a native terminal so authentication and confirmation
+  stay interactive.
 - New Boomux versions own release discovery through `boomux update status`; the
   plugin opens `boomux update` in a native terminal and passively checks update
   status afterward so completion or failure remains visible in the pane. It never
