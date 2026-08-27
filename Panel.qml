@@ -69,6 +69,8 @@ Panel {
   property bool globalWorkspacesSupported: false
   property var cliFeatures: []
   property bool projectListSupported: false
+  property bool atomicWorkspaceCreationSupported: false
+  property bool workspaceDefaultCwdSupported: false
   property bool integrationStatusSupported: false
   property bool localUpdateStatusSupported: false
   property bool guidedLocalUpdateSupported: false
@@ -81,6 +83,11 @@ Panel {
   property string webDashboardUrl: ""
   property string webOpencodeUrl: ""
   property bool projectRootsConfigured: false
+  property bool projectDiscoveryLoaded: false
+  property string projectLoadedNodeId: ""
+  property bool projectChooserRequested: false
+  property double projectDiscoveryExpiresAt: 0
+  property bool projectRefreshQueued: false
   property int daemonProtocolVersion: 0
   property bool agentBaselineReady: false
   property var previousAgentStates: ({})
@@ -112,7 +119,6 @@ Panel {
   property string nodeReauthenticateAlias: ""
   property string formMode: ""
   property bool settingsOpen: false
-  property string workspaceCreationMode: "choice"
   property string projectQuery: ""
   property int selectedProjectIndex: 0
   property string projectError: ""
@@ -123,6 +129,7 @@ Panel {
   property bool directoryPickerOpen: false
   property string directoryPickerPath: ""
   property int directoryPickerIndex: 0
+  property string directoryPickerPurpose: "resource"
   property var agentHosts: []
   property string agentHostName: ""
   property var agentHostCommand: []
@@ -131,8 +138,17 @@ Panel {
   property string agentHostActiveNodeId: ""
   property var pendingAction: null
   property var pendingWorkspaceOpen: null
-  property var pendingWorkspace: null
-  property bool workspaceFormStartPending: false
+  property var workspaceCreateRequested: null
+  property bool workspaceCreateStatusQueued: false
+  property bool workspaceCreateStatusActive: false
+  property bool workspaceCreateSnapshotQueued: false
+  property bool workspaceCreateSnapshotActive: false
+  property var pendingWorkspaceCreation: null
+  property double pendingWorkspaceConfirmationDeadline: 0
+  property var defaultPathTarget: null
+  property var defaultCwdRequest: null
+  property var pendingDefaultCwd: null
+  property double pendingDefaultCwdConfirmationDeadline: 0
   property var pendingShell: null
   property string projectRequestedNodeId: ""
   property string projectActiveNodeId: ""
@@ -502,6 +518,7 @@ Panel {
   }
 
   function refreshInstalledState() {
+    invalidateProjectDiscovery()
     if (!capabilityProcess.running) capabilityProcess.running = true
     refresh()
   }
@@ -547,21 +564,38 @@ Panel {
     completedAgents = ({})
     automaticAttentionRevisions = ({})
     agentBaselineReady = false
+    invalidateProjectDiscovery()
+    if (workspaceCreateRequested && !daemonStartProcess.running) {
+      failWorkspaceCreation("Boomux went offline before creation could obtain a fresh Node snapshot")
+    }
+    if (pendingDefaultCwd) {
+      actionMessage = "Default path changed; waiting for Boomux to confirm the snapshot"
+    }
+    if (pendingWorkspaceCreation) {
+      actionMessage = "Workspace created; waiting for Boomux to confirm the snapshot"
+    }
     error = message
   }
 
-  function parseDaemonStatus(raw) {
+  function parseDaemonStatus(raw, explicitCreationCheck) {
     try {
       var data = parseEnvelope(raw, "daemon.status")
       if (data.status !== "running") {
+        if (explicitCreationCheck && workspaceCreateRequested) {
+          actionMessage = "Starting Boomux..."
+          daemonStartProcess.running = true
+        }
         setOffline("Boomux daemon is stopped")
         return
       }
       daemonProtocolVersion = Number(data.protocol_version || 0)
-      refreshData()
+      if (explicitCreationCheck) requestFreshWorkspaceCreateSnapshot()
+      else refreshData()
       startEventWait()
     } catch (exception) {
-      setOffline("Boomux daemon is stopped")
+      if (explicitCreationCheck)
+        failWorkspaceCreation("Could not validate Boomux daemon status before creation")
+      else setOffline("Boomux daemon is stopped")
     }
   }
 
@@ -577,6 +611,10 @@ Panel {
       cliVersion = String(data.cli_version || "")
       cliFeatures = Array.isArray(data.features) ? data.features : []
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
+      atomicWorkspaceCreationSupported = data.json_commands.indexOf("workspace.create") >= 0
+        && cliFeatures.indexOf("atomic_workspace_shell_creation") >= 0
+      workspaceDefaultCwdSupported = data.json_commands.indexOf("workspace.set-default-cwd") >= 0
+        && cliFeatures.indexOf("workspace_placement_default_cwd") >= 0
       integrationStatusSupported = data.json_commands.indexOf("integration.status") >= 0
       localUpdateStatusSupported = data.json_commands.indexOf("update.status") >= 0
         && cliFeatures.indexOf("local_update_status") >= 0
@@ -601,6 +639,8 @@ Panel {
     } catch (exception) {
       cliVersion = ""
       projectListSupported = false
+      atomicWorkspaceCreationSupported = false
+      workspaceDefaultCwdSupported = false
       integrationStatusSupported = false
       localUpdateStatusSupported = false
       guidedLocalUpdateSupported = false
@@ -624,9 +664,13 @@ Panel {
     return WorkspaceModel.normalizeAgent(source, node, workspaceName)
   }
 
-  function parseNodeSnapshot(raw) {
+  function parseNodeSnapshot(raw, explicitCreationSnapshot) {
     try {
-      if (snapshotActiveEpoch !== pollEpoch) return
+      if (snapshotActiveEpoch !== pollEpoch) {
+        if (explicitCreationSnapshot)
+          failWorkspaceCreation("Boomux state changed before the fresh Node snapshot completed")
+        return
+      }
       var treeScrollY = workspaceTreeList ? workspaceTreeList.contentY : 0
       var data = parseEnvelope(raw, "node.snapshot")
       var snapshot = WorkspaceModel.normalizeNodeSnapshot(data)
@@ -637,21 +681,19 @@ Panel {
       refreshDesktopTerminal()
       applyAgentSnapshot(snapshot.agents)
       online = true
-      if (pendingWorkspace) {
-        for (var p = 0; p < workspaces.length; p++) {
-          if ((!pendingWorkspace.key || workspaces[p].key === pendingWorkspace.key)
-              && workspaces[p].name === pendingWorkspace.name
-              && (!pendingWorkspace.global || workspaces[p].is_global)) {
-            resolvePendingWorkspace(workspaces[p])
-            break
-          }
-        }
-      }
       preserveSelections()
       if (workspaceModelChanged) restoreWorkspaceTreeScroll(treeScrollY)
       openPendingShellIfPresent()
-      maybeShowPendingWorkspaceForm()
+      resolvePendingWorkspaceCreation()
+      resolvePendingDefaultCwd()
+      ensureLocalProjectDiscovery()
+      if (explicitCreationSnapshot) maybeStartWorkspaceCreation()
+      scheduleMutationConfirmation()
     } catch (exception) {
+      if (explicitCreationSnapshot) {
+        failWorkspaceCreation("Could not validate the fresh Boomux Node snapshot")
+        return
+      }
       error = "Could not read federated Boomux state"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
@@ -798,15 +840,6 @@ Panel {
       var workspaceModelChanged = applyWorkspaceSnapshot(nextWorkspaces)
       online = true
 
-      if (pendingWorkspace) {
-        for (var i = 0; i < workspaces.length; i++) {
-          if (workspaces[i].node_id === pendingWorkspace.nodeId
-              && workspaces[i].name === pendingWorkspace.name) {
-            resolvePendingWorkspace(workspaces[i])
-            break
-          }
-        }
-      }
       if (!selectedWorkspace || selectedWorkspaceKey === "")
         selectedWorkspaceKey = workspaces.length > 0 ? workspaces[0].key : ""
       syncWorkspaceIndex()
@@ -814,7 +847,6 @@ Panel {
       else workspaceDetail = null
       clampSelection()
       if (workspaceModelChanged) restoreWorkspaceTreeScroll(treeScrollY)
-      maybeShowPendingWorkspaceForm()
     } catch (exception) {
       online = false
       workspaces = []
@@ -838,21 +870,6 @@ Panel {
       shells = []
       console.warn("io.github.gardnmi.boomux:", exception)
     }
-  }
-
-  function resolvePendingWorkspace(workspace) {
-    var initialShell = pendingWorkspace ? pendingWorkspace.initialShell : null
-    selectedWorkspaceKey = workspace.key
-    requestWorkspaceSelection(workspace)
-    if (initialShell && workspace.is_global && actionProcess.running) return
-    pendingWorkspace = null
-    if (!initialShell || !workspace.is_global) return
-    pendingAction = { kind: "create-workspace-shell",
-      key: workspace.key + "\u001fnew", nodeId: initialShell.nodeId }
-    actionMessage = "Setting default directory..."
-    actionProcess.command = WorkspaceModel.initialWorkspaceShellCommand(
-      workspace, initialShell.cwd, initialShell.nodeId)
-    actionProcess.running = true
   }
 
   function parseAgents(raw) {
@@ -904,7 +921,7 @@ Panel {
 
   function parseProjects(raw) {
     try {
-      var owner = selectedCreationNode()
+      var owner = nodeFor(projectActiveNodeId)
       if (!owner || !WorkspaceModel.projectDiscoveryResponseCurrent(
           projectRequestedNodeId, projectActiveNodeId, owner.node_id)) return
       var data = parseEnvelope(raw, "project.list")
@@ -921,13 +938,19 @@ Panel {
       }
       projects = nextProjects
       projectRootsConfigured = data.roots_configured
+      projectDiscoveryLoaded = true
+      projectLoadedNodeId = owner.node_id
+      projectDiscoveryExpiresAt = Date.now() + 30000
       projectError = data.warnings.length > 0 ? data.warnings.join(" · ") : ""
       clampProjectSelection()
-      if (formMode === "workspace" && workspaceCreationMode === "project"
-          && !projectRootsConfigured) selectWorkspaceCreationMode("new")
+      openFreshProjectChooser()
     } catch (exception) {
       projects = []
       projectRootsConfigured = false
+      projectDiscoveryLoaded = true
+      projectLoadedNodeId = ""
+      projectDiscoveryExpiresAt = Date.now() + 5000
+      projectChooserRequested = false
       projectError = "Could not discover configured projects"
       console.warn("io.github.gardnmi.boomux:", exception)
     }
@@ -1001,16 +1024,21 @@ Panel {
     if (!projectListSupported) return
     projects = []
     projectRootsConfigured = false
+    projectDiscoveryLoaded = false
+    projectLoadedNodeId = ""
+    projectDiscoveryExpiresAt = 0
     selectedProjectIndex = 0
     projectError = ""
-    var node = selectedCreationNode()
-    if (!node || (!node.local && !nodeIsActionable(node.node_id, "remote_project_discovery"))) {
+    var node = WorkspaceModel.localWorkspaceCreationNode(nodes)
+    if (!node) {
       projectRequestedNodeId = ""
-      projectError = "Project discovery is unavailable for this Node"
+      projectDiscoveryLoaded = true
+      projectError = "No eligible local Node is available for project discovery"
       return
     }
     projectRequestedNodeId = WorkspaceModel.projectDiscoveryIdentity(node.node_id)
-    if (!projectListProcess.running) startProjectDiscovery()
+    if (projectListProcess.running) projectRefreshQueued = true
+    else startProjectDiscovery()
   }
 
   function startProjectDiscovery() {
@@ -1020,6 +1048,36 @@ Panel {
     projectActiveNodeId = projectRequestedNodeId
     projectListProcess.command = WorkspaceModel.projectDiscoveryCommand(node)
     projectListProcess.running = true
+  }
+
+  function ensureLocalProjectDiscovery() {
+    if (!opened || !online || !projectListSupported) return
+    var node = WorkspaceModel.localWorkspaceCreationNode(nodes)
+    if (!node) {
+      invalidateProjectDiscovery()
+      return
+    }
+    if (projectListProcess.running) {
+      if (projectActiveNodeId !== node.node_id) {
+        projectRequestedNodeId = node.node_id
+        projectRefreshQueued = true
+      }
+      return
+    }
+    if (projectDiscoveryLoaded && projectLoadedNodeId === node.node_id
+        && Date.now() < projectDiscoveryExpiresAt) return
+    loadProjects()
+  }
+
+  function invalidateProjectDiscovery() {
+    projects = []
+    projectRootsConfigured = false
+    projectDiscoveryLoaded = false
+    projectLoadedNodeId = ""
+    projectDiscoveryExpiresAt = 0
+    projectRequestedNodeId = ""
+    projectChooserRequested = false
+    projectRefreshQueued = false
   }
 
   function filterProjects() {
@@ -1146,26 +1204,232 @@ Panel {
   function finishRefresh() {
     refreshPending = Math.max(0, refreshPending - 1)
     refreshing = refreshPending > 0
-    maybeShowPendingWorkspaceForm()
   }
 
-  function requestWorkspaceForm() {
-    if (online) {
-      showForm("workspace")
+  function workspaceMutationBusy() {
+    return workspaceCreateProcess.running || defaultCwdProcess.running
+      || daemonStartProcess.running || workspaceCreateRequested !== null
+      || pendingWorkspaceCreation !== null || defaultCwdRequest !== null
+      || pendingDefaultCwd !== null || actionProcess.running || openProcess.running
+  }
+
+  function failWorkspaceCreation(message) {
+    workspaceCreateRequested = null
+    workspaceCreateStatusQueued = false
+    workspaceCreateSnapshotQueued = false
+    showActionFailure("Workspace creation unavailable", message)
+  }
+
+  function requestGeneratedWorkspace(cwd) {
+    var path = String(cwd || "")
+    if (workspaceMutationBusy()) return
+    if (path.indexOf("/") !== 0) {
+      showActionFailure("Workspace creation unavailable", "Workspace paths must be absolute")
       return
     }
-    if (workspaceFormStartPending || daemonStartProcess.running) return
-    workspaceFormStartPending = true
-    actionMessage = "Starting Boomux..."
-    if (daemonStatusProcess.running) daemonStatusProcess.running = false
-    daemonStartProcess.running = true
+    if (!atomicWorkspaceCreationSupported) {
+      showActionFailure("Workspace creation unavailable",
+        "This Boomux CLI does not support atomic Workspace and Shell creation")
+      return
+    }
+    workspaceCreateRequested = { cwd: path }
+    actionMessage = "Checking Boomux before creation..."
+    requestFreshWorkspaceCreateStatus()
   }
 
-  function maybeShowPendingWorkspaceForm() {
-    if (!workspaceFormStartPending || refreshing || !online) return
-    workspaceFormStartPending = false
+  function requestFreshWorkspaceCreateStatus() {
+    if (!workspaceCreateRequested) return
+    if (daemonStatusProcess.running) {
+      workspaceCreateStatusQueued = true
+      return
+    }
+    workspaceCreateStatusQueued = false
+    workspaceCreateStatusActive = true
+    daemonStatusProcess.running = true
+  }
+
+  function requestFreshWorkspaceCreateSnapshot() {
+    if (!workspaceCreateRequested) return
+    if (!federationAvailable || !globalWorkspacesAvailable) {
+      failWorkspaceCreation(
+        "The refreshed Boomux daemon does not support coordinated Node snapshots")
+      return
+    }
+    if (nodeSnapshotProcess.running) {
+      workspaceCreateSnapshotQueued = true
+      return
+    }
+    workspaceCreateSnapshotQueued = false
+    workspaceCreateSnapshotActive = true
+    snapshotActiveEpoch = pollEpoch
+    nodeSnapshotProcess.running = true
+  }
+
+  function maybeStartWorkspaceCreation() {
+    if (!workspaceCreateRequested || workspaceCreateProcess.running) return
+    if (!online || !globalWorkspacesAvailable) {
+      workspaceCreateRequested = null
+      showActionFailure("Workspace creation unavailable",
+        "A current coordinated Boomux snapshot is required")
+      return
+    }
+    var node = WorkspaceModel.localWorkspaceCreationNode(nodes)
+    if (!node) {
+      workspaceCreateRequested = null
+      showActionFailure("Workspace creation unavailable",
+        "No current eligible local Node is available")
+      return
+    }
+    var request = workspaceCreateRequested
+    workspaceCreateRequested = null
+    workspaceCreateProcess.command = WorkspaceModel.atomicWorkspaceCreateCommand(
+      node.node_id, request.cwd)
+    workspaceCreateProcess.expectedNodeId = node.node_id
+    workspaceCreateProcess.running = true
+  }
+
+  function resolvePendingWorkspaceCreation() {
+    var resolved = WorkspaceModel.resolveAtomicWorkspaceCreation(
+      pendingWorkspaceCreation, workspaces)
+    if (!resolved) {
+      if (WorkspaceModel.atomicWorkspaceCreationConflicts(
+          pendingWorkspaceCreation, workspaces)) {
+        pendingWorkspaceCreation = null
+        pendingWorkspaceConfirmationDeadline = 0
+        showActionFailure("Workspace creation failed",
+          "The authoritative snapshot did not contain the returned placement and Shell identities")
+      }
+      return
+    }
+    pendingWorkspaceCreation = null
+    pendingWorkspaceConfirmationDeadline = 0
+    selectedWorkspaceKey = resolved.workspace.key
+    expandedWorkspaceKey = resolved.workspace.key
+    actionMessage = "Workspace created"
+  }
+
+  function showProjectChooser() {
+    if (workspaceMutationBusy()) return
+    if (!online) {
+      showActionFailure("Projects unavailable", "Boomux must be online to refresh projects")
+      return
+    }
+    if (!projectListSupported) {
+      showActionFailure("Projects unavailable", "This Boomux CLI does not support project discovery")
+      return
+    }
+    projectChooserRequested = true
+    loadProjects()
+  }
+
+  function openFreshProjectChooser() {
+    if (!projectChooserRequested || !online) return
+    projectChooserRequested = false
+    if (!projectRootsConfigured) {
+      showActionFailure("Projects unavailable", "No Boomux project roots are configured")
+      return
+    }
+    panel.enterKeyboardMode()
+    formMode = "project"
+    projectSearchField.text = ""
+    projectQuery = ""
+    selectedProjectIndex = 0
     actionMessage = ""
-    showForm("workspace")
+    Qt.callLater(function() { projectSearchField.forceActiveFocus() })
+  }
+
+  function workspaceCanChangeDefaultPath(workspace) {
+    return workspaceDefaultCwdSupported && daemonProtocolVersion >= 49
+      && !workspaceMutationBusy()
+      && WorkspaceModel.localActiveWorkspacePlacement(workspace, nodes) !== null
+  }
+
+  function requestWorkspaceDefaultPath(workspace) {
+    if (!workspaceCanChangeDefaultPath(workspace)) return
+    var placement = WorkspaceModel.localActiveWorkspacePlacement(workspace, nodes)
+    defaultPathTarget = {
+      workspaceKey: workspace.key,
+      workspaceId: workspace.id,
+      nodeId: placement.node_id,
+      ownerWorkspaceId: placement.workspace_id
+    }
+    formMode = "default-path"
+    directoryPickerPurpose = "workspace-default"
+    directoryPickerPath = String(placement.default_cwd || home)
+    directoryPickerIndex = 0
+    directoryPickerOpen = true
+    panel.enterKeyboardMode()
+    Qt.callLater(function() { directoryPickerKeyHandler.forceActiveFocus() })
+  }
+
+  function submitWorkspaceDefaultPath(path) {
+    var target = defaultPathTarget
+    var workspace = target ? workspaceForKey(target.workspaceKey) : null
+    var placement = WorkspaceModel.localActiveWorkspacePlacement(workspace, nodes)
+    if (!target || !placement || defaultCwdProcess.running
+        || workspace.id !== target.workspaceId || placement.node_id !== target.nodeId
+        || placement.workspace_id !== target.ownerWorkspaceId) {
+      cancelForm()
+      showActionFailure("Default path change unavailable",
+        "The local Workspace placement changed; reopen its menu")
+      return
+    }
+    defaultCwdRequest = {
+      workspaceId: target.workspaceId,
+      nodeId: target.nodeId,
+      ownerWorkspaceId: target.ownerWorkspaceId,
+      defaultCwd: String(path)
+    }
+    defaultCwdProcess.command = WorkspaceModel.workspaceDefaultCwdCommand(
+      target.workspaceId, target.nodeId, path)
+    cancelForm()
+    actionMessage = "Changing Workspace default path..."
+    defaultCwdProcess.running = true
+  }
+
+  function resolvePendingDefaultCwd() {
+    var resolved = WorkspaceModel.resolveWorkspaceDefaultCwd(pendingDefaultCwd, workspaces)
+    if (!resolved) {
+      if (WorkspaceModel.workspaceDefaultCwdConflicts(pendingDefaultCwd, workspaces)) {
+        pendingDefaultCwd = null
+        pendingDefaultCwdConfirmationDeadline = 0
+        showActionFailure("Default path change failed",
+          "The authoritative Workspace placement no longer has the returned default path")
+      }
+      return
+    }
+    pendingDefaultCwd = null
+    pendingDefaultCwdConfirmationDeadline = 0
+    actionMessage = "Workspace default path changed; existing Shells were not restarted"
+  }
+
+  function scheduleMutationConfirmation() {
+    if (!pendingWorkspaceCreation && !pendingDefaultCwd) {
+      mutationConfirmationTimer.stop()
+      return
+    }
+    mutationConfirmationTimer.restart()
+  }
+
+  function continueMutationConfirmation() {
+    var now = Date.now()
+    var warnings = []
+    if (pendingWorkspaceCreation && now >= pendingWorkspaceConfirmationDeadline) {
+      pendingWorkspaceCreation = null
+      pendingWorkspaceConfirmationDeadline = 0
+      warnings.push("Workspace creation completed but could not be confirmed; refresh to verify it")
+    }
+    if (pendingDefaultCwd && now >= pendingDefaultCwdConfirmationDeadline) {
+      pendingDefaultCwd = null
+      pendingDefaultCwdConfirmationDeadline = 0
+      warnings.push("Default path change completed but could not be confirmed; refresh to verify it")
+    }
+    if (warnings.length > 0)
+      showActionFailure("Boomux snapshot confirmation incomplete", warnings.join(" · "))
+    if (pendingWorkspaceCreation || pendingDefaultCwd) {
+      refresh()
+      mutationConfirmationTimer.restart()
+    }
   }
 
   function selectTab(tab) {
@@ -1637,8 +1901,10 @@ Panel {
     if (!target) return []
     var actions = []
     if (target.kind === "workspace") {
+      if (workspaceMutationBusy()) return actions
       if (workspaceCreationReason(target.workspace) === "" && !actionProcess.running
           && !openProcess.running) actions.push("shell")
+      if (workspaceCanChangeDefaultPath(target.workspace)) actions.push("default-path")
       if (workspaceCanRename(target.workspace)) actions.push("rename")
       if (workspaceCanRemove(target.workspace)) actions.push("remove")
       return actions
@@ -1681,7 +1947,7 @@ Panel {
 
   function itemCanRename(item) {
     var node = item ? nodeFor(item.node_id) : null
-    return !!item && !!node && node.local && !actionProcess.running && !openProcess.running
+    return !!item && !!node && node.local && !workspaceMutationBusy()
   }
 
   function requestRename(target) {
@@ -1744,6 +2010,7 @@ Panel {
     if (target.kind === "workspace") {
       var workspace = target.workspace
       if (action === "shell") showWorkspaceForm(workspace, "shell")
+      else if (action === "default-path") requestWorkspaceDefaultPath(workspace)
       else if (action === "rename") requestRename(target)
       else if (action === "remove") requestRemoveWorkspace(workspace)
       return
@@ -1770,7 +2037,7 @@ Panel {
   }
 
   function workspaceCanRemove(workspace) {
-    if (!workspace || actionProcess.running || openProcess.running) return false
+    if (!workspace || workspaceMutationBusy()) return false
     if (workspace.is_global) return true
     var node = nodeFor(workspace.node_id)
     return !globalWorkspacesAvailable && !!node && node.local
@@ -2087,20 +2354,18 @@ Panel {
   }
 
   function showForm(mode, preferredNodeId) {
-    if (mode !== "workspace") {
-      var blocked = WorkspaceModel.workspaceCreationBlockReason(
-        workspaceDetail, eligibleCreationNodes.length)
-      if (blocked !== "") {
-        showActionFailure("Creation unavailable", blocked)
-        return
-      }
+    if (mode !== "shell" && mode !== "agent") return
+    var blocked = WorkspaceModel.workspaceCreationBlockReason(
+      workspaceDetail, eligibleCreationNodes.length)
+    if (blocked !== "") {
+      showActionFailure("Creation unavailable", blocked)
+      return
     }
-    if (globalWorkspacesAvailable && (mode === "workspace"
-        || (workspaceDetail && workspaceDetail.is_global))) {
+    if (globalWorkspacesAvailable && workspaceDetail && workspaceDetail.is_global) {
       var preferredNode = nodeFor(preferredNodeId)
       creationNodeId = preferredNode && preferredNode.workspace_owner_eligible
         ? preferredNode.node_id : WorkspaceModel.defaultCreationNodeId(nodes)
-      if (eligibleCreationNodes.length === 0 && mode !== "workspace") {
+      if (eligibleCreationNodes.length === 0) {
         showActionFailure("Creation unavailable",
           "No Node is currently eligible for Workspace placement")
         return
@@ -2120,18 +2385,10 @@ Panel {
     nameFieldEdited = false
     nameField.text = ""
     applyCreationNodeDefaults()
-    if (mode === "workspace") {
-      projectSearchField.text = ""
-      projectQuery = ""
-      selectedProjectIndex = 0
-      workspaceCreationMode = "choice"
-    } else {
-      requestShellNameSuggestion()
-      if (mode === "agent") loadAgentHosts()
-    }
+    requestShellNameSuggestion()
+    if (mode === "agent") loadAgentHosts()
     Qt.callLater(function() {
-      if (mode === "workspace") existingProjectModeButton.forceActiveFocus()
-      else nameField.forceActiveFocus()
+      nameField.forceActiveFocus()
     })
   }
 
@@ -2145,7 +2402,7 @@ Panel {
   function applyCreationNodeDefaults() {
     var placement = workspaceDetail && workspaceDetail.is_global
       ? placementForNode(workspaceDetail, creationNodeId) : workspaceDetail
-    var cwd = formMode !== "workspace" && placement && placement.default_cwd
+    var cwd = placement && placement.default_cwd
       ? String(placement.default_cwd) : ""
     cwdIsExact = cwd !== ""
     cwdField.text = cwd
@@ -2158,29 +2415,24 @@ Panel {
     nameField.text = ""
     nameFieldEdited = false
     applyCreationNodeDefaults()
-    if (formMode === "workspace" && projectListSupported) loadProjects()
-    else {
-      requestShellNameSuggestion()
-      if (formMode === "agent") loadAgentHosts()
-    }
+    requestShellNameSuggestion()
+    if (formMode === "agent") loadAgentHosts()
   }
 
   function formCanSubmit() {
-    if (formMode === "workspace" && workspaceCreationMode === "choice") return false
-    var hasName = formMode === "workspace" && workspaceCreationMode === "project"
-      ? selectedProject !== null : nameField.text.trim() !== ""
-    if (!hasName) return false
-    if (formMode === "workspace" && workspaceCreationMode === "new"
-        && cwdField.text.trim() === "") return false
+    if (formMode === "project") return online && selectedProject !== null
+      && projectRootsConfigured && projectDiscoveryLoaded && !workspaceMutationBusy()
+    if (nameField.text.trim() === "") return false
     if (formMode === "agent" && agentHostCommand.length === 0) return false
-    if (formMode !== "workspace" && workspaceCreationReason(workspaceDetail) !== "") return false
+    if (workspaceCreationReason(workspaceDetail) !== "") return false
     if (!globalWorkspacesAvailable) return true
     return creationNode !== null
   }
 
   function cancelForm() {
-    workspaceFormStartPending = false
     directoryPickerOpen = false
+    directoryPickerPurpose = "resource"
+    defaultPathTarget = null
     projectRequestedNodeId = ""
     agentHostRequestedNodeId = ""
     agentHosts = []
@@ -2192,19 +2444,6 @@ Panel {
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
-  function selectWorkspaceCreationMode(mode) {
-    workspaceCreationMode = mode
-    actionMessage = ""
-    Qt.callLater(function() {
-      if (mode === "choice") existingProjectModeButton.forceActiveFocus()
-      else if (mode === "project") {
-        loadProjects()
-        projectSearchField.forceActiveFocus()
-      }
-      else nameField.forceActiveFocus()
-    })
-  }
-
   function openDirectoryPicker() {
     var cwd = cwdIsExact ? cwdField.text : cwdField.text.trim()
     directoryPickerPath = cwd.indexOf("/") === 0 ? cwd : home
@@ -2214,6 +2453,10 @@ Panel {
   }
 
   function closeDirectoryPicker() {
+    if (directoryPickerPurpose === "workspace-default") {
+      cancelForm()
+      return
+    }
     directoryPickerOpen = false
     Qt.callLater(function() { browseButton.forceActiveFocus() })
   }
@@ -2245,57 +2488,48 @@ Panel {
 
   function chooseDirectory() {
     var path = directoryPickerPath
+    if (directoryPickerPurpose === "workspace-default") {
+      submitWorkspaceDefaultPath(path)
+      return
+    }
     cwdField.text = path
     cwdIsExact = true
-    if (formMode === "workspace" && workspaceCreationMode === "new"
-        && nameField.text.trim() === "") {
-      var parts = path.replace(/\/+$/, "").split("/")
-      nameField.text = parts.length > 0 ? parts[parts.length - 1] : ""
-    }
     directoryPickerOpen = false
     Qt.callLater(function() { cwdField.forceActiveFocus() })
   }
 
   function submitForm() {
+    if (formMode === "project") {
+      if (!online || !projectDiscoveryLoaded || !selectedProject) {
+        actionMessage = "Select a discovered project or cancel"
+        return
+      }
+      var projectPath = String(selectedProject.path)
+      cancelForm()
+      requestGeneratedWorkspace(projectPath)
+      return
+    }
     if (actionProcess.running) return
     var name = nameField.text.trim()
     var cwd = cwdIsExact ? cwdField.text : cwdField.text.trim()
-    if (formMode === "workspace" && workspaceCreationMode === "project") {
-      if (!selectedProject) {
-        actionMessage = "Select a discovered project"
-        return
-      }
-      name = String(selectedProject.name)
-      cwd = String(selectedProject.path)
-    }
     if (name === "") {
       actionMessage = "A name is required"
       return
     }
-    if (formMode !== "workspace") {
-      var blocked = WorkspaceModel.workspaceCreationBlockReason(
-        workspaceDetail, eligibleCreationNodes.length)
-      if (blocked !== "") {
-        actionMessage = blocked
-        return
-      }
+    var blocked = WorkspaceModel.workspaceCreationBlockReason(
+      workspaceDetail, eligibleCreationNodes.length)
+    if (blocked !== "") {
+      actionMessage = blocked
+      return
     }
     var owner = creationNode
-    if (globalWorkspacesAvailable && ((formMode === "workspace" && cwd !== "")
-        || (workspaceDetail && workspaceDetail.is_global)) && !owner) {
+    if (globalWorkspacesAvailable && workspaceDetail && workspaceDetail.is_global && !owner) {
       actionMessage = "Select a Node for this Workspace resource"
       return
     }
 
     var command
-    if (formMode === "workspace") {
-      pendingAction = { kind: "create-workspace", key: "new:" + name,
-        nodeId: owner ? owner.node_id : "local" }
-      pendingWorkspace = { name: name, global: globalWorkspacesAvailable,
-        initialShell: globalWorkspacesAvailable
-          ? { nodeId: owner.node_id, cwd: cwd } : null }
-      command = WorkspaceModel.workspaceCreateCommand(name, cwd, globalWorkspacesAvailable)
-    } else if (formMode === "shell" && workspaceDetail) {
+    if (formMode === "shell" && workspaceDetail) {
       pendingAction = { kind: "create-shell", key: workspaceDetail.key + "\u001fnew:" + name,
         nodeId: owner.node_id }
       command = WorkspaceModel.shellCreateCommand(
@@ -2577,6 +2811,8 @@ Panel {
         root.cliVersion = ""
         root.capabilitiesReady = true
         root.projectListSupported = false
+        root.atomicWorkspaceCreationSupported = false
+        root.workspaceDefaultCwdSupported = false
         root.federationSupported = false
         root.globalWorkspacesSupported = false
       }
@@ -2644,18 +2880,26 @@ Panel {
     stdout: StdioCollector { id: projectListStdout; waitForEnd: true }
     stderr: StdioCollector { id: projectListStderr; waitForEnd: true }
     onExited: function(exitCode) {
-      var owner = root.selectedCreationNode()
+      var superseded = root.projectRefreshQueued
+      var owner = root.nodeFor(root.projectActiveNodeId)
       var current = owner && WorkspaceModel.projectDiscoveryResponseCurrent(
         root.projectRequestedNodeId, root.projectActiveNodeId, owner.node_id)
-      if (exitCode === 0) root.parseProjects(projectListStdout.text)
-      else if (current) {
+      if (exitCode === 0 && !superseded) root.parseProjects(projectListStdout.text)
+      else if (exitCode !== 0 && current && !superseded) {
         root.projects = []
+        root.projectRootsConfigured = false
+        root.projectDiscoveryLoaded = true
+        root.projectLoadedNodeId = owner.node_id
+        root.projectDiscoveryExpiresAt = Date.now() + 5000
+        root.projectChooserRequested = false
         root.projectError = root.processError(projectListStderr.text || projectListStdout.text,
           "Could not discover configured projects")
       }
-      if (root.projectRequestedNodeId !== ""
-          && root.projectRequestedNodeId !== root.projectActiveNodeId)
+      if (superseded || (root.projectRequestedNodeId !== ""
+          && root.projectRequestedNodeId !== root.projectActiveNodeId)) {
+        root.projectRefreshQueued = false
         Qt.callLater(function() { root.startProjectDiscovery() })
+      }
     }
   }
 
@@ -2706,9 +2950,18 @@ Panel {
   Process {
     id: daemonStatusProcess
     command: ["boomux", "daemon", "status", "--json"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseDaemonStatus(text) }
+    stdout: StdioCollector { id: daemonStatusStdout; waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode !== 0) root.setOffline("Boomux daemon is stopped")
+      var explicitCreationCheck = root.workspaceCreateStatusActive
+      root.workspaceCreateStatusActive = false
+      if (exitCode === 0) root.parseDaemonStatus(
+        daemonStatusStdout.text, explicitCreationCheck)
+      else if (explicitCreationCheck)
+        root.failWorkspaceCreation("Could not check Boomux daemon status before creation")
+      else root.setOffline("Boomux daemon is stopped")
+      if (root.workspaceCreateStatusQueued && root.workspaceCreateRequested
+          && !daemonStartProcess.running)
+        Qt.callLater(function() { root.requestFreshWorkspaceCreateStatus() })
     }
   }
 
@@ -2719,9 +2972,9 @@ Panel {
     stderr: StdioCollector { id: daemonStartStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode === 0) {
-        daemonStatusProcess.running = true
+        Qt.callLater(function() { root.requestFreshWorkspaceCreateStatus() })
       } else {
-        root.workspaceFormStartPending = false
+        root.workspaceCreateRequested = null
         root.showActionFailure("Workspace creation unavailable", root.processError(
           daemonStartStderr.text || daemonStartStdout.text,
           "Could not start Boomux"))
@@ -2735,12 +2988,19 @@ Panel {
     stdout: StdioCollector { id: nodeSnapshotStdout; waitForEnd: true }
     stderr: StdioCollector { id: nodeSnapshotStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      var explicitCreationSnapshot = root.workspaceCreateSnapshotActive
+      root.workspaceCreateSnapshotActive = false
       root.finishRefresh()
-      if (exitCode === 0) root.parseNodeSnapshot(nodeSnapshotStdout.text)
+      if (exitCode === 0) root.parseNodeSnapshot(
+        nodeSnapshotStdout.text, explicitCreationSnapshot)
       else {
         root.error = root.processError(nodeSnapshotStderr.text || nodeSnapshotStdout.text,
           "Could not read federated Boomux state")
+        if (explicitCreationSnapshot)
+          root.failWorkspaceCreation("Could not obtain a fresh Boomux Node snapshot")
       }
+      if (root.workspaceCreateSnapshotQueued && root.workspaceCreateRequested)
+        Qt.callLater(function() { root.requestFreshWorkspaceCreateSnapshot() })
       if (root.focusRefreshPending) {
         root.focusRefreshPending = false
         Qt.callLater(function() { root.requestFocusedTerminalRefresh() })
@@ -2925,6 +3185,60 @@ Panel {
   }
 
   Process {
+    id: workspaceCreateProcess
+    property string expectedNodeId: ""
+    stdout: StdioCollector { id: workspaceCreateStdout; waitForEnd: true }
+    stderr: StdioCollector { id: workspaceCreateStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.showActionFailure("Workspace creation failed", root.processError(
+          workspaceCreateStderr.text || workspaceCreateStdout.text,
+          "Could not create the Workspace"))
+        return
+      }
+      try {
+        root.pendingWorkspaceCreation = WorkspaceModel.atomicWorkspaceCreateIdentity(
+          root.parseEnvelope(workspaceCreateStdout.text, "workspace.create"),
+          expectedNodeId)
+        root.pendingWorkspaceConfirmationDeadline = Date.now() + 10000
+        root.actionMessage = "Waiting for the created Workspace snapshot..."
+        root.refresh()
+        root.scheduleMutationConfirmation()
+      } catch (exception) {
+        root.showActionFailure("Workspace creation failed",
+          "Could not validate the created Workspace, placement, and Shell identities")
+      }
+    }
+  }
+
+  Process {
+    id: defaultCwdProcess
+    stdout: StdioCollector { id: defaultCwdStdout; waitForEnd: true }
+    stderr: StdioCollector { id: defaultCwdStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var expected = root.defaultCwdRequest
+      root.defaultCwdRequest = null
+      if (exitCode !== 0) {
+        root.showActionFailure("Default path change failed", root.processError(
+          defaultCwdStderr.text || defaultCwdStdout.text,
+          "Could not change the Workspace default path"))
+        return
+      }
+      try {
+        root.pendingDefaultCwd = WorkspaceModel.workspaceDefaultCwdIdentity(
+          root.parseEnvelope(defaultCwdStdout.text, "workspace.set-default-cwd"), expected)
+        root.pendingDefaultCwdConfirmationDeadline = Date.now() + 10000
+        root.actionMessage = "Waiting for the updated Workspace snapshot..."
+        root.refresh()
+        root.scheduleMutationConfirmation()
+      } catch (exception) {
+        root.showActionFailure("Default path change failed",
+          "Could not validate the updated Workspace placement identity")
+      }
+    }
+  }
+
+  Process {
     id: actionProcess
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
@@ -2934,7 +3248,6 @@ Panel {
       root.pendingAction = null
       if (exitCode !== 0) {
         root.pendingShell = null
-        root.pendingWorkspace = null
         root.actionMessage = root.processError(actionStderr.text || actionStdout.text,
           action === "open-workspace" || action === "show-workspace"
             ? "Workspace open reported a warning"
@@ -2955,10 +3268,7 @@ Panel {
       if (action === "create-agent" && root.pendingShell)
         root.pendingShell = Object.assign({}, root.pendingShell, { armed: true })
       root.cancelForm()
-      if (action === "create-workspace") root.actionMessage = "Workspace created"
-      else if (action === "create-workspace-shell")
-        root.actionMessage = "Workspace created with default directory"
-      else if (action === "create-shell") root.actionMessage = "Shell created"
+      if (action === "create-shell") root.actionMessage = "Shell created"
       else if (action === "create-agent")
         root.actionMessage = "Starting " + String(pending.hostName || "Agent") + "..."
       else if (action === "invoke-launcher") root.actionMessage = "Launcher started"
@@ -3068,6 +3378,13 @@ Panel {
       root.clockNow = Date.now()
       root.refresh()
     }
+  }
+
+  Timer {
+    id: mutationConfirmationTimer
+    interval: 1000
+    repeat: false
+    onTriggered: root.continueMutationConfirmation()
   }
 
   Timer {
@@ -3293,7 +3610,7 @@ Panel {
         else if (text === "m" || text === "M") root.showCursorActionMenu()
         else if ((text === "a" || text === "A") && root.activeTab === "nodes"
             && root.federationAvailable) root.createNode()
-        else if (text === "n" || text === "N") root.showForm("workspace")
+        else if (text === "n" || text === "N") root.requestGeneratedWorkspace(root.home)
         else if ((text === "d" || text === "D") && root.activeTab === "agents")
           root.dismissAgent(root.selectedItem)
       }
@@ -3646,7 +3963,7 @@ Panel {
             PanelSectionHeader {
               width: parent.width
               text: root.directoryPickerOpen ? "CHOOSE DIRECTORY"
-                : (root.formMode === "workspace" ? "CREATE WORKSPACE"
+                : (root.formMode === "project" ? "FROM PROJECTS"
                   : (root.formMode === "shell" ? "CREATE SHELL" : "START AGENT"))
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -3794,89 +4111,14 @@ Panel {
             }
 
             Column {
-              visible: !root.directoryPickerOpen && root.formMode === "workspace"
-                && root.workspaceCreationMode === "choice"
-              width: parent.width
-              spacing: Style.space(6)
-
-              Text {
-                width: parent.width
-                text: "How do you want to create this Workspace?"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-                bottomPadding: Style.space(4)
-              }
-
-              Button {
-                id: existingProjectModeButton
-                width: parent.width
-                text: "Create from Existing Project"
-                tooltipText: root.projectListSupported
-                  ? "Use a configured Boomux project and its canonical path"
-                  : "Configure Boomux project roots to discover existing projects"
-                focusable: true
-                bordered: true
-                enabled: root.projectListSupported
-                foreground: root.foreground
-                onClicked: root.selectWorkspaceCreationMode("project")
-              }
-              Button {
-                width: parent.width
-                text: "Create New"
-                tooltipText: "Choose a name and default directory"
-                focusable: true
-                bordered: true
-                active: true
-                foreground: root.foreground
-                onClicked: root.selectWorkspaceCreationMode("new")
-              }
-            }
-
-            Row {
-              visible: !root.directoryPickerOpen && root.formMode === "workspace"
-                && root.workspaceCreationMode !== "choice"
-              width: parent.width
-              spacing: Style.space(8)
-
-              Button {
-                id: creationModeBackButton
-                text: "Back"
-                iconText: "‹"
-                tooltipText: "Choose another creation method"
-                focusable: true
-                bordered: true
-                foreground: root.foreground
-                onClicked: root.selectWorkspaceCreationMode("choice")
-              }
-              Text {
-                width: parent.width - creationModeBackButton.width - parent.spacing
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.workspaceCreationMode === "project"
-                  ? "Existing Project" : "Create New"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-                horizontalAlignment: Text.AlignRight
-              }
-            }
-
-            Column {
               visible: !root.directoryPickerOpen && root.globalWorkspacesAvailable
-                && (root.formMode === "shell" || root.formMode === "agent"
-                  || (root.formMode === "workspace"
-                    && root.workspaceCreationMode !== "choice"))
+                && (root.formMode === "shell" || root.formMode === "agent")
               width: parent.width
               spacing: Style.space(3)
 
               Dropdown {
                 id: creationNodeDropdown
                 visible: root.formMode === "shell" || root.formMode === "agent"
-                  || (root.formMode === "workspace"
-                    && root.workspaceCreationMode !== "choice")
                 width: parent.width
                 label: "Select Node"
                 value: root.creationNodeId
@@ -3906,8 +4148,7 @@ Panel {
             }
 
             Column {
-              visible: !root.directoryPickerOpen && root.formMode === "workspace"
-                && root.workspaceCreationMode === "project"
+              visible: !root.directoryPickerOpen && root.formMode === "project"
               width: parent.width
               spacing: Style.space(6)
 
@@ -3927,7 +4168,7 @@ Panel {
                   event.accepted = true
                 }
                 Keys.onTabPressed: function(event) {
-                    creationModeBackButton.forceActiveFocus()
+                  projectCancelButton.forceActiveFocus()
                   event.accepted = true
                 }
                 Keys.onEscapePressed: root.cancelForm()
@@ -3938,8 +4179,8 @@ Panel {
                 width: parent.width
                 text: projectListProcess.running ? "Discovering projects..."
                   : (root.projectError !== "" ? root.projectError
-                    : (root.projectRootsConfigured ? "No projects match"
-                      : "No project roots configured · create a new Workspace"))
+                    : (root.projectRootsConfigured ? "No projects match. Cancel to return."
+                      : "No project roots configured. Cancel to return."))
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -4024,30 +4265,26 @@ Panel {
 
             TextField {
               id: nameField
-              visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
-                || root.workspaceCreationMode === "new")
+              visible: !root.directoryPickerOpen
+                && (root.formMode === "shell" || root.formMode === "agent")
               width: parent.width
-              placeholderText: root.formMode === "workspace" ? "Workspace name" : "Shell name"
+              placeholderText: "Shell name"
               foreground: root.foreground
               onTextEdited: root.nameFieldEdited = true
               onAccepted: {
-                if (root.formMode === "workspace"
-                    && root.workspaceCreationMode === "new") cwdField.forceActiveFocus()
-                else if (root.formMode === "workspace") root.submitForm()
-                else cwdField.forceActiveFocus()
+                cwdField.forceActiveFocus()
               }
               Keys.onEscapePressed: root.cancelForm()
             }
             Row {
-              visible: !root.directoryPickerOpen && (root.formMode !== "workspace"
-                || root.workspaceCreationMode === "new")
+              visible: !root.directoryPickerOpen
+                && (root.formMode === "shell" || root.formMode === "agent")
               width: parent.width
               spacing: Style.space(6)
               TextField {
                 id: cwdField
                 width: parent.width - browseButton.width - parent.spacing
-                placeholderText: root.formMode === "workspace"
-                  ? "Default directory" : "Directory (optional)"
+                placeholderText: "Directory (optional)"
                 foreground: root.foreground
                 onTextEdited: root.cwdIsExact = false
                 onAccepted: root.submitForm()
@@ -4097,11 +4334,11 @@ Panel {
             }
             Row {
               visible: !root.directoryPickerOpen
-                && (root.formMode !== "workspace"
-                  || root.workspaceCreationMode !== "choice")
+                && root.formMode !== "default-path"
               width: parent.width
               spacing: Style.space(6)
               Button {
+                id: projectCancelButton
                 width: (parent.width - parent.spacing) / 2
                 text: "Cancel"
                 focusable: true
@@ -4111,7 +4348,8 @@ Panel {
               }
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: root.formMode === "agent" ? "Create & Open" : "Create"
+                text: root.formMode === "agent" ? "Create & Open"
+                  : (root.formMode === "project" ? "Create Workspace" : "Create")
                 bordered: true
                 focusable: true
                 active: true
@@ -4137,23 +4375,43 @@ Panel {
               width: parent.width
               height: Style.space(30)
               PanelSectionHeader {
-                width: parent.width - createWorkspaceTreeButton.width
+                width: parent.width - workspaceCreateActions.width
                 anchors.verticalCenter: parent.verticalCenter
                 text: "WORKSPACES"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
-              Button {
-                id: createWorkspaceTreeButton
-                width: Style.space(32)
-                height: Style.space(28)
-                text: "+"
-                tooltipText: "Create Workspace"
-                bordered: true
-                foreground: root.foreground
-                horizontalPadding: Style.space(3)
-                verticalPadding: Style.space(1)
-                onClicked: root.requestWorkspaceForm()
+              Row {
+                id: workspaceCreateActions
+                spacing: Style.space(5)
+                Button {
+                  id: fromProjectsButton
+                  visible: root.online && root.projectListSupported
+                    && root.projectRootsConfigured
+                  height: Style.space(28)
+                  text: "From Projects"
+                  tooltipText: "Create a generated Workspace at a configured project"
+                  bordered: true
+                  enabled: !root.workspaceMutationBusy()
+                  foreground: root.foreground
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(6)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.showProjectChooser()
+                }
+                Button {
+                  id: createWorkspaceTreeButton
+                  width: Style.space(32)
+                  height: Style.space(28)
+                  text: "+"
+                  tooltipText: "Create a generated Workspace in HOME"
+                  bordered: true
+                  enabled: !root.workspaceMutationBusy()
+                  foreground: root.foreground
+                  horizontalPadding: Style.space(3)
+                  verticalPadding: Style.space(1)
+                  onClicked: root.requestGeneratedWorkspace(root.home)
+                }
               }
             }
 
@@ -4332,7 +4590,7 @@ Panel {
                     text: "⋮"
                     tooltipText: "Workspace actions"
                     bordered: false
-                    enabled: !actionProcess.running && !openProcess.running
+                    enabled: !root.workspaceMutationBusy()
                     foreground: root.foreground
                     fontSize: Style.font.body
                     horizontalPadding: Style.space(1)
@@ -4482,7 +4740,7 @@ Panel {
                         text: "⋮"
                         tooltipText: "Item actions"
                         bordered: false
-                        enabled: !actionProcess.running && !openProcess.running
+                        enabled: !root.workspaceMutationBusy()
                         foreground: root.foreground
                         fontSize: Style.font.caption
                         horizontalPadding: Style.space(1)
@@ -4989,6 +5247,21 @@ Panel {
               onClicked: root.runActionMenuAction("shell")
               onHovered: function(hovered) { if (hovered)
                 root.actionMenuIndex = root.currentActionMenuActions.indexOf("shell") }
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
+                && root.workspaceCanChangeDefaultPath(root.actionMenuTarget.workspace)
+              width: parent.width
+              text: "Change Default Path"
+              tooltipText: "Change the local placement default for future Shells"
+              bordered: false
+              hasCursor: root.currentActionMenuAction === "default-path"
+              leftAlign: true
+              foreground: root.foreground
+              enabled: visible
+              onClicked: root.runActionMenuAction("default-path")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("default-path") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"

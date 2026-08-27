@@ -688,10 +688,12 @@ function workspaceTreeModelSignature(workspaces) {
       row: [workspace.key, workspace.id, workspace.name, !!workspace.is_global,
         !!workspace.is_external, !!workspace.closing, !!workspace.available,
         workspace.node_id, workspace.node_current, workspace.node_stale,
-        Number(workspace.attention_count || 0), Number(workspace.shell_count || 0)],
+        workspace.default_cwd, Number(workspace.attention_count || 0),
+        Number(workspace.shell_count || 0)],
       placements: (workspace.placements || []).map(function(placement) {
         return [placement.node_id, placement.workspace_id, placement.state,
-          !!placement.available, !!placement.node_current, !!placement.node_stale]
+          placement.default_cwd, !!placement.available,
+          !!placement.node_current, !!placement.node_stale]
       }),
       items: workspaceTreeItems(workspace).map(function(item) {
         var resource = item.kind === "launcher" ? item.launcher : item.shell
@@ -740,19 +742,149 @@ function defaultCreationNodeId(nodes) {
   return eligible.length === 1 ? String(eligible[0].node_id) : ""
 }
 
-function workspaceCreateCommand(name, cwd, coordinated) {
-  var command = ["boomux", "workspace", "create", String(name)]
-  if (!coordinated && cwd) command.push("--cwd", String(cwd))
-  return command
+function localWorkspaceCreationNode(nodes) {
+  var matches = (nodes || []).filter(function(node) {
+    return !!node && !!node.local && !!node.workspace_owner_eligible
+      && !!node.current && !node.stale && node.health === "online"
+  })
+  return matches.length === 1 ? matches[0] : null
+}
+
+function atomicWorkspaceCreateCommand(nodeId, cwd) {
+  return ["boomux", "workspace", "create", "--node", String(nodeId),
+    "--cwd", String(cwd), "--json"]
 }
 
 function workspaceDaemonStartCommand() {
   return ["boomux", "workspace", "list", "--json"]
 }
 
-function initialWorkspaceShellCommand(workspace, cwd, nodeId) {
-  return ["boomux", "shell", "create", String(workspace.id),
-    "--node", String(nodeId), "--cwd", String(cwd)]
+function absolutePath(value) {
+  return typeof value === "string" && value.indexOf("/") === 0
+}
+
+function atomicWorkspaceCreateIdentity(data, nodeId) {
+  if (!data || !data.workspace || !data.placement || !data.shell)
+    throw new Error("missing atomic Workspace creation fields")
+  var workspace = data.workspace
+  var placement = data.placement
+  var shell = data.shell
+  var strings = [workspace.id, workspace.name, placement.node_id,
+    placement.owner_workspace_id, placement.default_cwd,
+    shell.id, shell.name, shell.node_id, shell.cwd]
+  if (strings.some(function(value) { return typeof value !== "string" || value === "" })
+      || !Number.isFinite(Number(workspace.revision)) || Number(workspace.revision) <= 0
+      || placement.node_id !== nodeId || shell.node_id !== nodeId
+      || !absolutePath(placement.default_cwd) || !absolutePath(shell.cwd)
+      || placement.default_cwd !== shell.cwd)
+    throw new Error("invalid atomic Workspace creation identity")
+  return {
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    workspaceRevision: Number(workspace.revision),
+    nodeId: placement.node_id,
+    ownerWorkspaceId: placement.owner_workspace_id,
+    defaultCwd: placement.default_cwd,
+    shellId: shell.id,
+    shellName: shell.name
+  }
+}
+
+function resolveAtomicWorkspaceCreation(identity, workspaces) {
+  if (!identity) return null
+  var matches = (workspaces || []).filter(function(workspace) {
+    return workspace && workspace.is_global && workspace.id === identity.workspaceId
+      && Number(workspace.revision || 0) >= identity.workspaceRevision
+  })
+  if (matches.length !== 1) return null
+  var workspace = matches[0]
+  if (workspace.name !== undefined && workspace.name !== identity.workspaceName) return null
+  var placements = (workspace.placements || []).filter(function(placement) {
+    return placement.node_id === identity.nodeId
+      && placement.workspace_id === identity.ownerWorkspaceId
+      && placement.default_cwd === identity.defaultCwd
+      && String(placement.state) === "active"
+  })
+  var shells = (workspace.shells || []).filter(function(shell) {
+    return shell.node_id === identity.nodeId && shell.id === identity.shellId
+      && shell.cwd === identity.defaultCwd
+      && (shell.name === undefined || shell.name === identity.shellName)
+  })
+  return placements.length === 1 && shells.length === 1
+    ? { workspace: workspace, placement: placements[0], shell: shells[0] } : null
+}
+
+function atomicWorkspaceCreationConflicts(identity, workspaces) {
+  if (!identity) return false
+  return (workspaces || []).some(function(workspace) {
+    return workspace && workspace.is_global && workspace.id === identity.workspaceId
+      && Number(workspace.revision || 0) >= identity.workspaceRevision
+  }) && !resolveAtomicWorkspaceCreation(identity, workspaces)
+}
+
+function localActiveWorkspacePlacement(workspace, nodes) {
+  if (!workspace || !workspace.is_global || workspace.closing) return null
+  var matches = (workspace.placements || []).filter(function(placement) {
+    var node = nodeFor(nodes || [], placement.node_id)
+    return String(placement.state) === "active" && !!placement.available
+      && !!node && !!node.local && !!node.current && !node.stale
+      && node.health === "online"
+  })
+  return matches.length === 1 ? matches[0] : null
+}
+
+function workspaceDefaultCwdCommand(workspaceId, nodeId, cwd) {
+  return ["boomux", "workspace", "set-default-cwd", String(workspaceId),
+    "--node", String(nodeId), "--cwd", String(cwd), "--json"]
+}
+
+function workspaceDefaultCwdIdentity(data, expected) {
+  var fields = ["workspace_id", "node_id", "owner_workspace_id", "default_cwd", "result"]
+  if (!data || fields.some(function(field) {
+    return typeof data[field] !== "string" || data[field] === ""
+  }) || !Number.isFinite(Number(data.global_revision)) || Number(data.global_revision) <= 0
+      || !Number.isFinite(Number(data.owner_revision)) || Number(data.owner_revision) <= 0
+      || !absolutePath(data.default_cwd)
+      || (data.result !== "updated" && data.result !== "unchanged")
+      || data.workspace_id !== expected.workspaceId || data.node_id !== expected.nodeId
+      || data.owner_workspace_id !== expected.ownerWorkspaceId
+      )
+    throw new Error("invalid Workspace default directory identity")
+  return {
+    workspaceId: data.workspace_id,
+    nodeId: data.node_id,
+    ownerWorkspaceId: data.owner_workspace_id,
+    defaultCwd: data.default_cwd,
+    globalRevision: Number(data.global_revision),
+    ownerRevision: Number(data.owner_revision),
+    result: data.result
+  }
+}
+
+function resolveWorkspaceDefaultCwd(identity, workspaces) {
+  if (!identity) return null
+  var matches = (workspaces || []).filter(function(workspace) {
+    return workspace && workspace.is_global && workspace.id === identity.workspaceId
+      && Number(workspace.revision || 0) >= identity.globalRevision
+  })
+  if (matches.length !== 1) return null
+  var placements = (matches[0].placements || []).filter(function(placement) {
+    return placement.node_id === identity.nodeId
+      && placement.workspace_id === identity.ownerWorkspaceId
+      && placement.default_cwd === identity.defaultCwd
+      && Number(placement.owner_revision || 0) >= identity.ownerRevision
+      && String(placement.state) === "active"
+  })
+  return placements.length === 1
+    ? { workspace: matches[0], placement: placements[0] } : null
+}
+
+function workspaceDefaultCwdConflicts(identity, workspaces) {
+  if (!identity) return false
+  return (workspaces || []).some(function(workspace) {
+    return workspace && workspace.is_global && workspace.id === identity.workspaceId
+      && Number(workspace.revision || 0) >= identity.globalRevision
+  }) && !resolveWorkspaceDefaultCwd(identity, workspaces)
 }
 
 function workspaceCreationBlockReason(workspace, eligibleNodeCount) {
@@ -923,9 +1055,17 @@ if (typeof module !== "undefined") module.exports = {
   shellOpenCommand: shellOpenCommand,
   eligibleNodes: eligibleNodes,
   defaultCreationNodeId: defaultCreationNodeId,
-  workspaceCreateCommand: workspaceCreateCommand,
+  localWorkspaceCreationNode: localWorkspaceCreationNode,
+  atomicWorkspaceCreateCommand: atomicWorkspaceCreateCommand,
   workspaceDaemonStartCommand: workspaceDaemonStartCommand,
-  initialWorkspaceShellCommand: initialWorkspaceShellCommand,
+  atomicWorkspaceCreateIdentity: atomicWorkspaceCreateIdentity,
+  resolveAtomicWorkspaceCreation: resolveAtomicWorkspaceCreation,
+  atomicWorkspaceCreationConflicts: atomicWorkspaceCreationConflicts,
+  localActiveWorkspacePlacement: localActiveWorkspacePlacement,
+  workspaceDefaultCwdCommand: workspaceDefaultCwdCommand,
+  workspaceDefaultCwdIdentity: workspaceDefaultCwdIdentity,
+  resolveWorkspaceDefaultCwd: resolveWorkspaceDefaultCwd,
+  workspaceDefaultCwdConflicts: workspaceDefaultCwdConflicts,
   workspaceCreationBlockReason: workspaceCreationBlockReason,
   suggestionIdentity: suggestionIdentity,
   suggestionResponseMatches: suggestionResponseMatches,

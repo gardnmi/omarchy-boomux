@@ -8,7 +8,7 @@ about operations that can start processes or take over terminals.
 
 - `Panel.qml`: runtime integration, bar indicator, and pane content
 - `SidePane.qml`: configurable layer-shell drawer, focus, animation, and dismissal
-- `WorkspaceModel.js`: protocol-38 grouping and qualified command construction
+- `WorkspaceModel.js`: protocol-49 grouping, identity validation, and exact command construction
 - `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
 - `README.md`: user contract, dependency, safety, and lifecycle documentation
@@ -24,9 +24,10 @@ publication.
 
 ## Supported Contract
 
-- Planned minimum released Boomux version: `0.27.0`
+- Required Boomux daemon protocol: 49; require advertised command and feature
+  gates rather than assuming an unreleased semantic version
 - Stable JSON envelope: `boomux.cli/v1`
-- Current branch-validated daemon protocol: 48; Node helper versions and guided
+- Current paired-branch daemon protocol: 49; Node helper versions and guided
   upgrade coordination require protocol 41 capabilities, while guided remote
   uninstall requires protocol 48 uninstall coordination on both Nodes
 - Supported Agent hosts come from `integration.status`; currently OpenCode, Pi,
@@ -52,9 +53,9 @@ never be downgraded by the pane.
 
 Project suggestions come only from advertised `project.list` JSON data. Keep
 project discovery passive and on-demand; do not parse Boomux configuration or
-reimplement its filesystem scanner in the plugin.
-Remote project and path suggestions must use `project list --node` on the owner.
-Never browse a remote path with `FolderListModel` or reinterpret it locally.
+reimplement its filesystem scanner in the plugin. Workspace creation project
+choices are local-only and use the exact returned path. Never browse a remote
+path with `FolderListModel` or reinterpret it locally.
 
 Shell-name suggestions come only from advertised `shell.suggest-name` JSON data
 for the exact workspace ID. They are unreserved UI defaults: keep them editable,
@@ -121,9 +122,11 @@ or lifecycle observation.
 ## Safety Invariants
 
 - Check `boomux daemon status --json` before daemon-backed polling. Passive pane
-  refresh must not resurrect a stopped daemon. An explicit **Create Workspace**
-  action may start it through a daemon-backed public Boomux command, then must
-  refresh daemon protocol and Node state before constructing the create command.
+  refresh must not resurrect a stopped daemon. Explicit `+`/`N` Workspace
+  creation may start it through `workspaceDaemonStartCommand`, then must refresh
+  daemon protocol and obtain a fresh authoritative Node snapshot for that exact
+  intent before resolving the eligible local Node and constructing one atomic
+  create command. Never consume a pre-intent snapshot or fall back to remote.
 - QML invokes only the local Boomux CLI and daemon for management. It must not
   invoke SSH, contact a Node directly, store credentials, or handle remote
   bootstrap confirmation. Capability-aware Boomux release discovery must use
@@ -170,7 +173,11 @@ or lifecycle observation.
 
 ## UI Conventions
 
-- Keep **Create Workspace** at Workspace-tree scope.
+- Keep immediate generated Workspace creation and **From Projects** at
+  Workspace-tree scope. Do not restore Workspace name or arbitrary-path forms.
+- Gate **Change Default Path** on protocol 49, `workspace.set-default-cwd`, and
+  `workspace_placement_default_cwd`, and expose it only for an active local
+  coordinated placement. Existing Shells must not be restarted.
 - Keep Workspace expansion separate from activation. The chevron changes only
   local pane state; the row persists the default and performs explicit open
   without dismissing the pane, and makes that opened Workspace the expanded row.
@@ -250,6 +257,15 @@ Use `Quickshell.Io.Process` with argv arrays. Guard every mutation against a
 concurrent process. For user actions, collect both stdout and stderr and surface
 an actionable message in the panel. Boomux JSON errors use `error.code` for
 program logic; messages are suitable only for display.
+
+Atomic Workspace creation and default-path changes have dedicated Processes.
+Validate their exact response IDs and paths, then wait for an authoritative
+snapshot with those identities. Never resolve by name, optimistically mutate,
+queue offline work, or retry a mutation.
+Boomux may canonicalize requested paths: require returned paths to be absolute
+and use the returned canonical path for snapshot confirmation. Bound
+post-success confirmation and clear busy state with a completed-but-unconfirmed
+warning; never replay the successful mutation.
 
 Polling currently checks daemon status once per second and fetches Agent, shell,
 and Workspace snapshots only while the daemon is running. With protocol 38 it

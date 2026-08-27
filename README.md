@@ -18,7 +18,13 @@ terminals, monitoring Agents, and checking Nodes.
 - Lists active Agents in one flat, most-recently-updated-first view.
 - Delegates available Boomux upgrades to the CLI's verified guided updater.
 - Provides three-dot action menus for Workspaces, items, and Nodes, including
-  creation, rename, guided recovery, and confirmed removal actions when supported.
+  Shell creation, default-path changes, rename, guided recovery, and confirmed
+  removal actions when supported.
+- Creates a generated coordinated Workspace and its first generated Shell from
+  `+` or `N`, always on the exact eligible local Node at `$HOME`, without opening
+  a terminal.
+- Offers **From Projects** when Boomux has configured project roots, using the
+  discovered canonical project path without a naming or arbitrary-path form.
 - Reserves the left or right screen edge so Hyprland tiles applications beside
   the pane instead of covering them.
 - Presents coordinated Workspaces immediately through Boomux's Hyprland desktop
@@ -32,11 +38,13 @@ terminals, monitoring Agents, and checking Nodes.
 ## Requirements
 
 - Omarchy with the Quattro shell plugin system.
-- [Boomux](https://github.com/gardnmi/boomux) `0.27.0` or newer on `PATH`.
+- [Boomux](https://github.com/gardnmi/boomux) with daemon protocol 49 or newer on
+  `PATH`, advertising `atomic_workspace_shell_creation` and
+  `workspace_placement_default_cwd`.
 - A native terminal supported by `xdg-terminal-exec`.
 
-Global multi-Node Workspaces require Boomux protocol 38. Agent status requires a
-supported lifecycle integration:
+The revised Workspace creation and default-path UX requires protocol 49. Agent
+status requires a supported lifecycle integration:
 
 ```console
 boomux integration list
@@ -66,7 +74,9 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Workspace row | Select and present that Workspace |
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact managed terminal |
-| Three-dot menu | Rename or confirm the resource-specific destructive action |
+| `+` or `N` | Immediately create a generated Workspace and first Shell at `$HOME` |
+| From Projects | Choose a configured project and create the same generated Workspace and Shell at its canonical path |
+| Workspace three-dot menu | Create a Shell, change the active local placement default path, rename, or remove when supported |
 | `Tab` / `Shift-Tab` | Move between Workspaces, expanded items, and the lower view |
 | Arrow keys or `H` / `J` / `K` / `L` | Move within the focused section; expand or collapse Workspaces |
 | `Enter` or `Space` | Activate the focused row or menu action |
@@ -79,7 +89,6 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Uninstall Boomux | Confirm **Uninstall and Forget**, then review the exact remote process and data impact in a native terminal |
 | Forget Node | Confirm **Just Forget** to remove only the local registration without contacting the remote Node |
 | `D` in Agents | Dismiss the selected notification |
-| `N` | Create a Workspace |
 | `R` | Refresh |
 | `Escape` | Close the pane |
 
@@ -124,6 +133,13 @@ launchers. Older compatible Boomux versions fall back to `workspace open --show`
 The pane remains visible while applications receive focus and while other
 Omarchy plugins open.
 
+Workspace creation is intentionally local and form-free. Boomux generates both
+names and atomically persists the coordinated Workspace, local placement, and
+first Shell without opening a terminal. **From Projects** uses the same command
+with the exact path returned by `project list`; it does not permit name editing
+or arbitrary cwd entry and never falls back to a remote Node. Boomux may
+canonicalize the requested path; the returned absolute path is authoritative.
+
 ## Settings
 
 Use the gear button to:
@@ -137,6 +153,12 @@ versions, protocol, freshness, resource counts, and Workspace eligibility. Its
 **Create Shell** action uses the exact selected remote Node and
 the currently active Boomux Workspace; paths and commands are resolved on that
 Node.
+
+For a coordinated Workspace with one active local placement, **Change Default
+Path** starts the picker at that placement's current default (or `$HOME`). The
+change affects future Shell creation only; existing Shells and runs are not
+restarted. The pane waits for both the exact JSON response identities and an
+authoritative Node snapshot before reporting completion.
 
 When a Node reports **authentication required**, **Authenticate** opens Boomux's
 interactive reauthentication flow in a native terminal. It uses the exact stored
@@ -176,9 +198,16 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 
 - The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
   remote routing, authentication, and persistence.
-- Passive refresh leaves a stopped daemon stopped. Explicitly choosing **Create
-  Workspace** starts Boomux when needed, refreshes its protocol and Node state,
-  and only then builds the create command.
+- Passive refresh leaves a stopped daemon stopped. Explicit `+`/`N` creation
+  starts Boomux when needed, refreshes its protocol and Node snapshot, resolves
+  exactly one eligible local Node, and only then builds the atomic command once.
+- Workspace creation and default-path changes use exact argv and returned IDs.
+  They do not queue, retry, optimistically update the model, or fall back to a
+  remote Node when state becomes stale or unavailable.
+- Every creation intent performs a fresh daemon status check and fresh Node
+  snapshot before constructing argv. After a successful mutation, snapshot
+  confirmation is bounded; a timeout reports that the operation completed but
+  remains unconfirmed and asks for a refresh without replaying it.
 - Remote cached resources stay visible but become non-actionable when stale or
   unavailable. The guided Node update is the only stale-row exception because
   Boomux reconnects and verifies the exact registered Node before replacement.

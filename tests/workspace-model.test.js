@@ -119,6 +119,10 @@ test("keeps the Workspace tree model stable across lifecycle-only refreshes", ()
   expect(model.workspaceTreeModelSignature([workspace])).toBe(first)
   workspace.shells[0].status = { exited: 0 }
   expect(model.workspaceTreeModelSignature([workspace])).not.toBe(first)
+  const afterStatus = model.workspaceTreeModelSignature([workspace])
+  workspace.placements = [{ node_id: "node", workspace_id: "owner", state: "active",
+    default_cwd: "/new/default" }]
+  expect(model.workspaceTreeModelSignature([workspace])).not.toBe(afterStatus)
 })
 
 test("formats compact relative Agent update times", () => {
@@ -519,7 +523,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.2.2")
+  expect(manifest.version).toBe("2.3.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -674,17 +678,32 @@ test("persists the explicitly selected coordinator Workspace", () => {
   expect(panel).toContain('["boomux", "workspace", "clear"]')
   expect(panel).toContain('cliFeatures.indexOf("persistent_workspace_selection") >= 0')
   expect(panel).toContain('cliFeatures.indexOf("create_and_open_shell") >= 0')
-  expect(panel).toContain('resolvePendingWorkspace(workspaces[p])')
+  expect(panel).toContain("WorkspaceModel.resolveAtomicWorkspaceCreation(")
 })
 
-test("offers explicit Workspace creation choices and one consistent action", () => {
+test("uses generated atomic Workspace creation from plus, N, and configured projects", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('text: "Create from Existing Project"')
-  expect(panel).toContain('text: "Create New"')
-  expect(panel).not.toContain('text: "Create from Project"')
-  expect(panel).not.toContain('text: "Custom"')
-  expect(panel).toContain('initialShell: globalWorkspacesAvailable')
-  expect(panel).toContain('kind: "create-workspace-shell"')
+  expect(panel).toContain('text: "From Projects"')
+  expect(panel).toContain("visible: root.online && root.projectListSupported")
+  expect(panel).toContain("&& root.projectRootsConfigured")
+  expect(panel).toContain("onClicked: root.requestGeneratedWorkspace(root.home)")
+  expect(panel).toContain('else if (text === "n" || text === "N") root.requestGeneratedWorkspace(root.home)')
+  expect(panel).toContain("requestGeneratedWorkspace(projectPath)")
+  expect(panel).toContain("WorkspaceModel.atomicWorkspaceCreateCommand(")
+  expect(panel.match(/WorkspaceModel\.atomicWorkspaceCreateCommand\(/g)).toHaveLength(1)
+  expect(panel).toContain("command: WorkspaceModel.workspaceDaemonStartCommand()")
+  expect(panel).toContain("workspaceCreateRequested = { cwd: path }")
+  expect(panel).toContain("daemonStatusProcess.running = true")
+  expect(panel).toContain("requestFreshWorkspaceCreateStatus()")
+  expect(panel).toContain("requestFreshWorkspaceCreateSnapshot()")
+  expect(panel).toContain("if (explicitCreationSnapshot) maybeStartWorkspaceCreation()")
+  expect(panel).not.toContain("if (online) maybeStartWorkspaceCreation()")
+  expect(panel).toContain("maybeStartWorkspaceCreation()")
+  expect(panel).toContain('root.parseEnvelope(workspaceCreateStdout.text, "workspace.create")')
+  expect(panel).not.toContain('showForm("workspace")')
+  expect(panel).not.toContain('placeholderText: "Workspace name"')
+  expect(panel).not.toContain('kind: "create-workspace-shell"')
+  expect(panel).not.toContain("workspaces[p].name ===")
 })
 
 test("preserves the Workspace tree viewport across polling snapshots", () => {
@@ -908,24 +927,25 @@ describe("qualified commands and action gates", () => {
       [Object.assign({}, remoteShell, { placement_state: "active" })], true)).not.toBeNull()
   })
 
-  test("creates coordinated Workspace metadata without assigning a Node or path", () => {
+  test("atomically creates one generated Workspace and Shell on the exact local Node", () => {
     expect(model.workspaceDaemonStartCommand()).toEqual([
       "boomux", "workspace", "list", "--json"
     ])
-    expect(model.workspaceCreateCommand("release; rm -rf /", "/tmp/$(false)", true))
-      .toEqual(["boomux", "workspace", "create", "release; rm -rf /"])
-    expect(model.workspaceCreateCommand("legacy", "/tmp/legacy", false)).toEqual([
-      "boomux", "workspace", "create", "legacy", "--cwd", "/tmp/legacy"
+    expect(model.atomicWorkspaceCreateCommand(
+      "node;$(false)", "/tmp/project with spaces/;rm -rf --no")).toEqual([
+      "boomux", "workspace", "create", "--node", "node;$(false)",
+      "--cwd", "/tmp/project with spaces/;rm -rf --no", "--json"
     ])
-    expect(model.initialWorkspaceShellCommand(
-      { id: "global-1" }, "/tmp/project", "node-a")).toEqual([
-      "boomux", "shell", "create", "global-1", "--node", "node-a",
-      "--cwd", "/tmp/project"
-    ])
-    expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes)).toBe("node-a")
-    expect(model.defaultCreationNodeId([protocol38Envelope.data.nodes[1]])).toBe("node-b")
-    expect(model.defaultCreationNodeId(protocol38Envelope.data.nodes.map(node =>
-      Object.assign({}, node, { local: false })))).toBe("")
+    const local = model.localWorkspaceCreationNode(protocol38Envelope.data.nodes)
+    expect(local.node_id).toBe("node-a")
+    expect(model.localWorkspaceCreationNode([protocol38Envelope.data.nodes[1]])).toBeNull()
+    expect(model.localWorkspaceCreationNode(protocol38Envelope.data.nodes.map(node =>
+      Object.assign({}, node, { local: false })))).toBeNull()
+    expect(model.localWorkspaceCreationNode([Object.assign({}, local, { stale: true })])).toBeNull()
+    expect(model.localWorkspaceCreationNode([Object.assign({}, local,
+      { health: "reconnecting" })])).toBeNull()
+    expect(model.localWorkspaceCreationNode([local, Object.assign({}, local,
+      { node_id: "duplicate-local" })])).toBeNull()
     expect(model.qualifiedCommand(["boomux", "open"], "shell;$(false)", "node-b", false))
       .toEqual(["boomux", "open", "shell;$(false)", "--node", "node-b"])
   })
@@ -943,6 +963,204 @@ describe("qualified commands and action gates", () => {
       .toEqual(["boomux", "shell", "create", "external-b", "--name", "shell",
         "--cwd", "/tmp/remote", "--node", "node-b"])
   })
+
+  test("validates atomic response identities and resolves only exact snapshot IDs", () => {
+    const response = {
+      workspace: { id: "global-new", name: "generated-name", revision: 3 },
+      placement: { node_id: "node-a", owner_workspace_id: "owner-new",
+        default_cwd: "/home/a/project $(safe)" },
+      shell: { id: "shell-new", name: "generated-shell", node_id: "node-a",
+        cwd: "/home/a/project $(safe)" }
+    }
+    const identity = model.atomicWorkspaceCreateIdentity(response, "node-a")
+    expect(identity).toEqual({
+      workspaceId: "global-new", workspaceName: "generated-name", workspaceRevision: 3,
+      nodeId: "node-a", ownerWorkspaceId: "owner-new",
+      defaultCwd: "/home/a/project $(safe)", shellId: "shell-new",
+      shellName: "generated-shell"
+    })
+    const snapshot = [{
+      id: "global-new", name: "generated-name", is_global: true, revision: 3,
+      placements: [{ node_id: "node-a", workspace_id: "owner-new",
+        default_cwd: "/home/a/project $(safe)", state: "active" }],
+      shells: [{ id: "shell-new", name: "generated-shell", node_id: "node-a",
+        cwd: "/home/a/project $(safe)" }]
+    }]
+    expect(model.resolveAtomicWorkspaceCreation(identity, snapshot)).toMatchObject({
+      workspace: { id: "global-new" }, shell: { id: "shell-new" }
+    })
+    expect(model.resolveAtomicWorkspaceCreation(Object.assign({}, identity,
+      { shellId: "same-name-wrong-id" }), snapshot)).toBeNull()
+    expect(model.atomicWorkspaceCreationConflicts(Object.assign({}, identity,
+      { shellId: "same-name-wrong-id" }), snapshot)).toBe(true)
+    expect(model.resolveAtomicWorkspaceCreation(identity, [Object.assign({}, snapshot[0],
+      { name: "wrong-workspace-name" })])).toBeNull()
+    expect(model.resolveAtomicWorkspaceCreation(identity, [Object.assign({}, snapshot[0], {
+      shells: [Object.assign({}, snapshot[0].shells[0], { name: "wrong-shell-name" })]
+    })])).toBeNull()
+    expect(() => model.atomicWorkspaceCreateIdentity(Object.assign({}, response, {
+      placement: Object.assign({}, response.placement, { node_id: "node-b" })
+    }), "node-a")).toThrow()
+    expect(() => model.atomicWorkspaceCreateIdentity(Object.assign({}, response, {
+      workspace: Object.assign({}, response.workspace, { revision: 0 })
+    }), "node-a")).toThrow()
+    expect(() => model.atomicWorkspaceCreateIdentity(Object.assign({}, response, {
+      placement: Object.assign({}, response.placement, { default_cwd: "relative" })
+    }), "node-a")).toThrow()
+    expect(() => model.atomicWorkspaceCreateIdentity(Object.assign({}, response, {
+      shell: Object.assign({}, response.shell, { cwd: "/different/canonical" })
+    }), "node-a")).toThrow()
+  })
+
+  test("uses the returned canonical creation path instead of requested path spelling", () => {
+    const response = {
+      workspace: { id: "global-new", name: "generated-name", revision: 3 },
+      placement: { node_id: "node-a", owner_workspace_id: "owner-new",
+        default_cwd: "/canonical/project" },
+      shell: { id: "shell-new", name: "generated-shell", node_id: "node-a",
+        cwd: "/canonical/project" }
+    }
+    expect(model.atomicWorkspaceCreateIdentity(response, "node-a").defaultCwd)
+      .toBe("/canonical/project")
+  })
+
+  test("uses the project path unchanged in the same atomic creation command", () => {
+    const project = { name: "ignored-name", path: "/work/space; $(not-a-shell)" }
+    expect(model.atomicWorkspaceCreateCommand("node-a", project.path)).toEqual([
+      "boomux", "workspace", "create", "--node", "node-a", "--cwd",
+      "/work/space; $(not-a-shell)", "--json"
+    ])
+  })
+
+  test("gates and validates local coordinated Workspace default path changes", () => {
+    const snapshot = normalized()
+    const workspace = snapshot.workspaces.find(item => item.id === "global-1")
+    const placement = model.localActiveWorkspacePlacement(workspace, snapshot.nodes)
+    expect(placement).toMatchObject({ node_id: "node-a", workspace_id: "owner-shared" })
+    expect(model.localActiveWorkspacePlacement(Object.assign({}, workspace,
+      { closing: true }), snapshot.nodes)).toBeNull()
+    expect(model.localActiveWorkspacePlacement(workspace, snapshot.nodes.map(node =>
+      node.node_id === "node-a" ? Object.assign({}, node, { stale: true }) : node))).toBeNull()
+    expect(model.workspaceDefaultCwdCommand(
+      "global;$(false)", "node-a", "/path with spaces/;literal")).toEqual([
+      "boomux", "workspace", "set-default-cwd", "global;$(false)",
+      "--node", "node-a", "--cwd", "/path with spaces/;literal", "--json"
+    ])
+
+    const expected = { workspaceId: "global-1", nodeId: "node-a",
+      ownerWorkspaceId: "owner-shared", defaultCwd: "/requested/symlink" }
+    const identity = model.workspaceDefaultCwdIdentity({
+      workspace_id: "global-1", node_id: "node-a", owner_workspace_id: "owner-shared",
+      default_cwd: "/new/default path", global_revision: 9, owner_revision: 10,
+      result: "updated"
+    }, expected)
+    const updated = [{ id: "global-1", is_global: true, revision: 9, placements: [{
+      node_id: "node-a", workspace_id: "owner-shared", default_cwd: "/new/default path",
+      owner_revision: 10, state: "active"
+    }] }]
+    expect(model.resolveWorkspaceDefaultCwd(identity, updated)).toMatchObject({
+      workspace: { id: "global-1" }, placement: { owner_revision: 10 }
+    })
+    const newer = structuredClone(updated)
+    newer[0].revision = 11
+    newer[0].placements[0].owner_revision = 12
+    expect(model.resolveWorkspaceDefaultCwd(identity, newer)).not.toBeNull()
+    expect(model.resolveWorkspaceDefaultCwd(identity, [{ id: "global-1", is_global: true,
+      revision: 8, placements: updated[0].placements }])).toBeNull()
+    const conflicting = structuredClone(updated)
+    conflicting[0].placements[0].default_cwd = "/changed-again"
+    expect(model.workspaceDefaultCwdConflicts(identity, conflicting)).toBe(true)
+    expect(() => model.workspaceDefaultCwdIdentity(Object.assign({}, {
+      workspace_id: "global-1", node_id: "node-b", owner_workspace_id: "owner-shared",
+      default_cwd: "/new/default path", global_revision: 9, owner_revision: 10,
+      result: "updated"
+    }), expected)).toThrow()
+    expect(() => model.workspaceDefaultCwdIdentity({
+      workspace_id: "global-1", node_id: "node-a", owner_workspace_id: "owner-shared",
+      default_cwd: "relative", global_revision: 9, owner_revision: 10,
+      result: "updated"
+    }, expected)).toThrow()
+    expect(() => model.workspaceDefaultCwdIdentity({
+      workspace_id: "global-1", node_id: "node-a", owner_workspace_id: "owner-shared",
+      default_cwd: "/new/default path", global_revision: 9, owner_revision: 10,
+      result: "created"
+    }, expected)).toThrow()
+    expect(model.workspaceDefaultCwdIdentity({
+      workspace_id: "global-1", node_id: "node-a", owner_workspace_id: "owner-shared",
+      default_cwd: "/canonical/default", global_revision: 9, owner_revision: 10,
+      result: "unchanged"
+    }, expected).defaultCwd).toBe("/canonical/default")
+  })
+})
+
+test("wires the protocol-49 default path action without optimistic updates", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('data.json_commands.indexOf("workspace.set-default-cwd") >= 0')
+  expect(panel).toContain('cliFeatures.indexOf("workspace_placement_default_cwd") >= 0')
+  expect(panel).toContain("daemonProtocolVersion >= 49")
+  expect(panel).toContain('text: "Change Default Path"')
+  expect(panel).toContain('root.runActionMenuAction("default-path")')
+  expect(panel).toContain("WorkspaceModel.workspaceDefaultCwdCommand(")
+  expect(panel).toContain('root.parseEnvelope(defaultCwdStdout.text, "workspace.set-default-cwd")')
+  expect(panel).toContain("WorkspaceModel.resolveWorkspaceDefaultCwd(pendingDefaultCwd, workspaces)")
+  expect(panel).not.toContain("placement.default_cwd =")
+})
+
+test("requires a fresh status and authoritative Node snapshot for every creation intent", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const request = panel.slice(panel.indexOf("function requestGeneratedWorkspace"),
+    panel.indexOf("function resolvePendingWorkspaceCreation"))
+  expect(request).toContain("requestFreshWorkspaceCreateStatus()")
+  expect(request).toContain("workspaceCreateStatusActive = true")
+  expect(request).toContain("workspaceCreateSnapshotActive = true")
+  expect(request.indexOf("requestFreshWorkspaceCreateStatus()"))
+    .toBeLessThan(request.indexOf("atomicWorkspaceCreateCommand("))
+  expect(panel).toContain("if (explicitCreationCheck) requestFreshWorkspaceCreateSnapshot()")
+  expect(panel).toContain("if (explicitCreationSnapshot) maybeStartWorkspaceCreation()")
+  expect(panel).toContain("The refreshed Boomux daemon does not support coordinated Node snapshots")
+  expect(panel).toContain("Could not obtain a fresh Boomux Node snapshot")
+  expect(panel).toContain("workspaceCreateSnapshotQueued")
+  expect(panel).toContain("workspaceCreateStatusQueued")
+  expect(panel).toContain("if (workspaceCreateRequested && !daemonStartProcess.running)")
+  const failure = panel.match(/function failWorkspaceCreation\(message\) \{[\s\S]*?\n  \}/)?.[0]
+  expect(failure).toContain("workspaceCreateRequested = null")
+  const status = panel.slice(panel.indexOf("function parseDaemonStatus"),
+    panel.indexOf("function parseEnvelope"))
+  expect(status.indexOf("daemonStartProcess.running = true"))
+    .toBeLessThan(status.indexOf('setOffline("Boomux daemon is stopped")'))
+})
+
+test("bounds post-success snapshot confirmation without replaying mutations", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("id: mutationConfirmationTimer")
+  expect(panel).toContain("Date.now() + 10000")
+  expect(panel).toContain("function continueMutationConfirmation()")
+  expect(panel).toContain("Workspace creation completed but could not be confirmed; refresh to verify it")
+  expect(panel).toContain("Default path change completed but could not be confirmed; refresh to verify it")
+  const confirmation = panel.slice(panel.indexOf("function continueMutationConfirmation"),
+    panel.indexOf("function selectTab"))
+  expect(confirmation).not.toContain("workspaceCreateProcess.running = true")
+  expect(confirmation).not.toContain("defaultCwdProcess.running = true")
+})
+
+test("keeps project discovery online, fresh, retryable, and local", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("function invalidateProjectDiscovery()")
+  expect(panel).toContain("projectDiscoveryExpiresAt = Date.now() + 30000")
+  expect(panel).toContain("projectRefreshQueued = true")
+  expect(panel).toContain("projectLoadedNodeId === node.node_id")
+  expect(panel).toContain("if (!online || !projectDiscoveryLoaded || !selectedProject)")
+  expect(panel).toContain("if (!online)")
+  expect(panel).toContain("projectChooserRequested = true")
+  expect(panel).toContain("openFreshProjectChooser()")
+  expect(panel).toContain("visible: root.online && root.projectListSupported")
+  expect(panel).toContain("invalidateProjectDiscovery()\n    if (!capabilityProcess.running)")
+})
+
+test("documents that generated Workspace creation does not open a terminal", () => {
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
+  expect(readme).toContain("without opening a terminal")
+  expect(readme).not.toContain("Shell, and opens it")
 })
 
 describe("request identity", () => {
