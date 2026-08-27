@@ -15,16 +15,17 @@ terminals, monitoring Agents, and checking Nodes.
 
 - Keeps an expandable multi-Workspace tree visible above Agent and Node views.
 - Shows the installed Boomux CLI version in the pane header.
-- Lists active Agents in one flat, most-recently-updated-first view.
+- Lists current Agents and outstanding blocked or completed attention by latest
+  authoritative update.
 - Delegates available Boomux upgrades to the CLI's verified guided updater.
 - Provides three-dot action menus for Workspaces, items, and Nodes, including
-  Shell creation, default-path changes, rename, guided recovery, and confirmed
-  removal actions when supported.
+  Shell creation, Shell start-folder changes, rename, guided recovery, and
+  confirmed removal actions when supported.
 - Creates a generated coordinated Workspace and its first generated Shell from
   `+` or `N`, always on the exact eligible local Node at `$HOME`, without opening
   a terminal.
-- Offers a project-folder action when Boomux has configured project roots, using the
-  discovered canonical project path without a naming or arbitrary-path form.
+- Offers a project-folder action when Boomux has configured project roots, using
+  each discovered project name and canonical path without an editing form.
 - Reserves the left or right screen edge so Hyprland tiles applications beside
   the pane instead of covering them.
 - Presents coordinated Workspaces immediately through Boomux's Hyprland desktop
@@ -32,35 +33,41 @@ terminals, monitoring Agents, and checking Nodes.
 - Shows the active Workspace, focused managed terminal, Agent attention, and
   Node health.
 - Opens exact Shells and Agents while keeping the pane visible.
-- Uses compact, confirmed removal actions for local Workspaces, Shells, and
+- Uses confirmed removal actions for coordinated Workspaces and local Shells or
   launchers.
 
 ## Requirements
 
-- Omarchy with the Quattro shell plugin system.
-- [Boomux](https://github.com/gardnmi/boomux) with daemon protocol 49 or newer on
-  `PATH`, advertising `atomic_workspace_shell_creation` and
-  `workspace_placement_default_cwd`.
+- Omarchy with shell plugin support.
+- [Boomux 1.2.0](https://github.com/gardnmi/boomux/releases/tag/v1.2.0) or newer
+  on `PATH`, with daemon protocol 49 or newer and the advertised Workspace
+  capabilities.
 - A native terminal supported by `xdg-terminal-exec`.
 
-The revised Workspace creation and default-path UX requires protocol 49. Agent
-status requires a supported lifecycle integration:
-
-```console
-boomux integration list
-boomux integration setup <name>
-```
+Boomux 1.2.0 and protocol 49 are the supported baseline. Protocol 49 is
+specifically required for changing a placement's Shell start folder. Agent
+status requires a supported lifecycle integration, which `boomux setup` can
+install.
 
 ## Install
 
-Omarchy plugins run as unsandboxed code inside the shell process. Review the
-source, then install and enable it:
+After installing Boomux, the recommended setup offers to install and enable the
+plugin, configure integrations and the Agent Skill, and add managed keybindings:
+
+```console
+boomux setup
+```
+
+To install only the pane, review it first because Omarchy plugins run as
+unsandboxed shell-process code, then run:
 
 ```console
 omarchy plugin add https://github.com/gardnmi/omarchy-boomux.git --enable
 ```
 
 The widget defaults to the right bar section and opens a pane from the left edge.
+Omarchy's graphical environment must be able to resolve `boomux`; official Boomux
+releases install it to `~/.local/bin`.
 
 ## Use
 
@@ -71,12 +78,14 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | `Super+B` with the bindings below | Open or close the passive pane |
 | `Super+A` with the bindings below | Enter or leave Boomux keyboard mode |
 | `Super+Arrow` in keyboard mode | Return keyboard ownership to Hyprland |
-| Workspace row | Select and present that Workspace |
+| Coordinated Workspace row | Present that Workspace; if its layer has no windows, open its existing Shells to populate it without invoking launchers |
+| External or legacy Workspace row | Open or restore that Workspace; exited Shells may restart and launchers may run |
 | Workspace chevron | Expand Shells, commands, and launchers |
-| Shell, command, or Agent row | Open the exact managed terminal |
+| Shell, command, or Agent row | Open the exact Shell with takeover, disconnecting its current writable controller; an exited Shell starts a new run, and opening a local Agent acknowledges its current attention |
+| Launcher row | Invoke the detached launcher; no managed terminal or retained output is created |
 | `+` or `N` | Immediately create a generated Workspace and first Shell at `$HOME` |
 | Project folder icon | Choose a configured project and create a same-named Workspace and generated Shell at its canonical path |
-| Workspace three-dot menu | Create a Shell, change the active local placement default path, rename, or remove when supported |
+| Workspace three-dot menu | Create a Shell, change its local **Shell Start Folder**, rename, or remove when supported |
 | `Tab` / `Shift-Tab` | Move between Workspaces, expanded items, and the lower view |
 | Arrow keys or `H` / `J` / `K` / `L` | Move within the focused section; expand or collapse Workspaces |
 | `Enter` or `Space` | Activate the focused row or menu action |
@@ -86,11 +95,11 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
 | Authenticate in Nodes | Open interactive authentication for an existing registered Node |
 | Update in Nodes | Reconnect, verify, and update an older remote Boomux helper in a native terminal |
-| Uninstall Boomux | Confirm **Uninstall and Forget**, then review the exact remote process and data impact in a native terminal |
+| Uninstall Boomux | Choose **Uninstall Boomux**, confirm **Uninstall**, then review the exact remote process and data impact in Boomux's terminal workflow |
 | Forget Node | Confirm **Just Forget** to remove only the local registration without contacting the remote Node |
-| `D` in Agents | Dismiss the selected notification |
+| `D` in Agents | Dismiss the selected local Agent notification when available |
 | `R` | Refresh |
-| `Escape` | Close the pane |
+| `Escape` | Dismiss the current menu, form, picker, dialog, or settings view; otherwise close the pane |
 
 For direct keyboard access:
 
@@ -127,8 +136,9 @@ exits the mode and returns keys to the window Hyprland selects.
 Clicking outside the drawer likewise exits keyboard mode without closing it.
 
 Selecting a coordinated Workspace presents its existing Hyprland layer and
-stores it as Boomux's default Workspace. It does not restore every Shell or run
-launchers. Older compatible Boomux versions fall back to `workspace open --show`.
+stores it as Boomux's default Workspace. If the layer has no windows, Boomux
+opens its existing Shells to populate it; pending or exited Shells can start a
+run. This presentation does not invoke launchers.
 
 The pane remains visible while applications receive focus and while other
 Omarchy plugins open.
@@ -136,9 +146,9 @@ Omarchy plugins open.
 Workspace creation is intentionally local and form-free. Boomux generates both
 names and atomically persists the coordinated Workspace, local placement, and
 first Shell without opening a terminal. The project-folder action uses the same
-command with the discovered project name and exact path returned by `project list`; it does not permit name editing
-or arbitrary cwd entry and never falls back to a remote Node. Boomux may
-canonicalize the requested path; the returned absolute path is authoritative.
+command with the discovered project name and canonical path returned by
+`project list`. It does not permit name editing, arbitrary path entry, or remote
+fallback.
 
 ## Settings
 
@@ -154,13 +164,9 @@ versions, protocol, freshness, resource counts, and Workspace eligibility. Its
 the currently active Boomux Workspace; paths and commands are resolved on that
 Node.
 
-For a coordinated Workspace with one active local placement, **Change Default
-Path** starts the picker at that placement's current default (or `$HOME`). The
-change affects future Shell creation only; existing Shells and runs are not
-restarted. The folder picker shows the current folder's full path, opens folder
-rows directly, and keeps **Start New Shells Here** separate from upward navigation
-and cancellation. The pane waits for both the exact JSON response identities and an
-authoritative Node snapshot before reporting completion.
+For a coordinated Workspace with one active local placement, **Shell Start
+Folder** opens at that placement's current folder or `$HOME`. **Start New Shells
+Here** changes where future Shells begin; existing Shells and runs are unchanged.
 
 When a Node reports **authentication required**, **Authenticate** opens Boomux's
 interactive reauthentication flow in a native terminal. It uses the exact stored
@@ -179,8 +185,8 @@ update needed**. Cached transient states remain visible and the guided flow
 revalidates the exact Node live before changing it.
 
 For a current Node that advertises protocol-48 uninstall coordination,
-**Uninstall Boomux** is separate from **Forget Node**. **Uninstall and Forget**
-opens `boomux node uninstall` with the exact Node ID in a native terminal. Boomux
+**Uninstall Boomux** is separate from **Forget Node**. **Uninstall Boomux** opens
+`boomux node uninstall` with the exact Node ID in a native terminal. Boomux
 shows the process, integration, executable, durable-data, configuration, and
 registration impact before requiring confirmation. **Just Forget** never
 contacts the remote Node, stops no remote processes, and removes only the local
@@ -196,6 +202,18 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 }
 ```
 
+## Tailnet Web
+
+The pane shows **Start Web**, **Open**, and **Stop** when the installed Boomux
+supports web management. **Start Web** requires connected Tailscale and runs
+`boomux web start --tailscale`, publishing the Boomux dashboard and enabled
+OpenCode runtime. Suitable tailnet grants and ACLs are still required.
+
+**Stop** stops only the web gateway and removes routes created by Boomux. It does
+not stop the daemon, managed processes, or Shared Harness Runtime. Boomux does
+not authenticate the full-control OpenCode service; the private access layer
+must provide TLS, authentication, and authorization.
+
 ## Safety
 
 - The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
@@ -203,18 +221,24 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 - Passive refresh leaves a stopped daemon stopped. Explicit `+`/`N` creation
   starts Boomux when needed, refreshes its protocol and Node snapshot, resolves
   exactly one eligible local Node, and only then builds the atomic command once.
-- Workspace creation and default-path changes use exact argv and returned IDs.
-  They do not queue, retry, optimistically update the model, or fall back to a
-  remote Node when state becomes stale or unavailable.
+- Workspace creation and Shell start-folder changes use exact argv and returned
+  IDs. The pane does not reissue a mutation after completion or an unknown
+  outcome, optimistically update the model, or fall back to a remote Node.
 - Every creation intent performs a fresh daemon status check and fresh Node
   snapshot before constructing argv. After a successful mutation, snapshot
   confirmation is bounded; a timeout reports that the operation completed but
   remains unconfirmed and asks for a refresh without replaying it.
-- Remote cached resources stay visible but become non-actionable when stale or
-  unavailable. The guided Node update is the only stale-row exception because
-  Boomux reconnects and verifies the exact registered Node before replacement.
+- Remote cached resources stay visible but owner-dependent actions become
+  non-actionable when stale or unavailable. Guided update and authentication
+  reconnect and verify the registered Node; **Forget Node** remains local
+  registration maintenance and does not contact the owner.
 - Destructive actions require confirmation and use exact resource IDs. Remote
   uninstall requires a second interactive confirmation from Boomux.
+- Removing a coordinated Workspace can terminate Shells and remove launchers,
+  retained state, Agent records, and attention across its placements.
+  Unavailable placements can leave it visibly closing for retry.
+- Opening a Shell or Agent uses takeover and can disconnect another writable
+  controller. Opening an exited Shell starts a new run.
 - Closing a Shell can terminate its process and delete retained terminal state.
   Removing a launcher does not stop applications it already started.
 - The plugin never reads credentials, attachment environments, or remote terminal
@@ -224,11 +248,11 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
   stay interactive. Omarchy presents these plugin-owned terminal dialogs as
   centered floating windows.
 - New Boomux versions own release discovery through `boomux update status`; the
-  plugin opens `boomux update` in a native terminal and passively checks update
-  status afterward so completion or failure remains visible in the pane. It never
-  downloads, authorizes, or replaces Boomux itself. Older compatible Boomux
-  versions retain a bounded release-page check. Plugin update discovery uses the
-  fixed published manifest URL.
+  pane opens Boomux's interactive `boomux update` workflow. For eligible official
+  installations, that workflow verifies, confirms, downloads, and replaces the
+  release; package-managed installations are directed to their package manager.
+  The pane performs no replacement itself and checks status afterward. Plugin
+  update discovery uses the fixed published manifest URL.
 
 ## Maintenance
 
