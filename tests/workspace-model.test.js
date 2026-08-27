@@ -519,7 +519,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.2.1")
+  expect(manifest.version).toBe("2.2.2")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -909,6 +909,9 @@ describe("qualified commands and action gates", () => {
   })
 
   test("creates coordinated Workspace metadata without assigning a Node or path", () => {
+    expect(model.workspaceDaemonStartCommand()).toEqual([
+      "boomux", "workspace", "list", "--json"
+    ])
     expect(model.workspaceCreateCommand("release; rm -rf /", "/tmp/$(false)", true))
       .toEqual(["boomux", "workspace", "create", "release; rm -rf /"])
     expect(model.workspaceCreateCommand("legacy", "/tmp/legacy", false)).toEqual([

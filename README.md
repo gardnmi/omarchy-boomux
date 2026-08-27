@@ -176,6 +176,9 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 
 - The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
   remote routing, authentication, and persistence.
+- Passive refresh leaves a stopped daemon stopped. Explicitly choosing **Create
+  Workspace** starts Boomux when needed, refreshes its protocol and Node state,
+  and only then builds the create command.
 - Remote cached resources stay visible but become non-actionable when stale or
   unavailable. The guided Node update is the only stale-row exception because
   Boomux reconnects and verifies the exact registered Node before replacement.

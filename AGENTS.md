@@ -120,8 +120,10 @@ or lifecycle observation.
 
 ## Safety Invariants
 
-- Check `boomux daemon status --json` before daemon-backed polling. A stopped
-  daemon must remain stopped; the widget must not resurrect it.
+- Check `boomux daemon status --json` before daemon-backed polling. Passive pane
+  refresh must not resurrect a stopped daemon. An explicit **Create Workspace**
+  action may start it through a daemon-backed public Boomux command, then must
+  refresh daemon protocol and Node state before constructing the create command.
 - QML invokes only the local Boomux CLI and daemon for management. It must not
   invoke SSH, contact a Node directly, store credentials, or handle remote
   bootstrap confirmation. Capability-aware Boomux release discovery must use

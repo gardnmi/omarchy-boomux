@@ -746,6 +746,10 @@ function workspaceCreateCommand(name, cwd, coordinated) {
   return command
 }
 
+function workspaceDaemonStartCommand() {
+  return ["boomux", "workspace", "list", "--json"]
+}
+
 function initialWorkspaceShellCommand(workspace, cwd, nodeId) {
   return ["boomux", "shell", "create", String(workspace.id),
     "--node", String(nodeId), "--cwd", String(cwd)]
@@ -920,6 +924,7 @@ if (typeof module !== "undefined") module.exports = {
   eligibleNodes: eligibleNodes,
   defaultCreationNodeId: defaultCreationNodeId,
   workspaceCreateCommand: workspaceCreateCommand,
+  workspaceDaemonStartCommand: workspaceDaemonStartCommand,
   initialWorkspaceShellCommand: initialWorkspaceShellCommand,
   workspaceCreationBlockReason: workspaceCreationBlockReason,
   suggestionIdentity: suggestionIdentity,

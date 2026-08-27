@@ -132,6 +132,7 @@ Panel {
   property var pendingAction: null
   property var pendingWorkspaceOpen: null
   property var pendingWorkspace: null
+  property bool workspaceFormStartPending: false
   property var pendingShell: null
   property string projectRequestedNodeId: ""
   property string projectActiveNodeId: ""
@@ -649,6 +650,7 @@ Panel {
       preserveSelections()
       if (workspaceModelChanged) restoreWorkspaceTreeScroll(treeScrollY)
       openPendingShellIfPresent()
+      maybeShowPendingWorkspaceForm()
     } catch (exception) {
       error = "Could not read federated Boomux state"
       console.warn("io.github.gardnmi.boomux:", exception)
@@ -812,6 +814,7 @@ Panel {
       else workspaceDetail = null
       clampSelection()
       if (workspaceModelChanged) restoreWorkspaceTreeScroll(treeScrollY)
+      maybeShowPendingWorkspaceForm()
     } catch (exception) {
       online = false
       workspaces = []
@@ -1143,6 +1146,26 @@ Panel {
   function finishRefresh() {
     refreshPending = Math.max(0, refreshPending - 1)
     refreshing = refreshPending > 0
+    maybeShowPendingWorkspaceForm()
+  }
+
+  function requestWorkspaceForm() {
+    if (online) {
+      showForm("workspace")
+      return
+    }
+    if (workspaceFormStartPending || daemonStartProcess.running) return
+    workspaceFormStartPending = true
+    actionMessage = "Starting Boomux..."
+    if (daemonStatusProcess.running) daemonStatusProcess.running = false
+    daemonStartProcess.running = true
+  }
+
+  function maybeShowPendingWorkspaceForm() {
+    if (!workspaceFormStartPending || refreshing || !online) return
+    workspaceFormStartPending = false
+    actionMessage = ""
+    showForm("workspace")
   }
 
   function selectTab(tab) {
@@ -2156,6 +2179,7 @@ Panel {
   }
 
   function cancelForm() {
+    workspaceFormStartPending = false
     directoryPickerOpen = false
     projectRequestedNodeId = ""
     agentHostRequestedNodeId = ""
@@ -2685,6 +2709,23 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseDaemonStatus(text) }
     onExited: function(exitCode) {
       if (exitCode !== 0) root.setOffline("Boomux daemon is stopped")
+    }
+  }
+
+  Process {
+    id: daemonStartProcess
+    command: WorkspaceModel.workspaceDaemonStartCommand()
+    stdout: StdioCollector { id: daemonStartStdout; waitForEnd: true }
+    stderr: StdioCollector { id: daemonStartStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        daemonStatusProcess.running = true
+      } else {
+        root.workspaceFormStartPending = false
+        root.showActionFailure("Workspace creation unavailable", root.processError(
+          daemonStartStderr.text || daemonStartStdout.text,
+          "Could not start Boomux"))
+      }
     }
   }
 
@@ -4112,7 +4153,7 @@ Panel {
                 foreground: root.foreground
                 horizontalPadding: Style.space(3)
                 verticalPadding: Style.space(1)
-                onClicked: root.showForm("workspace")
+                onClicked: root.requestWorkspaceForm()
               }
             }
 
