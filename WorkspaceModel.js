@@ -750,9 +750,10 @@ function localWorkspaceCreationNode(nodes) {
   return matches.length === 1 ? matches[0] : null
 }
 
-function atomicWorkspaceCreateCommand(nodeId, cwd) {
-  return ["boomux", "workspace", "create", "--node", String(nodeId),
-    "--cwd", String(cwd), "--json"]
+function atomicWorkspaceCreateCommand(nodeId, cwd, name) {
+  var command = ["boomux", "workspace", "create"]
+  if (name) command.push(String(name))
+  return command.concat(["--node", String(nodeId), "--cwd", String(cwd), "--json"])
 }
 
 function workspaceDaemonStartCommand() {

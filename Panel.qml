@@ -120,7 +120,7 @@ Panel {
   property string formMode: ""
   property bool settingsOpen: false
   property string projectQuery: ""
-  property int selectedProjectIndex: 0
+  property int selectedProjectIndex: -1
   property string projectError: ""
   property bool cwdIsExact: false
   property bool nameFieldEdited: false
@@ -237,6 +237,8 @@ Panel {
   readonly property var visibleProjects: filterProjects()
   readonly property var selectedProject: selectedProjectIndex >= 0
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
+  readonly property bool directoryPickerCanGoUp: directoryPickerPath !== ""
+    && directoryPickerPath !== "/"
   readonly property int itemCount: activeTab === "agents" ? paneAgents.length : visibleNodes.length
   readonly property var selectedItem: {
     var model = activeTab === "agents" ? paneAgents : visibleNodes
@@ -257,7 +259,7 @@ Panel {
   readonly property bool editing: formMode !== ""
 
   onProjectQueryChanged: {
-    selectedProjectIndex = 0
+    selectedProjectIndex = -1
     clampProjectSelection()
   }
 
@@ -569,7 +571,7 @@ Panel {
       failWorkspaceCreation("Boomux went offline before creation could obtain a fresh Node snapshot")
     }
     if (pendingDefaultCwd) {
-      actionMessage = "Default path changed; waiting for Boomux to confirm the snapshot"
+      actionMessage = "Shell start folder changed; waiting for Boomux to confirm the snapshot"
     }
     if (pendingWorkspaceCreation) {
       actionMessage = "Workspace created; waiting for Boomux to confirm the snapshot"
@@ -1027,7 +1029,7 @@ Panel {
     projectDiscoveryLoaded = false
     projectLoadedNodeId = ""
     projectDiscoveryExpiresAt = 0
-    selectedProjectIndex = 0
+    selectedProjectIndex = -1
     projectError = ""
     var node = WorkspaceModel.localWorkspaceCreationNode(nodes)
     if (!node) {
@@ -1091,13 +1093,17 @@ Panel {
   }
 
   function clampProjectSelection() {
-    if (visibleProjects.length === 0) selectedProjectIndex = 0
-    else selectedProjectIndex = Math.max(0, Math.min(selectedProjectIndex, visibleProjects.length - 1))
+    if (visibleProjects.length === 0) selectedProjectIndex = -1
+    else if (selectedProjectIndex >= visibleProjects.length)
+      selectedProjectIndex = visibleProjects.length - 1
   }
 
   function moveProjectSelection(delta) {
     if (visibleProjects.length === 0) return
-    selectedProjectIndex = Math.max(0, Math.min(selectedProjectIndex + delta, visibleProjects.length - 1))
+    if (selectedProjectIndex < 0)
+      selectedProjectIndex = delta < 0 ? visibleProjects.length - 1 : 0
+    else
+      selectedProjectIndex = Math.max(0, Math.min(selectedProjectIndex + delta, visibleProjects.length - 1))
     projectList.positionViewAtIndex(selectedProjectIndex, ListView.Contain)
   }
 
@@ -1220,7 +1226,7 @@ Panel {
     showActionFailure("Workspace creation unavailable", message)
   }
 
-  function requestGeneratedWorkspace(cwd) {
+  function requestGeneratedWorkspace(cwd, name) {
     var path = String(cwd || "")
     if (workspaceMutationBusy()) return
     if (path.indexOf("/") !== 0) {
@@ -1232,7 +1238,7 @@ Panel {
         "This Boomux CLI does not support atomic Workspace and Shell creation")
       return
     }
-    workspaceCreateRequested = { cwd: path }
+    workspaceCreateRequested = { cwd: path, name: String(name || "") }
     actionMessage = "Checking Boomux before creation..."
     requestFreshWorkspaceCreateStatus()
   }
@@ -1283,7 +1289,7 @@ Panel {
     var request = workspaceCreateRequested
     workspaceCreateRequested = null
     workspaceCreateProcess.command = WorkspaceModel.atomicWorkspaceCreateCommand(
-      node.node_id, request.cwd)
+      node.node_id, request.cwd, request.name)
     workspaceCreateProcess.expectedNodeId = node.node_id
     workspaceCreateProcess.running = true
   }
@@ -1333,7 +1339,7 @@ Panel {
     formMode = "project"
     projectSearchField.text = ""
     projectQuery = ""
-    selectedProjectIndex = 0
+    selectedProjectIndex = -1
     actionMessage = ""
     Qt.callLater(function() { projectSearchField.forceActiveFocus() })
   }
@@ -1370,7 +1376,7 @@ Panel {
         || workspace.id !== target.workspaceId || placement.node_id !== target.nodeId
         || placement.workspace_id !== target.ownerWorkspaceId) {
       cancelForm()
-      showActionFailure("Default path change unavailable",
+      showActionFailure("Shell start folder unavailable",
         "The local Workspace placement changed; reopen its menu")
       return
     }
@@ -1383,7 +1389,7 @@ Panel {
     defaultCwdProcess.command = WorkspaceModel.workspaceDefaultCwdCommand(
       target.workspaceId, target.nodeId, path)
     cancelForm()
-    actionMessage = "Changing Workspace default path..."
+    actionMessage = "Changing where new Shells start..."
     defaultCwdProcess.running = true
   }
 
@@ -1393,14 +1399,14 @@ Panel {
       if (WorkspaceModel.workspaceDefaultCwdConflicts(pendingDefaultCwd, workspaces)) {
         pendingDefaultCwd = null
         pendingDefaultCwdConfirmationDeadline = 0
-        showActionFailure("Default path change failed",
-          "The authoritative Workspace placement no longer has the returned default path")
+        showActionFailure("Shell start folder change failed",
+          "The Workspace no longer reports the selected Shell start folder")
       }
       return
     }
     pendingDefaultCwd = null
     pendingDefaultCwdConfirmationDeadline = 0
-    actionMessage = "Workspace default path changed; existing Shells were not restarted"
+    actionMessage = "New Shells will start in the selected folder; existing Shells were not changed"
   }
 
   function scheduleMutationConfirmation() {
@@ -1422,7 +1428,7 @@ Panel {
     if (pendingDefaultCwd && now >= pendingDefaultCwdConfirmationDeadline) {
       pendingDefaultCwd = null
       pendingDefaultCwdConfirmationDeadline = 0
-      warnings.push("Default path change completed but could not be confirmed; refresh to verify it")
+      warnings.push("Shell start folder changed but could not be confirmed; refresh to verify it")
     }
     if (warnings.length > 0)
       showActionFailure("Boomux snapshot confirmation incomplete", warnings.join(" · "))
@@ -2468,6 +2474,14 @@ Panel {
     return separator <= 0 ? "/" : value.substring(0, separator)
   }
 
+  function directoryDisplayName(path) {
+    var value = String(path || "/").replace(/\/+$/, "")
+    if (value === "" || value === "/") return "File System"
+    if (value === home) return "Home"
+    var separator = value.lastIndexOf("/")
+    return separator < 0 ? value : value.substring(separator + 1)
+  }
+
   function enterDirectory(path) {
     if (String(path || "").indexOf("/") !== 0) return
     directoryPickerPath = String(path)
@@ -2505,8 +2519,9 @@ Panel {
         return
       }
       var projectPath = String(selectedProject.path)
+      var projectName = String(selectedProject.name)
       cancelForm()
-      requestGeneratedWorkspace(projectPath)
+      requestGeneratedWorkspace(projectPath, projectName)
       return
     }
     if (actionProcess.running) return
@@ -3219,9 +3234,9 @@ Panel {
       var expected = root.defaultCwdRequest
       root.defaultCwdRequest = null
       if (exitCode !== 0) {
-        root.showActionFailure("Default path change failed", root.processError(
+        root.showActionFailure("Shell start folder change failed", root.processError(
           defaultCwdStderr.text || defaultCwdStdout.text,
-          "Could not change the Workspace default path"))
+          "Could not change where new Shells start"))
         return
       }
       try {
@@ -3232,7 +3247,7 @@ Panel {
         root.refresh()
         root.scheduleMutationConfirmation()
       } catch (exception) {
-        root.showActionFailure("Default path change failed",
+        root.showActionFailure("Shell start folder change failed",
           "Could not validate the updated Workspace placement identity")
       }
     }
@@ -3962,7 +3977,9 @@ Panel {
             spacing: Style.space(6)
             PanelSectionHeader {
               width: parent.width
-              text: root.directoryPickerOpen ? "CHOOSE DIRECTORY"
+              text: root.directoryPickerOpen
+                ? (root.directoryPickerPurpose === "workspace-default"
+                  ? "SHELL START FOLDER" : "CHOOSE DIRECTORY")
                 : (root.formMode === "project" ? "FROM PROJECTS"
                   : (root.formMode === "shell" ? "CREATE SHELL" : "START AGENT"))
               foreground: root.foreground
@@ -4006,20 +4023,68 @@ Panel {
 
               Text {
                 width: parent.width
-                text: root.compactPath(root.directoryPickerPath)
-                color: root.foreground
+                text: root.directoryPickerPurpose === "workspace-default"
+                  ? "Choose where new Shells in this Workspace should start. Existing Shells stay where they are."
+                  : "Choose the folder where this new item should start."
+                color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                elide: Text.ElideMiddle
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.Wrap
+              }
+
+              Rectangle {
+                width: parent.width
+                height: Style.space(58)
+                radius: Style.cornerRadius
+                color: Util.alpha(root.foreground, 0.05)
+                border.width: 1
+                border.color: Util.alpha(root.foreground, 0.16)
+
+                Row {
+                  anchors.fill: parent
+                  anchors.margins: Style.space(9)
+                  spacing: Style.space(8)
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: ""
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.title
+                  }
+
+                  Column {
+                    width: parent.width - Style.space(30)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(1)
+                    Text {
+                      width: parent.width
+                      text: root.directoryDisplayName(root.directoryPickerPath)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+                    Text {
+                      width: parent.width
+                      text: root.directoryPickerPath
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideMiddle
+                    }
+                  }
+                }
               }
 
               Text {
                 width: parent.width
-                text: "Enter opens · Left goes up · Space chooses this directory"
+                text: "Open folders until the location above is right, then confirm it below."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
               }
 
               Item {
@@ -4054,58 +4119,76 @@ Panel {
                       ? Style.selectedFillFor(root.foreground, Color.accent)
                       : (directoryMouse.containsMouse
                         ? Util.alpha(root.foreground, 0.06) : "transparent")
-                    Text {
+                    Row {
                       anchors.left: parent.left
                       anchors.right: parent.right
                       anchors.margins: Style.space(9)
                       anchors.verticalCenter: parent.verticalCenter
-                      text: "▸  " + fileName
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      elide: Text.ElideRight
+                      spacing: Style.space(8)
+                      Text {
+                        text: ""
+                        color: index === root.directoryPickerIndex ? Color.accent : root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                      }
+                      Text {
+                        width: Math.max(0, parent.width - Style.space(52))
+                        text: fileName
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        text: "›"
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                      }
                     }
                     MouseArea {
                       id: directoryMouse
                       anchors.fill: parent
                       hoverEnabled: true
                       onEntered: root.directoryPickerIndex = index
-                      onClicked: root.directoryPickerIndex = index
-                      onDoubleClicked: root.enterDirectory(filePath)
+                      onClicked: root.enterDirectory(filePath)
                     }
                   }
                 }
+              }
+
+              Button {
+                id: directoryChooseButton
+                width: parent.width
+                text: root.directoryPickerPurpose === "workspace-default"
+                  ? "Start New Shells Here" : "Use This Folder"
+                focusable: true
+                bordered: true
+                active: true
+                foreground: root.foreground
+                onClicked: root.chooseDirectory()
               }
 
               Row {
                 width: parent.width
                 spacing: Style.space(6)
                 Button {
-                  width: (parent.width - parent.spacing * 2) / 3
-                  text: "Up"
+                  width: (parent.width - parent.spacing) / 2
+                  text: "Go Up"
                   focusable: true
                   bordered: true
+                  enabled: root.directoryPickerCanGoUp
                   foreground: root.foreground
                   onClicked: root.enterDirectory(root.parentDirectory(root.directoryPickerPath))
                 }
                 Button {
                   id: directoryCancelButton
-                  width: (parent.width - parent.spacing * 2) / 3
+                  width: (parent.width - parent.spacing) / 2
                   text: "Cancel"
                   focusable: true
                   bordered: true
                   foreground: root.foreground
                   onClicked: root.closeDirectoryPicker()
-                }
-                Button {
-                  id: directoryChooseButton
-                  width: (parent.width - parent.spacing * 2) / 3
-                  text: "Choose Here"
-                  focusable: true
-                  bordered: true
-                  active: true
-                  foreground: root.foreground
-                  onClicked: root.chooseDirectory()
                 }
               }
             }
@@ -4212,6 +4295,8 @@ Panel {
                     ? Style.selectedFillFor(root.foreground, Color.accent)
                     : (projectMouse.containsMouse
                       ? Util.alpha(root.foreground, 0.06) : "transparent")
+                  border.width: index === root.selectedProjectIndex ? 1 : 0
+                  border.color: Color.accent
                   Column {
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -4240,7 +4325,6 @@ Panel {
                     id: projectMouse
                     anchors.fill: parent
                     hoverEnabled: true
-                    onEntered: root.selectedProjectIndex = index
                     onClicked: root.selectedProjectIndex = index
                     onDoubleClicked: {
                       root.selectedProjectIndex = index
@@ -4388,14 +4472,14 @@ Panel {
                   id: fromProjectsButton
                   visible: root.online && root.projectListSupported
                     && root.projectRootsConfigured
+                  width: Style.space(32)
                   height: Style.space(28)
-                  text: "From Projects"
-                  tooltipText: "Create a generated Workspace at a configured project"
+                  iconText: ""
+                  tooltipText: "Create a Workspace from a configured project"
                   bordered: true
                   enabled: !root.workspaceMutationBusy()
                   foreground: root.foreground
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(6)
+                  horizontalPadding: Style.space(3)
                   verticalPadding: Style.space(1)
                   onClicked: root.showProjectChooser()
                 }
@@ -5252,8 +5336,8 @@ Panel {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
                 && root.workspaceCanChangeDefaultPath(root.actionMenuTarget.workspace)
               width: parent.width
-              text: "Change Default Path"
-              tooltipText: "Change the local placement default for future Shells"
+              text: "Shell Start Folder"
+              tooltipText: "Choose where new Shells in this Workspace start"
               bordered: false
               hasCursor: root.currentActionMenuAction === "default-path"
               leftAlign: true

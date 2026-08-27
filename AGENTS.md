@@ -173,7 +173,7 @@ or lifecycle observation.
 
 ## UI Conventions
 
-- Keep immediate generated Workspace creation and **From Projects** at
+- Keep immediate generated Workspace creation and the project-folder action at
   Workspace-tree scope. Do not restore Workspace name or arbitrary-path forms.
 - Gate **Change Default Path** on protocol 49, `workspace.set-default-cwd`, and
   `workspace_placement_default_cwd`, and expose it only for an active local

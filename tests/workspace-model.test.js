@@ -523,7 +523,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.3.0")
+  expect(manifest.version).toBe("2.3.3")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -681,18 +681,20 @@ test("persists the explicitly selected coordinator Workspace", () => {
   expect(panel).toContain("WorkspaceModel.resolveAtomicWorkspaceCreation(")
 })
 
-test("uses generated atomic Workspace creation from plus, N, and configured projects", () => {
+test("uses atomic Workspace creation from plus, N, and configured projects", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain('text: "From Projects"')
+  expect(panel).toContain('iconText: ""')
+  expect(panel).not.toContain('text: "From Projects"')
   expect(panel).toContain("visible: root.online && root.projectListSupported")
   expect(panel).toContain("&& root.projectRootsConfigured")
   expect(panel).toContain("onClicked: root.requestGeneratedWorkspace(root.home)")
   expect(panel).toContain('else if (text === "n" || text === "N") root.requestGeneratedWorkspace(root.home)')
-  expect(panel).toContain("requestGeneratedWorkspace(projectPath)")
+  expect(panel).toContain("requestGeneratedWorkspace(projectPath, projectName)")
+  expect(panel).toContain("var projectName = String(selectedProject.name)")
   expect(panel).toContain("WorkspaceModel.atomicWorkspaceCreateCommand(")
   expect(panel.match(/WorkspaceModel\.atomicWorkspaceCreateCommand\(/g)).toHaveLength(1)
   expect(panel).toContain("command: WorkspaceModel.workspaceDaemonStartCommand()")
-  expect(panel).toContain("workspaceCreateRequested = { cwd: path }")
+  expect(panel).toContain('workspaceCreateRequested = { cwd: path, name: String(name || "") }')
   expect(panel).toContain("daemonStatusProcess.running = true")
   expect(panel).toContain("requestFreshWorkspaceCreateStatus()")
   expect(panel).toContain("requestFreshWorkspaceCreateSnapshot()")
@@ -704,6 +706,31 @@ test("uses generated atomic Workspace creation from plus, N, and configured proj
   expect(panel).not.toContain('placeholderText: "Workspace name"')
   expect(panel).not.toContain('kind: "create-workspace-shell"')
   expect(panel).not.toContain("workspaces[p].name ===")
+})
+
+test("requires an explicit project selection and marks only clicked rows", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("property int selectedProjectIndex: -1")
+  expect(panel).toContain("onClicked: root.selectedProjectIndex = index")
+  expect(panel).not.toContain("onEntered: root.selectedProjectIndex = index")
+  expect(panel).toContain("border.width: index === root.selectedProjectIndex ? 1 : 0")
+  expect(panel).toContain("if (selectedProjectIndex < 0)")
+})
+
+test("makes directory selection path-aware and action-oriented", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('? "SHELL START FOLDER" : "CHOOSE DIRECTORY"')
+  expect(panel).toContain("Choose where new Shells in this Workspace should start.")
+  expect(panel).toContain("root.directoryDisplayName(root.directoryPickerPath)")
+  expect(panel).toContain("text: root.directoryPickerPath")
+  expect(panel).toContain('onClicked: root.enterDirectory(filePath)')
+  expect(panel).not.toContain("onDoubleClicked: root.enterDirectory(filePath)")
+  expect(panel).toContain('? "Start New Shells Here" : "Use This Folder"')
+  expect(panel).toContain('text: "Go Up"')
+  expect(panel).not.toContain('iconText: "←"')
+  expect(panel).toContain("enabled: root.directoryPickerCanGoUp")
+  expect(panel).not.toContain('text: "Choose Here"')
+  expect(panel).not.toContain('text: "Change Default Path"')
 })
 
 test("preserves the Workspace tree viewport across polling snapshots", () => {
@@ -1024,10 +1051,10 @@ describe("qualified commands and action gates", () => {
       .toBe("/canonical/project")
   })
 
-  test("uses the project path unchanged in the same atomic creation command", () => {
-    const project = { name: "ignored-name", path: "/work/space; $(not-a-shell)" }
-    expect(model.atomicWorkspaceCreateCommand("node-a", project.path)).toEqual([
-      "boomux", "workspace", "create", "--node", "node-a", "--cwd",
+  test("uses the discovered project name and path unchanged in one atomic creation command", () => {
+    const project = { name: "project; $(not-a-shell)", path: "/work/space; $(not-a-shell)" }
+    expect(model.atomicWorkspaceCreateCommand("node-a", project.path, project.name)).toEqual([
+      "boomux", "workspace", "create", "project; $(not-a-shell)", "--node", "node-a", "--cwd",
       "/work/space; $(not-a-shell)", "--json"
     ])
   })
@@ -1098,7 +1125,7 @@ test("wires the protocol-49 default path action without optimistic updates", () 
   expect(panel).toContain('data.json_commands.indexOf("workspace.set-default-cwd") >= 0')
   expect(panel).toContain('cliFeatures.indexOf("workspace_placement_default_cwd") >= 0')
   expect(panel).toContain("daemonProtocolVersion >= 49")
-  expect(panel).toContain('text: "Change Default Path"')
+  expect(panel).toContain('text: "Shell Start Folder"')
   expect(panel).toContain('root.runActionMenuAction("default-path")')
   expect(panel).toContain("WorkspaceModel.workspaceDefaultCwdCommand(")
   expect(panel).toContain('root.parseEnvelope(defaultCwdStdout.text, "workspace.set-default-cwd")')
@@ -1136,7 +1163,7 @@ test("bounds post-success snapshot confirmation without replaying mutations", ()
   expect(panel).toContain("Date.now() + 10000")
   expect(panel).toContain("function continueMutationConfirmation()")
   expect(panel).toContain("Workspace creation completed but could not be confirmed; refresh to verify it")
-  expect(panel).toContain("Default path change completed but could not be confirmed; refresh to verify it")
+  expect(panel).toContain("Shell start folder changed but could not be confirmed; refresh to verify it")
   const confirmation = panel.slice(panel.indexOf("function continueMutationConfirmation"),
     panel.indexOf("function selectTab"))
   expect(confirmation).not.toContain("workspaceCreateProcess.running = true")

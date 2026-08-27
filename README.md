@@ -23,7 +23,7 @@ terminals, monitoring Agents, and checking Nodes.
 - Creates a generated coordinated Workspace and its first generated Shell from
   `+` or `N`, always on the exact eligible local Node at `$HOME`, without opening
   a terminal.
-- Offers **From Projects** when Boomux has configured project roots, using the
+- Offers a project-folder action when Boomux has configured project roots, using the
   discovered canonical project path without a naming or arbitrary-path form.
 - Reserves the left or right screen edge so Hyprland tiles applications beside
   the pane instead of covering them.
@@ -75,7 +75,7 @@ The widget defaults to the right bar section and opens a pane from the left edge
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact managed terminal |
 | `+` or `N` | Immediately create a generated Workspace and first Shell at `$HOME` |
-| From Projects | Choose a configured project and create the same generated Workspace and Shell at its canonical path |
+| Project folder icon | Choose a configured project and create a same-named Workspace and generated Shell at its canonical path |
 | Workspace three-dot menu | Create a Shell, change the active local placement default path, rename, or remove when supported |
 | `Tab` / `Shift-Tab` | Move between Workspaces, expanded items, and the lower view |
 | Arrow keys or `H` / `J` / `K` / `L` | Move within the focused section; expand or collapse Workspaces |
@@ -135,8 +135,8 @@ Omarchy plugins open.
 
 Workspace creation is intentionally local and form-free. Boomux generates both
 names and atomically persists the coordinated Workspace, local placement, and
-first Shell without opening a terminal. **From Projects** uses the same command
-with the exact path returned by `project list`; it does not permit name editing
+first Shell without opening a terminal. The project-folder action uses the same
+command with the discovered project name and exact path returned by `project list`; it does not permit name editing
 or arbitrary cwd entry and never falls back to a remote Node. Boomux may
 canonicalize the requested path; the returned absolute path is authoritative.
 
@@ -157,7 +157,9 @@ Node.
 For a coordinated Workspace with one active local placement, **Change Default
 Path** starts the picker at that placement's current default (or `$HOME`). The
 change affects future Shell creation only; existing Shells and runs are not
-restarted. The pane waits for both the exact JSON response identities and an
+restarted. The folder picker shows the current folder's full path, opens folder
+rows directly, and keeps **Start New Shells Here** separate from upward navigation
+and cancellation. The pane waits for both the exact JSON response identities and an
 authoritative Node snapshot before reporting completion.
 
 When a Node reports **authentication required**, **Authenticate** opens Boomux's
