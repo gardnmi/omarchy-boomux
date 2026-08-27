@@ -40,14 +40,8 @@ terminals, monitoring Agents, and checking Nodes.
 
 - Omarchy with shell plugin support.
 - [Boomux 1.2.0](https://github.com/gardnmi/boomux/releases/tag/v1.2.0) or newer
-  on `PATH`, with daemon protocol 49 or newer and the advertised Workspace
-  capabilities.
+  on `PATH`.
 - A native terminal supported by `xdg-terminal-exec`.
-
-Boomux 1.2.0 and protocol 49 are the supported baseline. Protocol 49 is
-specifically required for changing a placement's Shell start folder. Agent
-status requires a supported lifecycle integration, which `boomux setup` can
-install.
 
 ## Install
 
