@@ -100,9 +100,9 @@ For direct keyboard access:
 ```lua
 hl.unbind("SUPER + B")
 o.bind("SUPER + B", "Toggle Boomux panel",
-  "omarchy-shell io.github.gardnmi.boomux toggle", { release = true })
+  "omarchy-shell io.github.gardnmi.boomux toggle")
 o.bind("SUPER + A", "Toggle Boomux panel focus",
-  "omarchy-shell io.github.gardnmi.boomux focus", { release = true })
+  "omarchy-shell io.github.gardnmi.boomux focus")
 
 local function focus_away_from_boomux(direction)
   return function()
