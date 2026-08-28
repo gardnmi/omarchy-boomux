@@ -211,8 +211,8 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
   expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
   expect(panel).not.toMatch(/palette/i)
-  expect(panel).toContain("removeDialogKeyHandler.forceActiveFocus()")
-  expect(panel).toContain("removeItemDialog.handleKey(event)")
+  expect(panel).toContain("confirmationDialogKeyHandler.forceActiveFocus()")
+  expect(panel).toContain("confirmationDialog.handleKey(event)")
   expect(panel).not.toContain('root.activeTab === "schedules"')
 })
 
@@ -302,6 +302,20 @@ test("delegates local updates to the capability-gated Boomux flow", () => {
   expect(panel).not.toContain('localUpdateProcess.command = ["curl"')
   expect(model.guidedLocalUpdateCommand()).toEqual([
     "omarchy-launch-tui", "--app-id=TUI.float", "boomux", "update"
+  ])
+})
+
+test("confirms plugin updates before invoking Omarchy once", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain("function requestPluginUpdate()")
+  expect(panel).toContain('confirmationTarget = { kind: "plugin-update" }')
+  expect(panel).toContain('if (item.kind === "plugin-update") return "Update"')
+  expect(panel).toContain("WorkspaceModel.guidedPluginUpdateCommand()")
+  expect(panel).toContain("onClicked: root.requestPluginUpdate()")
+  expect(panel).not.toContain("onClicked: Qt.openUrlExternally(root.pluginRepositoryUrl)")
+  expect(model.guidedPluginUpdateCommand()).toEqual([
+    "omarchy-launch-tui", "--app-id=TUI.float", "omarchy", "plugin", "update",
+    "io.github.gardnmi.boomux", "--yes"
   ])
 })
 
@@ -528,7 +542,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.3.4")
+  expect(manifest.version).toBe("2.4.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 

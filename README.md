@@ -18,6 +18,8 @@ terminals, monitoring Agents, and checking Nodes.
 - Lists current Agents and outstanding blocked or completed attention by latest
   authoritative update.
 - Delegates available Boomux upgrades to the CLI's verified guided updater.
+- Confirms available plugin updates in the pane, then delegates fetching,
+  validation, rollback, and reload to Omarchy's plugin updater.
 - Provides three-dot action menus for Workspaces, items, and Nodes, including
   Shell creation, Shell start-folder changes, rename, guided recovery, and
   confirmed removal actions when supported.
@@ -246,7 +248,10 @@ must provide TLS, authentication, and authorization.
   installations, that workflow verifies, confirms, downloads, and replaces the
   release; package-managed installations are directed to their package manager.
   The pane performs no replacement itself and checks status afterward. Plugin
-  update discovery uses the fixed published manifest URL.
+  update discovery uses the fixed published manifest URL. After one explicit
+  pane confirmation, plugin replacement delegates to `omarchy plugin update`
+  without a second diff-and-confirmation prompt; Omarchy still validates the
+  result, rolls back validation failures, and reloads plugins.
 
 ## Maintenance
 
