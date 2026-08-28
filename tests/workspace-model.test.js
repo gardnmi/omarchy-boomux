@@ -480,11 +480,11 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(activation).toContain("if (!presentationOnly) requestWorkspaceSelection(workspace)")
   expect(panel).toContain("root.startPendingWorkspaceOpen()")
   expect(panel).not.toContain("&& !actionProcess.running\n                  cursorShape")
-  expect(panel).toContain('var tabs = ["agents", "nodes"]')
-  expect(panel).toContain('else if (text === "2") root.selectTab("nodes")')
+  expect(panel).toContain('var tabs = ["agents", "sessions", "nodes"]')
+  expect(panel).toContain('else if (text === "2") root.selectTab("sessions")')
+  expect(panel).toContain('else if (text === "3") root.selectTab("nodes")')
   expect(panel).not.toContain('root.selectTab("schedules")')
-  expect(panel).not.toContain('text === "3"')
-  expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
+  expect(panel).toContain('width: (parent.width - parent.spacing * 2) / 3')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
   expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
   expect(panel).not.toContain("id: actionStatusText")
@@ -542,7 +542,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.4.0")
+  expect(manifest.version).toBe("2.5.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -604,7 +604,7 @@ test("shows passive Workspace notices", () => {
 
 test("documents actual keyboard navigation and configuration mutation", () => {
   const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
-  expect(readme).toContain("Switch Agents and Nodes")
+  expect(readme).toContain("Switch Agents, Sessions, and Nodes")
   expect(readme).not.toContain("Schedules")
   expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
   expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
@@ -786,7 +786,7 @@ test("refreshes the installed CLI version after an upgrade", () => {
   expect(panel).toContain("id: openRefreshTimer")
   expect(panel).toContain("interval: 200")
   expect(panel).toContain("onTriggered: if (root.opened) root.refreshInstalledState()")
-  expect(panel).toContain('if (text === "r" || text === "R") root.refreshInstalledState()')
+  expect(panel).toContain('if (text === "r" || text === "R") root.requestExplicitRefresh()')
 })
 
 test("keeps Create Node inside the Nodes surface", () => {
@@ -931,6 +931,214 @@ describe("CLI envelope normalization", () => {
     expect(detail.shells[0].placement_state).toBe("active")
     expect(model.agentMatchesShell(detail.agents[0], detail.shells[0])).toBe(true)
     expect(model.resourceActionable(detail.shells[0], true)).toBe(true)
+  })
+})
+
+describe("Agent Sessions", () => {
+  const local = { node_id: "local-node", alias: "local", local: true,
+    current: true, stale: false, health: "online", observed_capabilities: [] }
+  const remoteFeatures = ["typed_node_host_services", "remote_agent_session_catalog"]
+  const remote = { node_id: "node;$(false)", alias: "build", local: false,
+    current: true, stale: false, health: "online", observed_protocol_version: 49,
+    observed_capabilities: remoteFeatures }
+  const summary = (overrides = {}) => Object.assign({
+    id: "session;$(false)", workspace_id: "workspace", workspace_name: "Project",
+    description: "Fix tests", integration: "opencode", external_session_id: "external",
+    state: "idle", state_is_current: false, started_at_ms: 100, last_at_ms: 200,
+    occurrence_count: 1
+  }, overrides)
+  const observation = { revision: 4, state: "idle", authority: "lifecycle_integration",
+    evidence: "turn complete", confidence: 100, observed_at_ms: 200 }
+  const envelope = (command, data) => ({ schema: "boomux.cli/v1", command, data })
+
+  test("strictly normalizes local and remote list envelopes", () => {
+    const localSessions = model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary()]
+    }), local)
+    expect(localSessions[0]).toMatchObject({ node_id: "local-node", node_local: true,
+      key: "local-node\u001fsession;$(false)" })
+    const remoteSessions = model.normalizeSessionList(envelope("session.list", {
+      node_id: remote.node_id, sessions: [summary()]
+    }), remote)
+    expect(remoteSessions[0]).toMatchObject({ node_id: remote.node_id, node_alias: "build",
+      node_local: false })
+    expect(() => model.normalizeSessionList(envelope("session.inspect", {
+      sessions: []
+    }), local)).toThrow()
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      node_id: "unexpected", sessions: []
+    }), remote)).toThrow()
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      node_id: local.node_id, sessions: []
+    }), local)).toThrow()
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ state_is_current: "false" })]
+    }), local)).toThrow()
+    for (const invalid of [
+      summary({ state: "surprising" }),
+      summary({ last_at_ms: 1.5 }),
+      summary({ last_at_ms: 1e100 }),
+      summary({ occurrence_count: 1.5 })
+    ]) expect(() => model.normalizeSessionList(envelope("session.list", {
+      sessions: [invalid]
+    }), local)).toThrow()
+  })
+
+  test("keeps qualified collisions distinct and sorts deterministic newest-first ties", () => {
+    const values = [
+      { node_id: "node-b", workspace_id: "workspace-a", id: "same", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-b", id: "same", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-a", id: "z", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-a", id: "a", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-a", id: "old", last_at_ms: 200 }
+    ]
+    expect(model.sessionsNewestFirst(values).map(value =>
+      [value.node_id, value.workspace_id, value.id])).toEqual([
+      ["node-a", "workspace-a", "a"], ["node-a", "workspace-a", "z"],
+      ["node-a", "workspace-b", "same"], ["node-b", "workspace-a", "same"],
+      ["node-a", "workspace-a", "old"]
+    ])
+    expect(model.sessionIdentityMatches({ node_id: "node-a", id: "same" },
+      "node-a", "same")).toBe(true)
+    expect(model.sessionIdentityMatches({ node_id: "node-b", id: "same" },
+      "node-a", "same")).toBe(false)
+  })
+
+  test("builds exact local and remote argv without shell interpolation", () => {
+    const session = { id: "session;$(touch /tmp/no)", node_id: remote.node_id,
+      node_local: false }
+    expect(model.sessionListCommand(local)).toEqual([
+      "boomux", "session", "list", "--json"
+    ])
+    expect(model.sessionListCommand(remote)).toEqual([
+      "boomux", "session", "list", "--json", "--node", "node;$(false)"
+    ])
+    expect(model.sessionInspectCommand(session)).toEqual([
+      "boomux", "session", "inspect", "session;$(touch /tmp/no)", "--json",
+      "--node", "node;$(false)"
+    ])
+    expect(model.sessionOpenCommand(session)).toEqual([
+      "boomux", "session", "open", "session;$(touch /tmp/no)",
+      "--node", "node;$(false)"
+    ])
+    const localSession = Object.assign({}, session, { node_id: local.node_id, node_local: true })
+    expect(model.sessionInspectCommand(localSession)).toEqual([
+      "boomux", "session", "inspect", "session;$(touch /tmp/no)", "--json"
+    ])
+    expect(model.sessionOpenCommand(localSession)).toEqual([
+      "boomux", "session", "open", "session;$(touch /tmp/no)"
+    ])
+  })
+
+  test("normalizes documented local occurrence fields", () => {
+    const occurrence = { agent_id: "agent", shell_id: "shell", retained_shell_name: "main",
+      retained_shell_cwd: "/home/user/project", source_cwd: "/home/user/project",
+      run_id: "run", started_at_ms: 100, ended_at_ms: null, is_current: true,
+      observation }
+    const detail = model.normalizeSessionInspect(envelope("session.inspect", {
+      session: Object.assign(summary(), { source_cwd: "/home/user/project",
+        occurrences: [occurrence] })
+    }), local, "session;$(false)")
+    expect(detail.occurrences[0]).toMatchObject({ agent_id: "agent", is_current: true,
+      remote_raw: false, retained_shell_name: "main" })
+  })
+
+  test("normalizes current remote raw Agent-instance occurrences for display only", () => {
+    const occurrence = { id: "agent", workspace_id: "workspace", shell_id: "shell",
+      run_id: "run", name: "Agent", integration: "opencode",
+      external_session_id: "external", cwd: "/srv/project", started_at_ms: 100,
+      ended_at_ms: null, observation }
+    const detail = model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary(), {
+        source_cwd: "/srv/project", occurrences: [occurrence] })
+    }), remote, "session;$(false)")
+    expect(detail.occurrences[0]).toMatchObject({ agent_id: "agent", source_cwd: "/srv/project",
+      is_current: true, remote_raw: true, retained_shell_name: null })
+    expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: "other", session: Object.assign(summary(), {
+        source_cwd: null, occurrences: [occurrence] })
+    }), remote, "session;$(false)")).toThrow()
+    expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary({ id: "other" }), {
+        source_cwd: null, occurrences: [occurrence] })
+    }), remote, "session;$(false)")).toThrow()
+    for (const invalidObservation of [
+      Object.assign({}, observation, { revision: 1.5 }),
+      Object.assign({}, observation, { state: "surprising" }),
+      Object.assign({}, observation, { authority: "untrusted" }),
+      Object.assign({}, observation, { confidence: 101 })
+    ]) expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary(), {
+        source_cwd: "/srv/project", occurrences: [Object.assign({}, occurrence,
+          { observation: invalidObservation })] })
+    }), remote, "session;$(false)")).toThrow()
+    expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary(), {
+        source_cwd: "relative/project", occurrences: [occurrence] })
+    }), remote, "session;$(false)")).toThrow()
+  })
+
+  test("gates Nodes, activation, and stale generations exactly", () => {
+    expect(model.sessionNodeEligible(local, [])).toBe(true)
+    expect(model.sessionNodeEligible(remote, remoteFeatures)).toBe(true)
+    expect(model.sessionNodeEligible(Object.assign({}, remote, { stale: true }),
+      remoteFeatures)).toBe(false)
+    expect(model.sessionNodeEligible(Object.assign({}, remote,
+      { observed_capabilities: ["typed_node_host_services"] }), remoteFeatures)).toBe(false)
+    expect(model.sessionNodeEligible(Object.assign({}, remote,
+      { observed_protocol_version: 35 }), remoteFeatures)).toBe(false)
+    expect(model.sessionNodeEligible(remote, ["typed_node_host_services"])).toBe(false)
+    expect(model.sessionActionable({ state: "idle" }, true, true)).toBe(true)
+    expect(model.sessionActionable({ state: "done" }, true, true)).toBe(false)
+    const request = { generation: 7, nodeId: remote.node_id, cliFeatures: remoteFeatures }
+    expect(model.sessionRequestCurrent(request, 7, true, "sessions", true, remote)).toBe(true)
+    expect(model.sessionRequestCurrent(request, 8, true, "sessions", true, remote)).toBe(false)
+    expect(model.sessionRequestCurrent(request, 7, false, "sessions", true, remote)).toBe(false)
+    expect(model.sessionRequestCurrent(request, 7, true, "agents", true, remote)).toBe(false)
+    expect(model.boundedSessionWarnings(["a", "b", "c", "d"], 2)).toBe("a · b · +2 more")
+    expect(["opencode", "pi", "claude", "codex", "kiro"].map(model.sessionHarnessLabel))
+      .toEqual(["OpenCode", "Pi", "Claude Code", "Codex", "Kiro CLI"])
+  })
+
+  test("integrates three tabs, lazy fan-out, privacy clearing, details, and two-click open", () => {
+    const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+    expect(panel).toContain('var tabs = ["agents", "sessions", "nodes"]')
+    expect(panel).toContain('text: "Sessions"')
+    expect(panel).toContain('data.json_commands.indexOf("session.list") >= 0')
+    expect(panel).toContain('data.json_commands.indexOf("session.inspect") >= 0')
+    expect(panel).toContain('cliFeatures.indexOf("projected_agent_sessions") >= 0')
+    expect(panel).toContain('cliFeatures.indexOf("exact_session_open") >= 0')
+    expect(panel).toContain('running: root.opened && root.activeTab === "sessions"')
+    expect(panel).toContain('sessionExpiresAt = Date.now() + 10000')
+    expect(panel).toContain('if (sessionExpiresAt === 0 || Date.now() >= sessionExpiresAt)')
+    expect(panel).toContain('sessionResults = ({})')
+    expect(panel).toContain('sessionRefreshAfterSnapshot = refreshSessions && !nodeSnapshotProcess.running')
+    expect(panel).toContain('sessionSnapshotRefreshQueued = refreshSessions && nodeSnapshotProcess.running')
+    expect(panel).toContain('if (sessionRefreshAfterSnapshot) {')
+    expect(panel).toContain('id: sessionListProcess')
+    expect(panel).toContain('if (sessionListProcess.running)')
+    expect(panel).toContain('WorkspaceModel.sessionRequestCurrent(request, root.sessionGeneration')
+    expect(panel).toContain('var nextResults = Object.assign({}, root.sessionResults)')
+    expect(panel).toContain('nextResults[request.nodeId] = WorkspaceModel.normalizeSessionList(')
+    expect(panel).toContain('clearSessionPrivacy()')
+    expect(panel).toContain('stopAndClearSessionProcess(sessionOpenProcess)')
+    expect(panel).toContain('id: sessionCollectorFactory')
+    expect(panel).toContain('root.clearSessionProcessOutput(sessionInspectProcess)')
+    expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionList)')
+    expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionInspect)')
+    expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionOpen)')
+    expect(panel).toContain('onFocusSectionChanged: if (focusSection !== "lower")')
+    expect(panel).toContain('sessionDetail = null')
+    expect(panel).toContain('var alreadySelected = root.sessionPointerSelectedKey === modelData.key')
+    expect(panel).toContain('if (alreadySelected && sessionRow.actionable) root.openSession(modelData)')
+    expect(panel).toContain('else if (activeTab === "sessions") openSession(selectedItem)')
+    expect(panel).toContain('root.inspectSession(root.selectedItem)')
+    expect(panel).toContain('root.compactPath(root.sessionDetail.source_cwd)')
+    expect(panel).toContain('if (root.sessionDetail) return')
+    expect(panel).toContain('function sessionStatusLabel(session)')
+    expect(panel).toContain('function sessionActionLabel(session)')
+    expect(panel).toContain('WorkspaceModel.sessionOpenCommand(session)')
+    expect(panel).not.toContain('session", "resume"')
   })
 })
 

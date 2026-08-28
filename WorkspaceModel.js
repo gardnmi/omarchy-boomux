@@ -161,6 +161,229 @@ function parseEnvelope(raw, command) {
   return response.data
 }
 
+function requiredString(value, field, allowEmpty) {
+  if (typeof value !== "string" || (!allowEmpty && value === ""))
+    throw new Error("invalid " + field)
+  return value
+}
+
+function optionalString(value, field) {
+  if (value === null) return null
+  return requiredString(value, field, false)
+}
+
+function requiredTimestamp(value, field) {
+  if (typeof value !== "number" || !isFinite(value) || value < 0
+      || Math.floor(value) !== value || value > Number.MAX_SAFE_INTEGER)
+    throw new Error("invalid " + field)
+  return value
+}
+
+function requiredBoundedInteger(value, field, minimum, maximum) {
+  value = requiredTimestamp(value, field)
+  if (value < minimum || value > maximum) throw new Error("invalid " + field)
+  return value
+}
+
+function requiredEnum(value, field, values) {
+  value = requiredString(value, field, false)
+  if (values.indexOf(value) < 0) throw new Error("invalid " + field)
+  return value
+}
+
+function optionalAbsolutePath(value, field) {
+  value = optionalString(value, field)
+  if (value !== null && value.indexOf("/") !== 0) throw new Error("invalid " + field)
+  return value
+}
+
+function normalizeSessionObservation(source) {
+  if (!source || typeof source !== "object") throw new Error("invalid session observation")
+  return {
+    revision: requiredBoundedInteger(source.revision, "occurrence observation revision", 1,
+      Number.MAX_SAFE_INTEGER),
+    state: requiredEnum(source.state, "occurrence observation state",
+      ["unknown", "working", "blocked", "idle", "inactive", "done"]),
+    authority: requiredEnum(source.authority, "occurrence observation authority",
+      ["lifecycle_integration", "process_adapter", "terminal_heuristic", "daemon_lifecycle"]),
+    evidence: requiredString(source.evidence, "occurrence observation evidence", true),
+    confidence: requiredBoundedInteger(source.confidence, "occurrence observation confidence", 0, 100),
+    observed_at_ms: requiredTimestamp(source.observed_at_ms, "occurrence observation timestamp")
+  }
+}
+
+function normalizeSessionOccurrence(source) {
+  if (!source || typeof source !== "object") throw new Error("invalid session occurrence")
+  var documented = Object.prototype.hasOwnProperty.call(source, "is_current")
+    || Object.prototype.hasOwnProperty.call(source, "retained_shell_name")
+  var ended = source.ended_at_ms === null ? null
+    : requiredTimestamp(source.ended_at_ms, "occurrence end timestamp")
+  var observation = normalizeSessionObservation(source.observation)
+  if (documented) {
+    if (typeof source.is_current !== "boolean") throw new Error("invalid occurrence currentness")
+    return {
+      agent_id: requiredString(source.agent_id, "occurrence Agent ID", false),
+      shell_id: requiredString(source.shell_id, "occurrence Shell ID", false),
+      retained_shell_name: optionalString(source.retained_shell_name, "retained Shell name"),
+      retained_shell_cwd: optionalAbsolutePath(source.retained_shell_cwd, "retained Shell cwd"),
+      source_cwd: optionalAbsolutePath(source.source_cwd, "occurrence source cwd"),
+      run_id: requiredString(source.run_id, "occurrence run ID", false),
+      started_at_ms: requiredTimestamp(source.started_at_ms, "occurrence start timestamp"),
+      ended_at_ms: ended,
+      is_current: source.is_current,
+      observation: observation,
+      remote_raw: false
+    }
+  }
+  requiredString(source.workspace_id, "remote occurrence Workspace ID", false)
+  requiredString(source.name, "remote occurrence name", false)
+  requiredString(source.integration, "remote occurrence integration", false)
+  if (source.external_session_id !== null)
+    requiredString(source.external_session_id, "remote occurrence external Session ID", false)
+  return {
+    agent_id: requiredString(source.id, "remote occurrence Agent ID", false),
+    shell_id: requiredString(source.shell_id, "remote occurrence Shell ID", false),
+    retained_shell_name: null,
+    retained_shell_cwd: null,
+    source_cwd: source.cwd === undefined ? null
+      : optionalAbsolutePath(source.cwd, "remote occurrence cwd"),
+    run_id: requiredString(source.run_id, "remote occurrence run ID", false),
+    started_at_ms: requiredTimestamp(source.started_at_ms, "remote occurrence start timestamp"),
+    ended_at_ms: ended,
+    is_current: ended === null && observation.state !== "inactive" && observation.state !== "done",
+    observation: observation,
+    remote_raw: true
+  }
+}
+
+function normalizeSessionSummary(source, nodeId, nodeAlias, local) {
+  if (!source || typeof source !== "object") throw new Error("invalid Session summary")
+  if (typeof source.state_is_current !== "boolean") throw new Error("invalid Session currentness")
+  var occurrenceCount = requiredTimestamp(source.occurrence_count, "Session occurrence count")
+  var id = requiredString(source.id, "Session ID", false)
+  return {
+    id: id,
+    key: resourceKey(nodeId, id),
+    node_id: nodeId,
+    node_alias: String(nodeAlias || (local ? "local" : nodeId)),
+    node_local: !!local,
+    workspace_id: requiredString(source.workspace_id, "Session Workspace ID", false),
+    workspace_name: requiredString(source.workspace_name, "Session Workspace name", false),
+    description: requiredString(source.description, "Session description", true),
+    integration: requiredString(source.integration, "Session integration", false),
+    external_session_id: optionalString(source.external_session_id, "external Session ID"),
+    state: requiredEnum(source.state, "Session state",
+      ["unknown", "working", "blocked", "idle", "inactive", "done"]),
+    state_is_current: source.state_is_current,
+    started_at_ms: requiredTimestamp(source.started_at_ms, "Session start timestamp"),
+    last_at_ms: requiredTimestamp(source.last_at_ms, "Session activity timestamp"),
+    occurrence_count: occurrenceCount
+  }
+}
+
+function normalizeSessionEnvelope(raw, command, node) {
+  var data = parseEnvelope(raw, command)
+  var local = !!node.local
+  var nodeId = requiredString(node.node_id, "Session Node ID", false)
+  var hasNode = Object.prototype.hasOwnProperty.call(data, "node_id")
+  if (local ? hasNode : (!hasNode || data.node_id !== nodeId))
+    throw new Error("unexpected Session Node identity")
+  return data
+}
+
+function normalizeSessionList(raw, node) {
+  var data = normalizeSessionEnvelope(raw, "session.list", node)
+  if (!Array.isArray(data.sessions)) throw new Error("missing Sessions")
+  return data.sessions.map(function(session) {
+    return normalizeSessionSummary(session, String(node.node_id), String(node.alias || ""), !!node.local)
+  })
+}
+
+function normalizeSessionInspect(raw, node, expectedSessionId) {
+  var data = normalizeSessionEnvelope(raw, "session.inspect", node)
+  var session = normalizeSessionSummary(data.session, String(node.node_id),
+    String(node.alias || ""), !!node.local)
+  if (session.id !== String(expectedSessionId || ""))
+    throw new Error("unexpected Session identity")
+  var sourceCwd = optionalAbsolutePath(data.session.source_cwd, "Session source cwd")
+  if (!Array.isArray(data.session.occurrences)) throw new Error("missing Session occurrences")
+  session.source_cwd = sourceCwd
+  session.occurrences = data.session.occurrences.map(normalizeSessionOccurrence)
+  if (session.occurrences.length !== session.occurrence_count)
+    throw new Error("unexpected Session occurrence count")
+  return session
+}
+
+function sessionsNewestFirst(sessions) {
+  return sessions.slice().sort(function(left, right) {
+    var difference = Number(right.last_at_ms) - Number(left.last_at_ms)
+    if (difference !== 0) return difference
+    var fields = ["node_id", "workspace_id", "id"]
+    for (var i = 0; i < fields.length; i++) {
+      var leftValue = String(left[fields[i]] || "")
+      var rightValue = String(right[fields[i]] || "")
+      if (leftValue !== rightValue) return leftValue < rightValue ? -1 : 1
+    }
+    return 0
+  })
+}
+
+function sessionIdentityMatches(session, nodeId, sessionId) {
+  return !!session && String(session.node_id) === String(nodeId)
+    && String(session.id) === String(sessionId)
+}
+
+function sessionListCommand(node) {
+  var argv = ["boomux", "session", "list", "--json"]
+  if (node && !node.local) argv.push("--node", String(node.node_id))
+  return argv
+}
+
+function sessionInspectCommand(session) {
+  var argv = ["boomux", "session", "inspect", String(session.id), "--json"]
+  if (!session.node_local) argv.push("--node", String(session.node_id))
+  return argv
+}
+
+function sessionOpenCommand(session) {
+  var argv = ["boomux", "session", "open", String(session.id)]
+  if (!session.node_local) argv.push("--node", String(session.node_id))
+  return argv
+}
+
+function sessionNodeEligible(node, cliFeatures) {
+  if (!node || !node.node_id || !node.current || node.stale || node.health !== "online") return false
+  if (node.local) return true
+  if (Number(node.observed_protocol_version || 0) < 36) return false
+  var required = ["typed_node_host_services", "remote_agent_session_catalog"]
+  return required.every(function(feature) {
+    return hasFeature(cliFeatures, feature) && hasFeature(node.observed_capabilities, feature)
+  })
+}
+
+function sessionRequestCurrent(request, generation, opened, activeTab, online, node) {
+  return !!request && request.generation === generation && opened && activeTab === "sessions"
+    && online && !!node && node.node_id === request.nodeId
+    && sessionNodeEligible(node, request.cliFeatures)
+}
+
+function sessionActionable(session, exactOpenSupported, nodeEligible) {
+  return !!session && !!exactOpenSupported && !!nodeEligible && session.state !== "done"
+}
+
+function sessionHarnessLabel(integration) {
+  var labels = { opencode: "OpenCode", pi: "Pi", claude: "Claude Code",
+    codex: "Codex", kiro: "Kiro CLI" }
+  return labels[String(integration || "")] || String(integration || "unknown")
+}
+
+function boundedSessionWarnings(warnings, limit) {
+  var maximum = Math.max(1, Number(limit || 3))
+  var values = warnings.slice(0, maximum).map(function(value) { return String(value) })
+  if (warnings.length > maximum) values.push("+" + (warnings.length - maximum) + " more")
+  return values.join(" · ")
+}
+
 function normalizeWebStatus(data) {
   if (!data || typeof data.running !== "boolean")
     throw new Error("invalid Boomux web status")
@@ -1038,6 +1261,19 @@ if (typeof module !== "undefined") module.exports = {
   boomuxShellWindowKey: boomuxShellWindowKey,
   qualifiedMatches: qualifiedMatches,
   parseEnvelope: parseEnvelope,
+  normalizeSessionList: normalizeSessionList,
+  normalizeSessionInspect: normalizeSessionInspect,
+  normalizeSessionOccurrence: normalizeSessionOccurrence,
+  sessionsNewestFirst: sessionsNewestFirst,
+  sessionIdentityMatches: sessionIdentityMatches,
+  sessionListCommand: sessionListCommand,
+  sessionInspectCommand: sessionInspectCommand,
+  sessionOpenCommand: sessionOpenCommand,
+  sessionNodeEligible: sessionNodeEligible,
+  sessionRequestCurrent: sessionRequestCurrent,
+  sessionActionable: sessionActionable,
+  sessionHarnessLabel: sessionHarnessLabel,
+  boundedSessionWarnings: boundedSessionWarnings,
   normalizeWebStatus: normalizeWebStatus,
   availableAgentHosts: availableAgentHosts,
   normalizeAgent: normalizeAgent,

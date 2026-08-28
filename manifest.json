@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.gardnmi.boomux",
   "name": "Boomux",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "author": "Mike Gardner",
   "license": "MIT AND CC-BY-4.0",
-  "description": "Open a sliding Boomux Workspace, Agent, and Node pane from the Omarchy bar.",
+  "description": "Open a sliding Boomux Workspace, Agent Session, and Node pane from the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,9 +13,9 @@
   },
   "barWidget": {
     "displayName": "Boomux",
-    "description": "Navigate Boomux Workspaces and monitor Agents and Nodes.",
+    "description": "Navigate Boomux Workspaces, Agents, Sessions, and Nodes.",
     "category": "Development",
-    "aliases": ["boomux", "agent", "agents", "terminal", "node", "workspace"],
+    "aliases": ["boomux", "agent", "agents", "session", "sessions", "terminal", "node", "workspace"],
     "allowMultiple": false,
     "defaultSection": "right"
   }

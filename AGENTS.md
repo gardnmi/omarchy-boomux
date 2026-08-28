@@ -1,7 +1,7 @@
 # Omarchy Boomux Development Guide
 
 This repository is an Omarchy Quattro bar plugin for monitoring Boomux Agents
-and managing Boomux workspaces. Keep changes small, local-first, and explicit
+and Sessions and managing Boomux workspaces. Keep changes small, local-first, and explicit
 about operations that can start processes or take over terminals.
 
 ## Repository Map
@@ -65,9 +65,17 @@ uniqueness.
 Preserve exact argument arrays. Do not join stored commands and pass them
 through a shell. Do not invoke Boomux private transport commands.
 
+Session list and inspect require advertised `session.list`, `session.inspect`,
+and `projected_agent_sessions`. Remote catalog reads additionally require a
+current online non-stale Node and both local and observed
+`typed_node_host_services` and `remote_agent_session_catalog`. Activation
+requires the static `exact_session_open` feature and invokes only
+`boomux session open SESSION_ID [--node NODE_ID]`; the plugin must not rebuild
+harness resume argv or substitute ordinary Shell opening.
+
 ## Runtime Model
 
-The sliding pane has a persistent expandable Workspace tree and two lower views:
+The sliding pane has a persistent expandable Workspace tree and three lower views:
 
 - **Workspace tree**: coordinated and external Workspaces, with the currently
   presented Hyprland special Workspace highlighted independently from the
@@ -77,6 +85,9 @@ The sliding pane has a persistent expandable Workspace tree and two lower views:
   durable attention, ordered by their latest authoritative update; private
   runner-owned Agents are excluded by shell ownership; capability-gated controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
+- **Sessions**: a lazy, cross-Node canonical Agent Session catalog ordered by
+  newest activity, with structural `(node_id, session_id)` identity, exact
+  inspection, and Boomux-owned exact activation
 - **Nodes**: a health and version table with selected-Node route, helper and
   control versions, protocol, freshness, workload, eligibility,
   exact identity, guided creation, guided reauthentication, guided upgrade, and
@@ -187,6 +198,9 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
+- Session rows use first-click selection and second-click activation. Enter
+  activates, `i` inspects, and Escape closes Session details before the pane.
+  Done and unavailable Sessions remain visible but non-actionable.
 - Keep drawer visibility separate from keyboard ownership. Opening or toggling
   the persistent pane is passive; the IPC `focus` action toggles an explicit
   keyboard mode with a contrasting outline, inner-edge wash, and focus rail.
@@ -274,6 +288,13 @@ same read with owner-local grouping. Older daemons retain the local list polling
 path. A future event-driven implementation should retain the passive-daemon
 invariant and handle cursor expiry by reacquiring a baseline.
 
+Session discovery is independent, serial, and lazy while the pane is open on
+the Sessions tab. Refresh it on tab entry, after a 10-second visible TTL, and
+after explicit refresh obtains a fresh Node snapshot. Preserve successful Node
+results across partial failures, bound warnings, discard stale generations and
+Node mismatches, and clear all Session rows, details, and request metadata on
+pane close or daemon offline. Never persist Session data.
+
 Workspace inspection must preserve selection by structural Node/workspace key.
 If a new selection arrives while an inspection is running, issue the latest
 requested inspection after the active process exits.
@@ -318,7 +339,7 @@ work here.
 - `preview.png` is the marketplace image; keep it in the repository root.
 - README image URLs should use stable files under `assets/`. Use a new filename
   if GitHub serves stale image content for an unchanged path.
-- Show Agents, Workspaces, and Nodes views after meaningful UI changes.
+- Show Agents, Sessions, Workspaces, and Nodes views after meaningful UI changes.
 - Do not expose personal absolute paths, secrets, private session titles, or
   terminal contents.
 - To demonstrate the yellow spark, temporarily force the **deployed test copy**

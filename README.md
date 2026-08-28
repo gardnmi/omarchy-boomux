@@ -1,7 +1,7 @@
 # Boomux for Omarchy
 
 A persistent Omarchy side pane for navigating Boomux Workspaces, opening managed
-terminals, monitoring Agents, and checking Nodes.
+terminals and Agent Sessions, monitoring Agents, and checking Nodes.
 
 > [!IMPORTANT]
 > This plugin does not work without [Boomux](https://github.com/gardnmi/boomux).
@@ -13,10 +13,12 @@ terminals, monitoring Agents, and checking Nodes.
 
 ## Highlights
 
-- Keeps an expandable multi-Workspace tree visible above Agent and Node views.
+- Keeps an expandable multi-Workspace tree visible above Agent, Session, and Node views.
 - Shows the installed Boomux CLI version in the pane header.
 - Lists current Agents and outstanding blocked or completed attention by latest
   authoritative update.
+- Lazily lists canonical local and remote Agent Sessions with exact inspection
+  and Boomux-owned activation while the Sessions view is visible.
 - Delegates available Boomux upgrades to the CLI's verified guided updater.
 - Confirms available plugin updates in the pane, then delegates fetching,
   validation, rollback, and reload to Omarchy's plugin updater.
@@ -34,15 +36,14 @@ terminals, monitoring Agents, and checking Nodes.
   integration.
 - Shows the active Workspace, focused managed terminal, Agent attention, and
   Node health.
-- Opens exact Shells and Agents while keeping the pane visible.
+- Opens exact Shells, Agents, and eligible Sessions while keeping the pane visible.
 - Uses confirmed removal actions for coordinated Workspaces and local Shells or
   launchers.
 
 ## Requirements
 
 - Omarchy with shell plugin support.
-- [Boomux 1.2.0](https://github.com/gardnmi/boomux/releases/tag/v1.2.0) or newer
-  on `PATH`.
+- Boomux 1.7.0 or newer on `PATH`, advertising `exact_session_open` for Session activation.
 - A native terminal supported by `xdg-terminal-exec`.
 
 ## Install
@@ -78,6 +79,7 @@ releases install it to `~/.local/bin`.
 | External or legacy Workspace row | Open or restore that Workspace; exited Shells may restart and launchers may run |
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact Shell with takeover, disconnecting its current writable controller; an exited Shell starts a new run, and opening a local Agent acknowledges its current attention |
+| Session row | First click selects; a second click on the selected eligible row asks Boomux to revalidate and open that exact Node-qualified Session |
 | Launcher row | Invoke the detached launcher; no managed terminal or retained output is created |
 | `+` or `N` | Immediately create a generated Workspace and first Shell at `$HOME` |
 | Project folder icon | Choose a configured project and create a same-named Workspace and generated Shell at its canonical path |
@@ -86,7 +88,9 @@ releases install it to `~/.local/bin`.
 | Arrow keys or `H` / `J` / `K` / `L` | Move within the focused section; expand or collapse Workspaces |
 | `Enter` or `Space` | Activate the focused row or menu action |
 | `M` | Open actions for the focused Workspace, item, or Node |
-| `1` / `2` | Switch Agents and Nodes |
+| `1` / `2` / `3` | Switch Agents, Sessions, and Nodes |
+| `Enter` in Sessions | Open the selected eligible Session through `boomux session open` |
+| `I` in Sessions | Inspect the selected exact Session in a details overlay |
 | `A` in Nodes | Open guided Node setup |
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
 | Authenticate in Nodes | Open interactive authentication for an existing registered Node |
@@ -138,6 +142,24 @@ run. This presentation does not invoke launchers.
 
 The pane remains visible while applications receive focus and while other
 Omarchy plugins open.
+
+## Sessions
+
+The Sessions view discovers canonical Agent Sessions only while the pane is open
+on that tab. It combines the local catalog with eligible current remote Nodes,
+keeps `(node_id, session_id)` as the identity, refreshes after ten seconds while
+visible, and retains successful Node results when another Node fails. An explicit
+`R` waits for a fresh Boomux snapshot before reloading Sessions.
+
+Rows show age, textual harness, title, Workspace, Node, lifecycle state,
+currentness, and occurrence count. `I` shows timestamps, the source directory
+abbreviated under `$HOME`, normalized occurrence details, and whether activation
+is eligible. Done or unavailable Sessions remain visible but cannot be opened.
+
+Activation invokes only `boomux session open SESSION_ID [--node NODE_ID]` as an
+exact argv array. Boomux revalidates current ShellRun ownership or historical
+resume eligibility and fails closed if the target changed. The plugin never
+reconstructs harness resume commands or substitutes an ordinary Shell open.
 
 Workspace creation is intentionally local and form-free. Boomux generates both
 names and atomically persists the coordinated Workspace, local placement, and
@@ -214,6 +236,8 @@ must provide TLS, authentication, and authorization.
 
 - The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
   remote routing, authentication, and persistence.
+- Session lists, details, and request metadata are memory-only and are cleared
+  when the pane closes or Boomux goes offline. Raw Session responses are not logged.
 - Passive refresh leaves a stopped daemon stopped. Explicit `+`/`N` creation
   starts Boomux when needed, refreshes its protocol and Node snapshot, resolves
   exactly one eligible local Node, and only then builds the atomic command once.
