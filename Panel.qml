@@ -2665,18 +2665,26 @@ Panel {
   }
 
   onOpenedChanged: if (opened) {
-    refreshInstalledState()
+    openRefreshTimer.restart()
     if (expandedWorkspaceKey === "") {
       var initialWorkspace = activeBoomuxWorkspace || selectedWorkspace
       if (initialWorkspace) expandedWorkspaceKey = initialWorkspace.key
     }
     positionActiveWorkspace()
   } else {
+    openRefreshTimer.stop()
     workspacePositionTimer.stop()
     pendingWorkspacePositionKey = ""
     settingsOpen = false
     itemToRemove = null
     cancelForm()
+  }
+
+  Timer {
+    id: openRefreshTimer
+    interval: 200
+    repeat: false
+    onTriggered: if (root.opened) root.refreshInstalledState()
   }
 
   Timer {
@@ -4723,7 +4731,8 @@ Panel {
 
                   Repeater {
                     id: treeItemRepeater
-                    model: workspaceTreeDelegate.treeItems
+                    model: workspaceTreeDelegate.workspaceExpanded
+                      ? workspaceTreeDelegate.treeItems : []
                     delegate: Rectangle {
                       id: treeItemDelegate
                       required property var modelData

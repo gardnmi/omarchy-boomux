@@ -247,7 +247,7 @@ test("separates persistent pane visibility from explicit keyboard mode", () => {
   expect(sidePane).toContain("width: Math.max(7, Style.space(7))")
   expect(sidePane).toContain("width: Math.max(18, Style.space(18))")
   expect(panel).toContain("focusColor: root.urgent")
-  expect(readme.match(/\{ release = true \}/g)).toHaveLength(2)
+  expect(readme).not.toContain("release = true")
   expect(readme).toContain("releaseFocus")
   expect(readme).toContain("hl.dsp.focus({ direction = direction })")
 })
@@ -446,6 +446,8 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("root.setWorkspaceTreeHeight(startingHeight + translation.y)")
   expect(panel).toContain("workspaceDelegate.revealTreeItem(root.selectedWorkspaceItemIndex)")
   expect(panel).toContain("id: treeItemRepeater")
+  expect(panel).toContain("model: workspaceTreeDelegate.workspaceExpanded")
+  expect(panel).toContain("? workspaceTreeDelegate.treeItems : []")
   expect(panel).not.toContain("else if (root.expandedWorkspaceKey !== \"\")")
   expect(panel).not.toContain("setWorkspaceTreeHeight(workspaceTreeHeight)")
   expect(panel).toContain("panel.height - Style.space(260)")
@@ -523,7 +525,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.3.3")
+  expect(manifest.version).toBe("2.3.4")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -763,7 +765,10 @@ test("does not show the Boomux TUI header action", () => {
 
 test("refreshes the installed CLI version after an upgrade", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-  expect(panel).toContain("onOpenedChanged: if (opened) {\n    refreshInstalledState()")
+  expect(panel).toContain("onOpenedChanged: if (opened) {\n    openRefreshTimer.restart()")
+  expect(panel).toContain("id: openRefreshTimer")
+  expect(panel).toContain("interval: 200")
+  expect(panel).toContain("onTriggered: if (root.opened) root.refreshInstalledState()")
   expect(panel).toContain('if (text === "r" || text === "R") root.refreshInstalledState()')
 })
 
