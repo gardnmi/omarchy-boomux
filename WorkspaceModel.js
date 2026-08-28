@@ -70,6 +70,11 @@ function guidedLocalUpdateCommand() {
     "boomux", "update"]
 }
 
+function guidedPluginUpdateCommand() {
+  return ["omarchy-launch-tui", "--app-id=TUI.float",
+    "omarchy", "plugin", "update", "io.github.gardnmi.boomux", "--yes"]
+}
+
 function nodeCanReauthenticate(node, cliFeatures, daemonProtocolVersion) {
   return !!node && !!node.node_id && !node.local
     && node.health === "authentication_required"
@@ -1019,6 +1024,7 @@ if (typeof module !== "undefined") module.exports = {
   nodeCanUninstall: nodeCanUninstall,
   guidedNodeUninstallCommand: guidedNodeUninstallCommand,
   guidedLocalUpdateCommand: guidedLocalUpdateCommand,
+  guidedPluginUpdateCommand: guidedPluginUpdateCommand,
   nodeCanReauthenticate: nodeCanReauthenticate,
   guidedNodeReauthenticateCommand: guidedNodeReauthenticateCommand,
   agentUpdatedAt: agentUpdatedAt,

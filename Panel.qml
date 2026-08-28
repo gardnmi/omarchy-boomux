@@ -98,7 +98,7 @@ Panel {
   property var pendingOpenAgent: null
   property string pendingOpenKey: ""
   property string pendingOpenRunKey: ""
-  property var itemToRemove: null
+  property var confirmationTarget: null
   property var actionMenuTarget: null
   property real actionMenuX: 0
   property real actionMenuY: 0
@@ -266,8 +266,8 @@ Panel {
   onAgentHostNameChanged: if (agentHostDropdown)
     agentHostDropdown.value = agentHostName
 
-  onItemToRemoveChanged: Qt.callLater(function() {
-    if (itemToRemove) removeDialogKeyHandler.forceActiveFocus()
+  onConfirmationTargetChanged: Qt.callLater(function() {
+    if (confirmationTarget) confirmationDialogKeyHandler.forceActiveFocus()
     else if (opened) keyCatcher.forceActiveFocus()
   })
 
@@ -560,7 +560,8 @@ Panel {
     selectedWorkspaceKey = ""
     selectedNodeId = ""
     selectedAgentKey = ""
-    itemToRemove = null
+    if (!confirmationTarget || confirmationTarget.kind !== "plugin-update")
+      confirmationTarget = null
     daemonProtocolVersion = 0
     previousAgentStates = ({})
     completedAgents = ({})
@@ -2042,8 +2043,8 @@ Panel {
     if (!item || !node || !node.local
         || actionProcess.running || openProcess.running) return
     panel.enterKeyboardMode()
-    removeItemDialog.selectedIndex = 0
-    itemToRemove = item
+    confirmationDialog.selectedIndex = 0
+    confirmationTarget = item
   }
 
   function workspaceCanRemove(workspace) {
@@ -2056,8 +2057,8 @@ Panel {
   function requestRemoveWorkspace(workspace) {
     if (!workspaceCanRemove(workspace)) return
     panel.enterKeyboardMode()
-    removeItemDialog.selectedIndex = 0
-    itemToRemove = { kind: "workspace", workspace: workspace }
+    confirmationDialog.selectedIndex = 0
+    confirmationTarget = { kind: "workspace", workspace: workspace }
   }
 
   function requestForgetNode(node) {
@@ -2065,8 +2066,8 @@ Panel {
         || nodeUpgradeProcess.running || nodeUninstallProcess.running
         || nodeReauthenticateProcess.running) return
     panel.enterKeyboardMode()
-    removeItemDialog.selectedIndex = 0
-    itemToRemove = { kind: "node", node: node }
+    confirmationDialog.selectedIndex = 0
+    confirmationTarget = { kind: "node", node: node }
   }
 
   function requestUninstallNode(node) {
@@ -2074,16 +2075,19 @@ Panel {
         || nodeUpgradeProcess.running || nodeUninstallProcess.running
         || nodeReauthenticateProcess.running) return
     panel.enterKeyboardMode()
-    removeItemDialog.selectedIndex = 0
-    itemToRemove = { kind: "node-uninstall", node: node }
+    confirmationDialog.selectedIndex = 0
+    confirmationTarget = { kind: "node-uninstall", node: node }
   }
 
-  function cancelRemoveItem() {
-    itemToRemove = null
+  function cancelConfirmation() {
+    confirmationTarget = null
   }
 
-  function removeItemMessage(item) {
+  function confirmationMessage(item) {
     if (!item) return ""
+    if (item.kind === "plugin-update")
+      return "Update the Boomux plugin from " + pluginVersion + " to "
+        + latestPluginVersion + "? Omarchy will fetch, validate, and reload the plugin."
     if (item.kind === "workspace")
       return "Remove Workspace " + String(item.workspace.name)
         + "? This terminates its running Shells and removes its launchers, retained terminal state, Agent records, attention, and Workspace metadata."
@@ -2100,8 +2104,9 @@ Panel {
       + "? This terminates it if running and deletes its shell definition and retained terminal state. Durable Agent history may remain."
   }
 
-  function removeConfirmText(item) {
+  function confirmationActionText(item) {
     if (!item) return "Remove"
+    if (item.kind === "plugin-update") return "Update"
     if (item.kind === "node-uninstall") return "Uninstall"
     if (item.kind === "node") return "Just Forget"
     if (item.kind === "shell" || item.kind === "command" || item.kind === "agent")
@@ -2109,9 +2114,16 @@ Panel {
     return "Remove"
   }
 
-  function confirmRemoveItem() {
-    var item = itemToRemove
-    itemToRemove = null
+  function confirmAction() {
+    var item = confirmationTarget
+    confirmationTarget = null
+    if (item && item.kind === "plugin-update") {
+      if (!pluginUpdateAvailable || pluginUpdateLaunchProcess.running) return
+      actionMessage = "Updating the Boomux plugin..."
+      pluginUpdateLaunchProcess.command = WorkspaceModel.guidedPluginUpdateCommand()
+      pluginUpdateLaunchProcess.running = true
+      return
+    }
     if (item && item.kind === "workspace") {
       if (!workspaceCanRemove(item.workspace)) return
       pendingAction = { kind: "remove-workspace", key: item.workspace.key }
@@ -2167,7 +2179,7 @@ Panel {
   function showSettings() {
     panel.enterKeyboardMode()
     cancelForm()
-    itemToRemove = null
+    confirmationTarget = null
     settingsOpen = true
     Qt.callLater(function() { settingsBackButton.forceActiveFocus() })
   }
@@ -2649,6 +2661,13 @@ Panel {
     localUpdateProcess.running = true
   }
 
+  function requestPluginUpdate() {
+    if (!pluginUpdateAvailable || pluginUpdateLaunchProcess.running) return
+    panel.enterKeyboardMode()
+    confirmationDialog.selectedIndex = 0
+    confirmationTarget = { kind: "plugin-update" }
+  }
+
   function parsePluginRelease(raw) {
     try {
       latestPluginVersion = String(JSON.parse(String(raw || "")).version || "")
@@ -2680,7 +2699,7 @@ Panel {
     workspacePositionTimer.stop()
     pendingWorkspacePositionKey = ""
     settingsOpen = false
-    itemToRemove = null
+    confirmationTarget = null
     cancelForm()
   }
 
@@ -3194,6 +3213,21 @@ Panel {
   }
 
   Process {
+    id: pluginUpdateLaunchProcess
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.actionMessage = "Boomux plugin update finished"
+        root.refreshInstalledState()
+      } else {
+        root.actionMessage = "Boomux plugin update did not complete"
+        root.showNotice("Plugin update failed",
+          "The plugin update was canceled or could not be completed.",
+          root.currentNoticeScreen(), true)
+      }
+    }
+  }
+
+  Process {
     id: nodeReauthenticateProcess
     stdout: StdioCollector { id: nodeReauthenticateStdout; waitForEnd: true }
     stderr: StdioCollector { id: nodeReauthenticateStderr; waitForEnd: true }
@@ -3607,30 +3641,30 @@ Panel {
       anchors.fill: parent
       blocked: root.editing || root.settingsOpen || root.renameTarget !== null
       onMoveRequested: function(dx, dy) {
-        if (root.itemToRemove && (dx !== 0 || dy !== 0))
-          removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
+        if (root.confirmationTarget && (dx !== 0 || dy !== 0))
+          confirmationDialog.selectedIndex = confirmationDialog.selectedIndex === 0 ? 1 : 0
         else root.movePanelCursor(dx, dy)
       }
       onActivateRequested: {
-        if (root.itemToRemove) {
-          if (removeItemDialog.selectedIndex === 0) root.cancelRemoveItem()
-          else root.confirmRemoveItem()
+        if (root.confirmationTarget) {
+          if (confirmationDialog.selectedIndex === 0) root.cancelConfirmation()
+          else root.confirmAction()
         } else root.activatePanelCursor()
       }
       onCloseRequested: {
-        if (root.itemToRemove) root.cancelRemoveItem()
+        if (root.confirmationTarget) root.cancelConfirmation()
         else if (root.actionMenuTarget) root.closeActionMenu()
         else if (root.settingsOpen) root.hideSettings()
         else root.close()
       }
       onTabRequested: function(direction) {
-        if (root.itemToRemove)
-          removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
+        if (root.confirmationTarget)
+          confirmationDialog.selectedIndex = confirmationDialog.selectedIndex === 0 ? 1 : 0
         else if (root.actionMenuTarget) root.moveActionMenu(direction)
         else root.cycleFocusSection(direction)
       }
       onTextKey: function(text) {
-        if (root.itemToRemove || root.actionMenuTarget) return
+        if (root.confirmationTarget || root.actionMenuTarget) return
         if (text === "r" || text === "R") root.refreshInstalledState()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("nodes")
@@ -3924,10 +3958,11 @@ Panel {
               width: parent.width
               text: "Plugin " + root.pluginVersion + " → " + root.latestPluginVersion
               iconText: "↗"
-              tooltipText: "Open the Boomux plugin repository"
+              tooltipText: "Review and update the Boomux plugin"
               bordered: true
               foreground: root.foreground
-              onClicked: Qt.openUrlExternally(root.pluginRepositoryUrl)
+              enabled: !pluginUpdateLaunchProcess.running
+              onClicked: root.requestPluginUpdate()
             }
           }
         }
@@ -5580,12 +5615,12 @@ Panel {
       }
 
       ConfirmDialog {
-        id: removeItemDialog
+        id: confirmationDialog
         anchors.fill: parent
-        opened: root.itemToRemove !== null
+        opened: root.confirmationTarget !== null
         z: 10
-        message: root.removeItemMessage(root.itemToRemove)
-        confirmText: root.removeConfirmText(root.itemToRemove)
+        message: root.confirmationMessage(root.confirmationTarget)
+        confirmText: root.confirmationActionText(root.confirmationTarget)
         background: Color.background
         foreground: root.foreground
         scrim: Util.alpha(Color.background, 0.72)
@@ -5593,19 +5628,19 @@ Panel {
         selectedText: Color.accent
         fontFamily: root.fontFamily
         cornerRadius: Style.cornerRadius
-        onCanceled: root.cancelRemoveItem()
-        onConfirmed: root.confirmRemoveItem()
+        onCanceled: root.cancelConfirmation()
+        onConfirmed: root.confirmAction()
       }
       Item {
-        id: removeDialogKeyHandler
+        id: confirmationDialogKeyHandler
         width: 1
         height: 1
-        focus: root.itemToRemove !== null
+        focus: root.confirmationTarget !== null
         Keys.onPressed: function(event) {
-          if (!root.itemToRemove) return
+          if (!root.confirmationTarget) return
           if (event.key === Qt.Key_Up || event.key === Qt.Key_Down)
-            removeItemDialog.selectedIndex = removeItemDialog.selectedIndex === 0 ? 1 : 0
-          else removeItemDialog.handleKey(event)
+            confirmationDialog.selectedIndex = confirmationDialog.selectedIndex === 0 ? 1 : 0
+          else confirmationDialog.handleKey(event)
           event.accepted = true
         }
       }
