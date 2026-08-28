@@ -47,7 +47,6 @@ Panel {
   property bool sessionRefreshAfterSnapshot: false
   property bool sessionSnapshotRefreshQueued: false
   property string selectedSessionKey: ""
-  property string sessionPointerSelectedKey: ""
   property var sessionDetail: null
   property var sessionInspectRequest: null
   property var sessionOpenRequest: null
@@ -285,8 +284,6 @@ Panel {
 
   onAgentHostNameChanged: if (agentHostDropdown)
     agentHostDropdown.value = agentHostName
-
-  onFocusSectionChanged: if (focusSection !== "lower") sessionPointerSelectedKey = ""
 
   onConfirmationTargetChanged: Qt.callLater(function() {
     if (confirmationTarget) confirmationDialogKeyHandler.forceActiveFocus()
@@ -1486,7 +1483,6 @@ Panel {
   function selectTab(tab) {
     if (tab === "workspaces") tab = "agents"
     if (activeTab === tab) return
-    sessionPointerSelectedKey = ""
     if (tab !== "sessions") sessionDetail = null
     activeTab = tab
     focusSection = "lower"
@@ -1637,7 +1633,6 @@ Panel {
       selectedAgentKey = paneAgents[selectedIndex].key
       agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
     } else if (activeTab === "sessions") {
-      sessionPointerSelectedKey = ""
       selectedSessionKey = paneSessions[selectedIndex].key
       sessionList.positionViewAtIndex(selectedIndex, ListView.Contain)
     } else {
@@ -1831,7 +1826,6 @@ Panel {
     sessionRefreshAfterSnapshot = false
     sessionSnapshotRefreshQueued = false
     selectedSessionKey = ""
-    sessionPointerSelectedKey = ""
     sessionDetail = null
     sessionInspectRequest = null
     sessionOpenRequest = null
@@ -1956,7 +1950,6 @@ Panel {
     })
     sessions = WorkspaceModel.sessionsNewestFirst(combined)
     sessionExpiresAt = Date.now() + 10000
-    sessionPointerSelectedKey = ""
     syncSessionIndex()
     clampSelection()
     if (sessionWarnings.length > 0)
@@ -1993,13 +1986,21 @@ Panel {
   }
 
   function openSession(session) {
-    if (!sessionCanOpen(session) || sessionOpenProcess.running) {
-      if (session && session.state === "done")
-        showActionFailure("Session unavailable", "Done Sessions cannot be opened")
+    if (!session || sessionOpenProcess.running) return
+    if (session.state === "done") {
+      showActionFailure("Session unavailable", "Done Sessions cannot be opened")
+      return
+    }
+    if (!exactSessionOpenSupported) {
+      showActionFailure("Boomux upgrade required",
+        "Install Boomux 1.7.0 or newer to open exact Sessions")
+      return
+    }
+    if (!sessionNodeIsEligible(session)) {
+      showActionFailure("Session unavailable", "The owning Node is not currently available")
       return
     }
     panel.exitKeyboardMode()
-    sessionPointerSelectedKey = ""
     sessionOpenRequest = { generation: sessionGeneration, nodeId: session.node_id,
       sessionId: session.id, title: session.description }
     actionMessage = "Opening " + (session.description || "Session") + "..."
@@ -5479,15 +5480,12 @@ Panel {
                   id: sessionMouse
                   anchors.fill: parent
                   hoverEnabled: true
-                  cursorShape: sessionRow.actionable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  cursorShape: Qt.PointingHandCursor
                   onClicked: {
                     root.focusSection = "lower"
-                    var alreadySelected = root.sessionPointerSelectedKey === modelData.key
-                      && root.selectedSessionKey === modelData.key
                     root.selectedSessionKey = modelData.key
-                    root.sessionPointerSelectedKey = modelData.key
                     root.selectedIndex = index
-                    if (alreadySelected && sessionRow.actionable) root.openSession(modelData)
+                    root.openSession(modelData)
                   }
                 }
               }
@@ -5496,7 +5494,9 @@ Panel {
             Text {
               visible: root.paneSessions.length > 0
               width: parent.width
-              text: "Enter opens · i inspects · second click opens"
+              text: root.exactSessionOpenSupported
+                ? "Click/Enter opens · i inspects"
+                : "Boomux 1.7.0+ required to open · i inspects"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

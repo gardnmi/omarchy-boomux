@@ -79,7 +79,7 @@ releases install it to `~/.local/bin`.
 | External or legacy Workspace row | Open or restore that Workspace; exited Shells may restart and launchers may run |
 | Workspace chevron | Expand Shells, commands, and launchers |
 | Shell, command, or Agent row | Open the exact Shell with takeover, disconnecting its current writable controller; an exited Shell starts a new run, and opening a local Agent acknowledges its current attention |
-| Session row | First click selects; a second click on the selected eligible row asks Boomux to revalidate and open that exact Node-qualified Session |
+| Session row | Open the exact eligible Node-qualified Session through Boomux |
 | Launcher row | Invoke the detached launcher; no managed terminal or retained output is created |
 | `+` or `N` | Immediately create a generated Workspace and first Shell at `$HOME` |
 | Project folder icon | Choose a configured project and create a same-named Workspace and generated Shell at its canonical path |

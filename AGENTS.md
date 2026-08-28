@@ -198,8 +198,9 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
-- Session rows use first-click selection and second-click activation. Enter
-  activates, `i` inspects, and Escape closes Session details before the pane.
+- Session rows use direct pointer activation. Enter activates, `i` inspects, and
+  Escape closes Session details before the pane. Unsupported activation must
+  explain the required Boomux capability rather than silently doing nothing.
   Done and unavailable Sessions remain visible but non-actionable.
 - Keep drawer visibility separate from keyboard ownership. Opening or toggling
   the persistent pane is passive; the IPC `focus` action toggles an explicit

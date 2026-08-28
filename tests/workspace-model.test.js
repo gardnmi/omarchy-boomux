@@ -1100,7 +1100,7 @@ describe("Agent Sessions", () => {
       .toEqual(["OpenCode", "Pi", "Claude Code", "Codex", "Kiro CLI"])
   })
 
-  test("integrates three tabs, lazy fan-out, privacy clearing, details, and two-click open", () => {
+  test("integrates three tabs, lazy fan-out, privacy clearing, details, and direct open", () => {
     const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
     expect(panel).toContain('var tabs = ["agents", "sessions", "nodes"]')
     expect(panel).toContain('text: "Sessions"')
@@ -1127,10 +1127,12 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionList)')
     expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionInspect)')
     expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionOpen)')
-    expect(panel).toContain('onFocusSectionChanged: if (focusSection !== "lower")')
     expect(panel).toContain('sessionDetail = null')
-    expect(panel).toContain('var alreadySelected = root.sessionPointerSelectedKey === modelData.key')
-    expect(panel).toContain('if (alreadySelected && sessionRow.actionable) root.openSession(modelData)')
+    expect(panel).toContain('onClicked: {\n                    root.focusSection = "lower"')
+    expect(panel).toContain('root.openSession(modelData)')
+    expect(panel).toContain('Install Boomux 1.7.0 or newer to open exact Sessions')
+    expect(panel).toContain('showActionFailure("Session unavailable", "Done Sessions cannot be opened")')
+    expect(panel).toContain('showActionFailure("Session unavailable", "The owning Node is not currently available")')
     expect(panel).toContain('else if (activeTab === "sessions") openSession(selectedItem)')
     expect(panel).toContain('root.inspectSession(root.selectedItem)')
     expect(panel).toContain('root.compactPath(root.sessionDetail.source_cwd)')
