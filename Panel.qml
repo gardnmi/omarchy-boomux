@@ -1534,6 +1534,10 @@ Panel {
       moveActionMenu(dy !== 0 ? dy : dx)
       return
     }
+    if (focusSection === "workspaces" || focusSection === "workspace-items") {
+      workspacePositionTimer.stop()
+      pendingWorkspacePositionKey = ""
+    }
     if (focusSection === "workspaces") {
       if (dy !== 0) moveWorkspaceCursor(dy)
       else if (dx > 0 && cursorWorkspace && cursorWorkspace.key !== expandedWorkspaceKey)
@@ -4702,10 +4706,15 @@ Panel {
                   enabled: root.workspaceCanOpen(workspaceTreeDelegate.modelData)
                   cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                   onEntered: {
+                    if (panel.keyboardMode) return
                     root.focusSection = "workspaces"
                     root.selectedWorkspaceIndex = index
                   }
-                  onClicked: root.activateWorkspaceRow(workspaceTreeDelegate.modelData)
+                  onClicked: {
+                    root.focusSection = "workspaces"
+                    root.selectedWorkspaceIndex = index
+                    root.activateWorkspaceRow(workspaceTreeDelegate.modelData)
+                  }
                 }
 
                 Column {
@@ -4815,11 +4824,17 @@ Panel {
                         ToolTip.visible: containsMouse && modelData.status === "exited"
                         ToolTip.text: "Opening this item starts a new run"
                         onEntered: {
+                          if (panel.keyboardMode) return
                           root.focusSection = "workspace-items"
                           root.selectedWorkspaceIndex = workspaceTreeDelegate.index
                           root.selectedWorkspaceItemIndex = index
                         }
-                        onClicked: root.openWorkspaceTreeItem(modelData)
+                        onClicked: {
+                          root.focusSection = "workspace-items"
+                          root.selectedWorkspaceIndex = workspaceTreeDelegate.index
+                          root.selectedWorkspaceItemIndex = index
+                          root.openWorkspaceTreeItem(modelData)
+                        }
                       }
                       Button {
                         id: treeItemMenuButton

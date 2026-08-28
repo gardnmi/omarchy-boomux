@@ -452,7 +452,8 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).not.toContain("setWorkspaceTreeHeight(workspaceTreeHeight)")
   expect(panel).toContain("panel.height - Style.space(260)")
   expect(panel).not.toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Contain)")
-  expect(panel).toContain("onClicked: root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
+  expect(panel).toContain("root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
+  expect(panel).toContain("if (panel.keyboardMode) return")
   const activation = panel.slice(panel.indexOf("function activateWorkspaceRow"),
     panel.indexOf("function openWorkspaceTreeItem"))
   expect(activation).not.toContain("close()")
@@ -500,6 +501,8 @@ test("provides full pane and action-menu keyboard navigation", () => {
   expect(panel).toContain('property string focusSection: "workspaces"')
   expect(panel).toContain("function cycleFocusSection(direction)")
   expect(panel).toContain("function movePanelCursor(dx, dy)")
+  expect(panel).toContain('if (focusSection === "workspaces" || focusSection === "workspace-items")')
+  expect(panel).toContain('pendingWorkspacePositionKey = ""')
   expect(panel).toContain("function activatePanelCursor()")
   expect(panel).toContain("function showCursorActionMenu()")
   expect(panel).toContain("function moveActionMenu(offset)")
