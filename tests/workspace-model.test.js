@@ -875,6 +875,70 @@ describe("CLI envelope normalization", () => {
     expect(ownerDetail.agents.map(agent => agent.id)).toEqual(["agent-shared"])
   })
 
+  test("preserves projected resource order while assigning exact remote Workspaces", () => {
+    const envelope = structuredClone(protocol38Envelope)
+    const projection = envelope.data.nodes[1].remote_projection
+    const sourceShell = projection.shells[0]
+    const sourceLauncher = projection.launchers[0]
+    const sourceAgent = projection.agents[0]
+    const qualified = (innerId) => ({ node_id: "node-b", inner_id: innerId })
+    const workspaceId = (name) => qualified(`owner-${name}`)
+    const shell = (workspace, name) => ({
+      ...sourceShell,
+      id: qualified(`shell-${name}`),
+      workspace_id: workspaceId(workspace),
+      run_id: qualified(`run-${name}`)
+    })
+    const launcher = (workspace, name) => ({
+      ...sourceLauncher,
+      id: qualified(`launcher-${name}`),
+      workspace_id: workspaceId(workspace)
+    })
+    const agent = (workspace, name) => ({
+      ...sourceAgent,
+      id: qualified(`agent-${name}`),
+      workspace_id: workspaceId(workspace),
+      shell_id: qualified(`shell-${name}`),
+      run_id: qualified(`run-${name}`)
+    })
+
+    projection.workspaces = ["first", "second"].map(name => ({
+      id: workspaceId(name), name, item_count: 6, attention_count: 0
+    }))
+    projection.shells = [
+      shell("second", "second-1"), shell("first", "first-1"),
+      shell("second", "second-2"), shell("first", "first-2")
+    ]
+    projection.launchers = [
+      launcher("second", "second-1"), launcher("first", "first-1"),
+      launcher("second", "second-2"), launcher("first", "first-2")
+    ]
+    projection.agents = [
+      agent("second", "second-1"), agent("first", "first-1"),
+      agent("second", "second-2"), agent("first", "first-2")
+    ]
+    envelope.data.workspaces[0].placements[1].workspace_id = "owner-first"
+    envelope.data.workspaces.push({
+      id: "global-2", revision: 1, name: "second", closing: false,
+      placements: [{ node_id: "node-b", workspace_id: "owner-second",
+        owner_workspace_name: "second", owner_revision: 1,
+        default_cwd: "/srv/second", state: "active" }]
+    })
+
+    const snapshot = normalized(envelope)
+    for (const [globalId, prefix] of [["global-1", "first"], ["global-2", "second"]]) {
+      const workspace = snapshot.workspaces.find(item => item.id === globalId)
+      const remoteShells = workspace.shells.filter(item => item.node_id === "node-b")
+      expect(remoteShells.map(item => item.id)).toEqual([
+        `shell-${prefix}-1`, `shell-${prefix}-2`
+      ])
+      expect(workspace.launchers.filter(item => item.node_id === "node-b")
+        .map(item => item.id)).toEqual([`launcher-${prefix}-1`, `launcher-${prefix}-2`])
+      expect(workspace.agents.filter(item => item.node_id === "node-b")
+        .map(item => item.id)).toEqual([`agent-${prefix}-1`, `agent-${prefix}-2`])
+    }
+  })
+
   test("preserves duplicate inner resource IDs as qualified identities", () => {
     const snapshot = normalized()
     expect(new Set(snapshot.shells.map(shell => shell.key)).size).toBe(2)
@@ -891,6 +955,44 @@ describe("CLI envelope normalization", () => {
     expect(model.agentMatchesShell(remoteAgent, localShell)).toBe(false)
     expect(model.acknowledgementIdentity(localAgent, 3).agentKey)
       .not.toBe(model.acknowledgementIdentity(remoteAgent, 3).agentKey)
+  })
+
+  test("keeps opaque Node and Workspace identities distinct in grouping indexes", () => {
+    const separator = "\u001f"
+    const firstNodeId = "node-a"
+    const secondNodeId = `node-a${separator}owner`
+    const firstWorkspaceId = `owner${separator}workspace`
+    const secondWorkspaceId = "workspace"
+    const nodes = [{
+      node_id: firstNodeId, alias: "first", local: true,
+      observed_protocol_version: 38, current: true, stale: false, health: "online"
+    }, {
+      node_id: secondNodeId, alias: "second", local: false,
+      observed_protocol_version: 38, current: true, stale: false, health: "online"
+    }]
+    const owners = [{
+      node_id: firstNodeId, id: firstWorkspaceId, name: "first",
+      shells: [{ id: "shell-first" }], launchers: [], agents: []
+    }, {
+      node_id: secondNodeId, id: secondWorkspaceId, name: "second",
+      shells: [{ id: "shell-second" }], launchers: [], agents: []
+    }]
+    const grouped = model.groupSnapshot({
+      workspaces: [{
+        id: "global-first", name: "first",
+        placements: [{ node_id: firstNodeId, workspace_id: firstWorkspaceId,
+          state: "active" }]
+      }, {
+        id: "global-second", name: "second",
+        placements: [{ node_id: secondNodeId, workspace_id: secondWorkspaceId,
+          state: "active" }]
+      }],
+      external_workspaces: []
+    }, owners, nodes)
+
+    expect(grouped.map(workspace => workspace.shells.map(shell => shell.id))).toEqual([
+      ["shell-first"], ["shell-second"]
+    ])
   })
 
   test("rejects a relationship whose qualified Node does not match its projection", () => {

@@ -562,7 +562,7 @@ function normalizeLauncher(source, node, workspaceId, workspaceName, workspaceKe
 }
 
 function ownerKey(nodeId, workspaceId) {
-  return "owner\u001f" + String(nodeId || "") + "\u001f" + resourceId(workspaceId)
+  return JSON.stringify([String(nodeId || ""), resourceId(workspaceId)])
 }
 
 function globalKey(workspaceId) {
@@ -577,6 +577,19 @@ function nodeFor(nodes, nodeId) {
   for (var i = 0; i < nodes.length; i++)
     if (nodes[i].node_id === nodeId) return nodes[i]
   return null
+}
+
+function projectedResourcesByWorkspace(resources, nodeId) {
+  if (!Array.isArray(resources)) throw new Error("invalid projected resources")
+  var result = {}
+  for (var i = 0; i < resources.length; i++) {
+    var resource = resources[i]
+    if (resourceNode(resource.workspace_id, nodeId) !== nodeId) continue
+    var key = resourceKey(nodeId, resource.workspace_id)
+    if (!result[key]) result[key] = []
+    result[key].push(resource)
+  }
+  return result
 }
 
 function unavailableNode(nodeId) {
@@ -611,23 +624,19 @@ function workspaceResources(owner, globalId, globalName, workspaceKey, placement
   return result
 }
 
-function groupedWorkspace(global, ownerWorkspaces, nodes, claimed) {
+function groupedWorkspace(global, ownersByKey, nodesById, claimed) {
   var key = globalKey(global.id)
   var placements = []
   var shells = [], launchers = [], agents = []
   var attentionCount = 0
   for (var p = 0; p < (global.placements || []).length; p++) {
     var source = global.placements[p]
-    var node = nodeFor(nodes, source.node_id) || unavailableNode(source.node_id)
-    var owner = null
-    for (var w = 0; w < ownerWorkspaces.length; w++) {
-      if (ownerWorkspaces[w].node_id === source.node_id
-          && ownerWorkspaces[w].id === resourceId(source.workspace_id)) {
-        owner = ownerWorkspaces[w]
-        claimed[ownerKey(source.node_id, source.workspace_id)] = true
-        break
-      }
-    }
+    var sourceNodeId = typeof source.node_id === "string" ? source.node_id : null
+    var node = sourceNodeId !== null ? nodesById[resourceKey("node", sourceNodeId)] : null
+    node = node || unavailableNode(source.node_id)
+    var ownerIdentity = ownerKey(source.node_id, source.workspace_id)
+    var owner = sourceNodeId !== null ? (ownersByKey[ownerIdentity] || null) : null
+    if (owner) claimed[ownerIdentity] = true
     var resources = workspaceResources(owner || { id: resourceId(source.workspace_id) },
       global.id, global.name, key, String(source.state || "unavailable"))
     shells = shells.concat(resources.shells)
@@ -659,18 +668,13 @@ function groupedWorkspace(global, ownerWorkspaces, nodes, claimed) {
   })
 }
 
-function externalWorkspace(external, ownerWorkspaces, nodes, claimed) {
+function externalWorkspace(external, ownersByKey, nodesById, claimed) {
   var nodeId = String(external.identity.node_id)
   var workspaceId = resourceId(external.identity)
-  var node = nodeFor(nodes, nodeId) || unavailableNode(nodeId)
-  var owner = null
-  for (var w = 0; w < ownerWorkspaces.length; w++) {
-    if (ownerWorkspaces[w].node_id === nodeId && ownerWorkspaces[w].id === workspaceId) {
-      owner = ownerWorkspaces[w]
-      claimed[ownerKey(nodeId, workspaceId)] = true
-      break
-    }
-  }
+  var node = nodesById[resourceKey("node", nodeId)] || unavailableNode(nodeId)
+  var ownerIdentity = ownerKey(nodeId, workspaceId)
+  var owner = ownersByKey[ownerIdentity] || null
+  if (owner) claimed[ownerIdentity] = true
   var key = externalKey(nodeId, workspaceId)
   var resources = workspaceResources(owner || { id: workspaceId }, "", external.name, key,
     external.available ? "active" : "unavailable")
@@ -714,10 +718,19 @@ function groupSnapshot(data, ownerWorkspaces, nodes) {
 
   var claimed = {}
   var result = []
+  var ownersByKey = {}, nodesById = {}
+  for (var n = 0; n < nodes.length; n++) {
+    var nodeIdentity = resourceKey("node", nodes[n].node_id)
+    if (!nodesById[nodeIdentity]) nodesById[nodeIdentity] = nodes[n]
+  }
+  for (var o = 0; o < ownerWorkspaces.length; o++) {
+    var ownerIdentity = ownerKey(ownerWorkspaces[o].node_id, ownerWorkspaces[o].id)
+    if (!ownersByKey[ownerIdentity]) ownersByKey[ownerIdentity] = ownerWorkspaces[o]
+  }
   for (var g = 0; g < data.workspaces.length; g++)
-    result.push(groupedWorkspace(data.workspaces[g], ownerWorkspaces, nodes, claimed))
+    result.push(groupedWorkspace(data.workspaces[g], ownersByKey, nodesById, claimed))
   for (var e = 0; e < data.external_workspaces.length; e++)
-    result.push(externalWorkspace(data.external_workspaces[e], ownerWorkspaces, nodes, claimed))
+    result.push(externalWorkspace(data.external_workspaces[e], ownersByKey, nodesById, claimed))
 
   // Keep unexpected unlinked projections visible and structurally distinct.
   for (var w = 0; w < ownerWorkspaces.length; w++) {
@@ -729,7 +742,7 @@ function groupSnapshot(data, ownerWorkspaces, nodes) {
       name: owner.name,
       default_cwd: owner.default_cwd,
       available: !!owner.node_current && !owner.node_stale
-    }, ownerWorkspaces, nodes, claimed))
+    }, ownersByKey, nodesById, claimed))
   }
   return result
 }
@@ -770,6 +783,12 @@ function normalizeNodeSnapshot(data) {
     var projectedShells = node.local ? [] : (projection.shells || [])
     var projectedLaunchers = node.local ? [] : (projection.launchers || [])
     var projectedAgents = node.local ? [] : (projection.agents || [])
+    var projectedShellsByWorkspace = node.local ? {} : projectedResourcesByWorkspace(
+      projectedShells, node.node_id)
+    var projectedLaunchersByWorkspace = node.local ? {} : projectedResourcesByWorkspace(
+      projectedLaunchers, node.node_id)
+    var projectedAgentsByWorkspace = node.local ? {} : projectedResourcesByWorkspace(
+      projectedAgents, node.node_id)
     for (var w = 0; w < projectedWorkspaces.length; w++) {
       var rawWorkspace = projectedWorkspaces[w]
       var workspaceId = qualifiedId(rawWorkspace.id, node.node_id, "Workspace ID")
@@ -792,19 +811,13 @@ function normalizeNodeSnapshot(data) {
           return normalizeAgent(item, node, rawWorkspace.name)
         })
       } else {
-        workspace.shells = projectedShells.filter(function(item) {
-          return qualifiedMatches(item.workspace_id, node.node_id, workspaceId)
-        }).map(function(item) {
+        workspace.shells = (projectedShellsByWorkspace[workspaceKey] || []).map(function(item) {
           return normalizeShell(item, node, workspaceId, rawWorkspace.name, workspaceKey)
         })
-        workspace.launchers = projectedLaunchers.filter(function(item) {
-          return qualifiedMatches(item.workspace_id, node.node_id, workspaceId)
-        }).map(function(item) {
+        workspace.launchers = (projectedLaunchersByWorkspace[workspaceKey] || []).map(function(item) {
           return normalizeLauncher(item, node, workspaceId, rawWorkspace.name, workspaceKey)
         })
-        workspace.agents = projectedAgents.filter(function(item) {
-          return qualifiedMatches(item.workspace_id, node.node_id, workspaceId)
-        }).map(function(item) {
+        workspace.agents = (projectedAgentsByWorkspace[workspaceKey] || []).map(function(item) {
           return normalizeAgent(item, node, rawWorkspace.name)
         })
       }
