@@ -554,7 +554,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.5.0")
+  expect(manifest.version).toBe("2.5.1")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
