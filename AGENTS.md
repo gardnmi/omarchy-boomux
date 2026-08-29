@@ -1,7 +1,7 @@
 # Omarchy Boomux Development Guide
 
 This repository is an Omarchy Quattro bar plugin for monitoring Boomux Agents
-and managing Boomux workspaces. Keep changes small, local-first, and explicit
+and Sessions and managing Boomux workspaces. Keep changes small, local-first, and explicit
 about operations that can start processes or take over terminals.
 
 ## Repository Map
@@ -65,9 +65,18 @@ uniqueness.
 Preserve exact argument arrays. Do not join stored commands and pass them
 through a shell. Do not invoke Boomux private transport commands.
 
+Session list and inspect require advertised `session.list`, `session.inspect`,
+and `projected_agent_sessions`. Remote catalog reads additionally require a
+current online non-stale Node and both local and observed
+`typed_node_host_services` and `remote_agent_session_catalog`. Activation
+requires the static `exact_session_open` feature and invokes only
+`boomux session open SESSION_ID [--node NODE_ID] [--workspace WORKSPACE_ID]`; the plugin must not rebuild
+harness resume argv or substitute ordinary Shell opening.
+
 ## Runtime Model
 
-The sliding pane has a persistent expandable Workspace tree and two lower views:
+The sliding pane has a persistent expandable Workspace tree and two lower views,
+plus a dedicated Session browser opened from Agents:
 
 - **Workspace tree**: coordinated and external Workspaces, with the currently
   presented Hyprland special Workspace highlighted independently from the
@@ -77,10 +86,17 @@ The sliding pane has a persistent expandable Workspace tree and two lower views:
   durable attention, ordered by their latest authoritative update; private
   runner-owned Agents are excluded by shell ownership; capability-gated controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
+- **Sessions**: a lazy, cross-Node canonical Agent Session catalog ordered by
+  newest activity, with structural `(node_id, session_id)` identity, exact
+  inspection, and Boomux-owned exact activation
 - **Nodes**: a health and version table with selected-Node route, helper and
   control versions, protocol, freshness, workload, eligibility,
   exact identity, guided creation, guided reauthentication, guided upgrade, and
   local registration removal
+
+The Session browser may be wider than the configured pane, but that extra width
+is floating overlay space. Keep the layer-shell reservation at the configured
+main pane width so opening Sessions never reflows existing desktop tiles.
 
 The header Settings surface owns pane-local presentation settings. Side and
 width changes persist through Omarchy's inline plugin settings API. Opening the
@@ -187,6 +203,14 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
+- Session rows select on pointer input; Enter and explicit action buttons activate.
+  Keep each row to one primary title line and one secondary metadata line. The
+  browser must use one anchored destination dropdown and one primary Open action.
+  New Workspace is the dropdown's final option, never a separate button or modal
+  chooser. Escape or outside click returns to Agents.
+  Unsupported activation must
+  explain the required Boomux capability rather than silently doing nothing.
+  Done and unavailable Sessions remain visible but non-actionable.
 - Keep drawer visibility separate from keyboard ownership. Opening or toggling
   the persistent pane is passive; the IPC `focus` action toggles an explicit
   keyboard mode with a contrasting outline, inner-edge wash, and focus rail.
@@ -274,6 +298,15 @@ same read with owner-local grouping. Older daemons retain the local list polling
 path. A future event-driven implementation should retain the passive-daemon
 invariant and handle cursor expiry by reacquiring a baseline.
 
+Session discovery is independent, serial, and lazy while the dedicated browser
+is open. Refresh it on browser entry, after a 10-second visible TTL, and
+after explicit refresh obtains a fresh Node snapshot. Preserve successful Node
+results across partial failures, bound warnings, discard stale generations and
+Node mismatches. Retain the last complete bounded Session rows in process memory
+across pane close, while clearing requests, process output, details, and stale
+generations. Render retained rows immediately and refresh them in the background
+after TTL expiry. Daemon loss clears the cache. Never persist Session data.
+
 Workspace inspection must preserve selection by structural Node/workspace key.
 If a new selection arrives while an inspection is running, issue the latest
 requested inspection after the active process exits.
@@ -318,7 +351,7 @@ work here.
 - `preview.png` is the marketplace image; keep it in the repository root.
 - README image URLs should use stable files under `assets/`. Use a new filename
   if GitHub serves stale image content for an unchanged path.
-- Show Agents, Workspaces, and Nodes views after meaningful UI changes.
+- Show Agents, Sessions, Workspaces, and Nodes views after meaningful UI changes.
 - Do not expose personal absolute paths, secrets, private session titles, or
   terminal contents.
 - To demonstrate the yellow spark, temporarily force the **deployed test copy**

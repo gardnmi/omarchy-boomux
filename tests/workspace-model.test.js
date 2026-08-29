@@ -72,21 +72,27 @@ test("keeps mixed-version private runner Shells and Agents out of user views", (
         name: "terminal", owner: "user", status: "running", cwd: "/tmp" },
       { id: "command", node_id: "node", node_alias: "local", name: "server",
         owner: "user", status: { exited: 2 }, command: ["bun", "run", "dev"] },
+      { id: "agent-command", node_id: "node", node_alias: "local", name: "resumed",
+        owner: "user", status: "running", run: { id: "agent-run" },
+        command: ["boomux", "agent", "supervise"] },
       { id: "private", node_id: "node", name: "private", owner: { kind: "schedule" },
         status: "running" }
     ],
+    agents: [{ node_id: "node", shell_id: "agent-command", run_id: "agent-run",
+      ended_at_ms: null, observation: { state: "idle" } }],
     launchers: [{ id: "launcher", node_id: "node", node_alias: "local", name: "browser",
       command: ["xdg-open", "https://example.com"] }]
   })
   expect(items.map(item => [item.kind, item.name, item.status])).toEqual([
     ["shell", "terminal", "running"],
     ["command", "server", "exited"],
+    ["agent", "resumed", "running"],
     ["launcher", "browser", "on open"]
   ])
   expect(items[1].detail).toBe("bun run dev")
-  expect(items[0].workspace.shells).toHaveLength(3)
-  expect(items[2].launcher.id).toBe("launcher")
-  expect(items[2]).toEqual(expect.objectContaining({
+  expect(items[0].workspace.shells).toHaveLength(4)
+  expect(items[3].launcher.id).toBe("launcher")
+  expect(items[3]).toEqual(expect.objectContaining({
     id: "launcher", node_id: "node", node_local: false
   }))
 })
@@ -199,6 +205,7 @@ test("discovers Agent hosts instead of hard-coding host buttons", () => {
 
 test("opens pane settings and the Boomux config editor", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
   expect(panel).toContain('tooltipText: "Open Boomux settings"')
   expect(panel).toContain("onClicked: root.showSettings()")
   expect(panel).toContain("function persistPaneSettings(values)")
@@ -207,6 +214,9 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.persistPaneSettings({ side: "right" })')
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
+  expect(panel).toContain("reservationWidth: root.paneWidth")
+  expect(sidePane).toContain("property int reservationWidth: paneWidth")
+  expect(sidePane).toContain("root.sideInset + root.effectiveReservationWidth")
   expect(panel).toContain("omarchy-launch-tui --app-id=TUI.float boomux config edit")
   expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
   expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
@@ -240,7 +250,7 @@ test("separates persistent pane visibility from explicit keyboard mode", () => {
   expect(sidePane).toContain("keyboardMode = false")
   expect(sidePane).toContain("id: keyboardDismissArea")
   expect(sidePane).toContain("root.keyboardMode ? keyboardDismissArea : card")
-  expect(sidePane).toContain("onClicked: root.exitKeyboardMode()")
+  expect(sidePane).toContain("onClicked: root.outsideClicked()")
   expect(sidePane).toContain("id: focusEntryAnimation")
   expect(sidePane).toContain("property real focusEmphasis: 0")
   expect(sidePane).toContain("x: root.onRight ? 0 : parent.width - width")
@@ -482,8 +492,8 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).not.toContain("&& !actionProcess.running\n                  cursorShape")
   expect(panel).toContain('var tabs = ["agents", "nodes"]')
   expect(panel).toContain('else if (text === "2") root.selectTab("nodes")')
+  expect(panel).toContain('root.openSessionBrowser()')
   expect(panel).not.toContain('root.selectTab("schedules")')
-  expect(panel).not.toContain('text === "3"')
   expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
   expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
@@ -542,7 +552,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.4.0")
+  expect(manifest.version).toBe("2.5.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -605,6 +615,7 @@ test("shows passive Workspace notices", () => {
 test("documents actual keyboard navigation and configuration mutation", () => {
   const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
   expect(readme).toContain("Switch Agents and Nodes")
+  expect(readme).toContain("Open the Session browser")
   expect(readme).not.toContain("Schedules")
   expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
   expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
@@ -619,8 +630,11 @@ test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   expect(panel).not.toContain("root.webStartProcess")
   expect(panel).not.toContain("root.webStopProcess")
   expect(panel).toContain('text: "Tailnet Web · "')
-  expect(panel).toContain('root.webRunning ? "Open" : "Start Web"')
+  expect(panel).toContain('root.webRunning ? "Open Web" : "Start Web"')
   expect(panel.indexOf('text: "Tailnet Web · "')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
+  expect(panel).toContain('webStopProcess.running ? "Stopping" : "Stop"')
+  expect(panel).toContain('tooltipText: "Stop Web and remove only Boomux-owned Tailscale routes"\n'
+    + '                  bordered: false')
 })
 
 test("bounds passive update responses before collecting stdout", () => {
@@ -786,7 +800,7 @@ test("refreshes the installed CLI version after an upgrade", () => {
   expect(panel).toContain("id: openRefreshTimer")
   expect(panel).toContain("interval: 200")
   expect(panel).toContain("onTriggered: if (root.opened) root.refreshInstalledState()")
-  expect(panel).toContain('if (text === "r" || text === "R") root.refreshInstalledState()')
+  expect(panel).toContain('if (text === "r" || text === "R") root.requestExplicitRefresh()')
 })
 
 test("keeps Create Node inside the Nodes surface", () => {
@@ -931,6 +945,293 @@ describe("CLI envelope normalization", () => {
     expect(detail.shells[0].placement_state).toBe("active")
     expect(model.agentMatchesShell(detail.agents[0], detail.shells[0])).toBe(true)
     expect(model.resourceActionable(detail.shells[0], true)).toBe(true)
+  })
+})
+
+describe("Agent Sessions", () => {
+  const local = { node_id: "local-node", alias: "local", local: true,
+    current: true, stale: false, health: "online", observed_capabilities: [] }
+  const remoteFeatures = ["typed_node_host_services", "remote_agent_session_catalog"]
+  const remote = { node_id: "node;$(false)", alias: "build", local: false,
+    current: true, stale: false, health: "online", observed_protocol_version: 49,
+    observed_capabilities: remoteFeatures }
+  const summary = (overrides = {}) => Object.assign({
+    id: "session;$(false)", workspace_id: "workspace", workspace_name: "Project",
+    description: "Fix tests", integration: "opencode", external_session_id: "external",
+    state: "idle", state_is_current: false, started_at_ms: 100, last_at_ms: 200,
+    occurrence_count: 1
+  }, overrides)
+  const observation = { revision: 4, state: "idle", authority: "lifecycle_integration",
+    evidence: "turn complete", confidence: 100, observed_at_ms: 200 }
+  const envelope = (command, data) => ({ schema: "boomux.cli/v1", command, data })
+
+  test("strictly normalizes local and remote list envelopes", () => {
+    const localSessions = model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary()]
+    }), local)
+    expect(localSessions[0]).toMatchObject({ node_id: "local-node", node_local: true,
+      key: "local-node\u001fsession;$(false)" })
+    const remoteSessions = model.normalizeSessionList(envelope("session.list", {
+      node_id: remote.node_id, sessions: [summary()]
+    }), remote)
+    expect(remoteSessions[0]).toMatchObject({ node_id: remote.node_id, node_alias: "build",
+      node_local: false })
+    expect(() => model.normalizeSessionList(envelope("session.inspect", {
+      sessions: []
+    }), local)).toThrow()
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      node_id: "unexpected", sessions: []
+    }), remote)).toThrow()
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      node_id: local.node_id, sessions: []
+    }), local)).toThrow()
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ state_is_current: "false" })]
+    }), local)).toThrow()
+    for (const invalid of [
+      summary({ state: "surprising" }),
+      summary({ last_at_ms: 1.5 }),
+      summary({ last_at_ms: 1e100 }),
+      summary({ occurrence_count: 1.5 })
+    ]) expect(() => model.normalizeSessionList(envelope("session.list", {
+      sessions: [invalid]
+    }), local)).toThrow()
+  })
+
+  test("keeps qualified collisions distinct and sorts deterministic newest-first ties", () => {
+    const values = [
+      { node_id: "node-b", workspace_id: "workspace-a", id: "same", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-b", id: "same", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-a", id: "z", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-a", id: "a", last_at_ms: 300 },
+      { node_id: "node-a", workspace_id: "workspace-a", id: "old", last_at_ms: 200 }
+    ]
+    expect(model.sessionsNewestFirst(values).map(value =>
+      [value.node_id, value.workspace_id, value.id])).toEqual([
+      ["node-a", "workspace-a", "a"], ["node-a", "workspace-a", "z"],
+      ["node-a", "workspace-b", "same"], ["node-b", "workspace-a", "same"],
+      ["node-a", "workspace-a", "old"]
+    ])
+    expect(model.sessionIdentityMatches({ node_id: "node-a", id: "same" },
+      "node-a", "same")).toBe(true)
+    expect(model.sessionIdentityMatches({ node_id: "node-b", id: "same" },
+      "node-a", "same")).toBe(false)
+  })
+
+  test("filters Sessions locally across visible catalog fields", () => {
+    const values = [
+      summary({ id: "one", description: "Fix checkout", workspace_name: "storefront",
+        integration: "opencode", state: "working", state_is_current: true }),
+      Object.assign(summary({ id: "two", description: "Review schema",
+        workspace_name: "warehouse", integration: "claude", state: "idle",
+        state_is_current: false }), { node_alias: "build-node" })
+    ]
+    expect(model.filterSessions(values, "")).toBe(values)
+    expect(model.filterSessions(values, "CHECK storefront").map(value => value.id))
+      .toEqual(["one"])
+    expect(model.filterSessions(values, "historical build").map(value => value.id))
+      .toEqual(["two"])
+    expect(model.filterSessions(values, "missing")).toEqual([])
+  })
+
+  test("builds exact local and remote argv without shell interpolation", () => {
+    const session = { id: "session;$(touch /tmp/no)", node_id: remote.node_id,
+      node_local: false }
+    expect(model.sessionListCommand(local)).toEqual([
+      "boomux", "session", "list", "--json"
+    ])
+    expect(model.sessionListCommand(remote)).toEqual([
+      "boomux", "session", "list", "--json", "--node", "node;$(false)"
+    ])
+    expect(model.sessionInspectCommand(session)).toEqual([
+      "boomux", "session", "inspect", "session;$(touch /tmp/no)", "--json",
+      "--node", "node;$(false)"
+    ])
+    expect(model.sessionOpenCommand(session, "active-workspace")).toEqual([
+      "boomux", "session", "open", "session;$(touch /tmp/no)",
+      "--node", "node;$(false)", "--workspace", "active-workspace"
+    ])
+    const localSession = Object.assign({}, session, { node_id: local.node_id, node_local: true })
+    expect(model.sessionInspectCommand(localSession)).toEqual([
+      "boomux", "session", "inspect", "session;$(touch /tmp/no)", "--json"
+    ])
+    expect(model.sessionOpenCommand(localSession)).toEqual([
+      "boomux", "session", "open", "session;$(touch /tmp/no)"
+    ])
+  })
+
+  test("reads only the exact current local Session run for preview", () => {
+    const session = { id: "session", node_local: true, occurrences: [
+      { shell_id: "old", run_id: "old-run", is_current: false },
+      { shell_id: "shell", run_id: "run", is_current: true }
+    ] }
+    expect(model.sessionPreviewCommand(session)).toEqual([
+      "boomux", "read", "shell", "--lines", "40", "--json", "--run-id", "run",
+      "--after-revision", "0"
+    ])
+    expect(model.normalizeSessionPreview(envelope("read", {
+      shell_id: "shell", run_id: "run", output: "recent output", status: "running"
+    }), session)).toEqual({ available: true, output: "recent output", status: "running" })
+    expect(model.sessionPreviewCommand(Object.assign({}, session, { node_local: false })))
+      .toEqual([])
+  })
+
+  test("normalizes documented local occurrence fields", () => {
+    const occurrence = { agent_id: "agent", shell_id: "shell", retained_shell_name: "main",
+      retained_shell_cwd: "/home/user/project", source_cwd: "/home/user/project",
+      run_id: "run", started_at_ms: 100, ended_at_ms: null, is_current: true,
+      observation }
+    const detail = model.normalizeSessionInspect(envelope("session.inspect", {
+      session: Object.assign(summary(), { source_cwd: "/home/user/project",
+        occurrences: [occurrence] })
+    }), local, "session;$(false)")
+    expect(detail.occurrences[0]).toMatchObject({ agent_id: "agent", is_current: true,
+      remote_raw: false, retained_shell_name: "main" })
+  })
+
+  test("normalizes current remote raw Agent-instance occurrences for display only", () => {
+    const occurrence = { id: "agent", workspace_id: "workspace", shell_id: "shell",
+      run_id: "run", name: "Agent", integration: "opencode",
+      external_session_id: "external", cwd: "/srv/project", started_at_ms: 100,
+      ended_at_ms: null, observation }
+    const detail = model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary(), {
+        source_cwd: "/srv/project", occurrences: [occurrence] })
+    }), remote, "session;$(false)")
+    expect(detail.occurrences[0]).toMatchObject({ agent_id: "agent", source_cwd: "/srv/project",
+      is_current: true, remote_raw: true, retained_shell_name: null })
+    expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: "other", session: Object.assign(summary(), {
+        source_cwd: null, occurrences: [occurrence] })
+    }), remote, "session;$(false)")).toThrow()
+    expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary({ id: "other" }), {
+        source_cwd: null, occurrences: [occurrence] })
+    }), remote, "session;$(false)")).toThrow()
+    for (const invalidObservation of [
+      Object.assign({}, observation, { revision: 1.5 }),
+      Object.assign({}, observation, { state: "surprising" }),
+      Object.assign({}, observation, { authority: "untrusted" }),
+      Object.assign({}, observation, { confidence: 101 })
+    ]) expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary(), {
+        source_cwd: "/srv/project", occurrences: [Object.assign({}, occurrence,
+          { observation: invalidObservation })] })
+    }), remote, "session;$(false)")).toThrow()
+    expect(() => model.normalizeSessionInspect(envelope("session.inspect", {
+      node_id: remote.node_id, session: Object.assign(summary(), {
+        source_cwd: "relative/project", occurrences: [occurrence] })
+    }), remote, "session;$(false)")).toThrow()
+  })
+
+  test("gates Nodes, activation, and stale generations exactly", () => {
+    expect(model.sessionNodeEligible(local, [])).toBe(true)
+    expect(model.sessionNodeEligible(remote, remoteFeatures)).toBe(true)
+    expect(model.sessionNodeEligible(Object.assign({}, remote, { stale: true }),
+      remoteFeatures)).toBe(false)
+    expect(model.sessionNodeEligible(Object.assign({}, remote,
+      { observed_capabilities: ["typed_node_host_services"] }), remoteFeatures)).toBe(false)
+    expect(model.sessionNodeEligible(Object.assign({}, remote,
+      { observed_protocol_version: 35 }), remoteFeatures)).toBe(false)
+    expect(model.sessionNodeEligible(remote, ["typed_node_host_services"])).toBe(false)
+    expect(model.sessionActionable({ state: "idle" }, true, true)).toBe(true)
+    expect(model.sessionActionable({ state: "done" }, true, true)).toBe(false)
+    const request = { generation: 7, nodeId: remote.node_id, cliFeatures: remoteFeatures }
+    expect(model.sessionRequestCurrent(request, 7, true, "sessions", true, remote)).toBe(true)
+    expect(model.sessionRequestCurrent(request, 8, true, "sessions", true, remote)).toBe(false)
+    expect(model.sessionRequestCurrent(request, 7, false, "sessions", true, remote)).toBe(false)
+    expect(model.sessionRequestCurrent(request, 7, true, "agents", true, remote)).toBe(false)
+    expect(model.boundedSessionWarnings(["a", "b", "c", "d"], 2)).toBe("a · b · +2 more")
+    expect(["opencode", "pi", "claude", "codex", "kiro"].map(model.sessionHarnessLabel))
+      .toEqual(["OpenCode", "Pi", "Claude Code", "Codex", "Kiro CLI"])
+  })
+
+  test("integrates a full-width compact Session launcher browser", () => {
+    const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+    const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
+    expect(panel).toContain('var tabs = ["agents", "nodes"]')
+    expect(panel).toContain('id: openSessionsButton')
+    expect(panel).toContain('text: "AGENTS"')
+    expect(panel).toContain('text: "Sessions  ›"\n                tooltipText: "Browse Agent Sessions"')
+    expect(panel).toContain('tooltipText: "Browse Agent Sessions"\n                bordered: false')
+    expect(panel).not.toContain('root.paneSessions.length + " Agent Sessions"')
+    expect(panel).toContain('data.json_commands.indexOf("session.list") >= 0')
+    expect(panel).toContain('cliFeatures.indexOf("projected_agent_sessions") >= 0')
+    expect(panel).toContain('cliFeatures.indexOf("exact_session_open") >= 0')
+    expect(panel).toContain('running: root.opened && root.activeTab === "sessions"')
+    expect(panel).toContain('sessionExpiresAt = Date.now() + 10000')
+    expect(panel).toContain('if (sessionExpiresAt === 0 || Date.now() >= sessionExpiresAt)')
+    expect(panel).toContain('sessionResults = ({})')
+    expect(panel).toContain('sessionRefreshAfterSnapshot = refreshSessions && !nodeSnapshotProcess.running')
+    expect(panel).toContain('sessionSnapshotRefreshQueued = refreshSessions && nodeSnapshotProcess.running')
+    expect(panel).toContain('if (sessionRefreshAfterSnapshot) {')
+    expect(panel).toContain('id: sessionListProcess')
+    expect(panel).toContain('if (sessionListProcess.running)')
+    expect(panel).toContain('WorkspaceModel.sessionRequestCurrent(request, root.sessionGeneration')
+    expect(panel).toContain('var nextResults = Object.assign({}, root.sessionResults)')
+    expect(panel).toContain('nextResults[request.nodeId] = WorkspaceModel.normalizeSessionList(')
+    expect(panel).toContain('clearSessionPrivacy()')
+    const suspended = panel.slice(panel.indexOf('function suspendSessionActivity()'),
+      panel.indexOf('function clearSessionPrivacy()'))
+    expect(suspended).not.toContain('sessions = []')
+    expect(suspended).toContain('stopAndClearSessionProcess(sessionListProcess)')
+    const cleared = panel.slice(panel.indexOf('function clearSessionPrivacy()'),
+      panel.indexOf('function prepareSessionProcess(process)'))
+    expect(cleared).toContain('sessions = []')
+    expect(panel).toContain('pendingWorkspacePositionKey = ""\n    settingsOpen = false\n'
+      + '    confirmationTarget = null\n    suspendSessionActivity()')
+    expect(panel).toContain('stopAndClearSessionProcess(sessionOpenProcess)')
+    expect(panel).toContain('id: sessionCollectorFactory')
+    expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionList)')
+    expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionOpen)')
+    const browser = panel.slice(panel.indexOf('id: sessionBrowser'),
+      panel.indexOf('id: sessionWorkspaceDropdown'))
+    expect(browser).not.toContain('root.openSession(modelData)')
+    expect(panel).toContain('Install Boomux 1.7.0 or newer to open exact Sessions')
+    expect(panel).toContain('showActionFailure("Session unavailable", "Done Sessions cannot be opened")')
+    expect(panel).toContain('showActionFailure("Session unavailable", "The owning Node is not currently available")')
+    expect(panel).toContain('else if (activeTab === "sessions") openSession(selectedItem, sessionTargetWorkspaceId)')
+    expect(panel).toContain('id: sessionBrowser')
+    expect(panel).toContain('root.activeTab === "sessions" ? root.sessionBrowserWidth : root.paneWidth')
+    expect(panel).toContain('text: "‹ Boomux"')
+    expect(panel).toContain('width: parent.width\n              height: parent.height')
+    expect(panel).toContain('height: Style.space(46)')
+    expect(panel).toContain('text: modelData.description || "Untitled Session"')
+    expect(panel).toContain('+ root.sessionStatusLabel(modelData) + " · "')
+    expect(panel).toContain('WorkspaceModel.sessionHarnessLabel(modelData.integration) + " · "')
+    expect(panel).toContain('function sessionStatusLabel(session)')
+    expect(panel).toContain('function sessionActionLabel(session)')
+    expect(panel).toContain('WorkspaceModel.sessionOpenCommand(session, targetWorkspaceId)')
+    expect(panel).toContain('"Select where the Session terminal should open"')
+    expect(panel).toContain('workspaceId: targetWorkspaceId')
+    expect(panel).toContain('sessionOpenProcess.running = true\n    closeSessionBrowser()')
+    expect(panel).toContain('text: "Sessions  ›"\n                tooltipText: "Browse Agent Sessions"')
+    expect(panel).toContain('text: "OPEN IN"')
+    expect(panel).toContain('name: "+ New Workspace"')
+    expect(panel).toContain('text: "Open Session"')
+    expect(panel).toContain('id: sessionDestinationButton')
+    expect(panel).toContain('bordered: true\n                focusable: true\n'
+      + '                foreground: root.foreground')
+    expect(panel).toContain('id: sessionDestinationChevron')
+    expect(panel).toContain('anchors.right: parent.right\n                  anchors.rightMargin: Style.space(12)')
+    expect(panel).toContain('id: sessionWorkspaceDropdown')
+    expect(panel).toContain('id: sessionSearchField')
+    expect(panel).toContain('WorkspaceModel.filterSessions(allPaneSessions, sessionQuery)')
+    expect(panel).toContain('enabled: !sessionOpenProcess.running')
+    expect(panel).toContain('function chooseSessionWorkspace() {\n    if (sessionWorkspaceDropdown.opened)')
+    expect(panel).toContain('if (!workspace) return\n    sessionTargetWorkspaceId = workspace.id')
+    expect(panel).toContain('root.selectedItem !== null && !root.workspaceMutationBusy()')
+    expect(panel).toContain('parent: sessionDestinationButton')
+    expect(panel).toContain('popupType: Popup.Item')
+    expect(panel).toContain('y: sessionDestinationButton.height + Style.space(4)')
+    expect(panel).toContain('margins: -1')
+    expect(panel).toContain('closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside')
+    expect(panel).toContain('sessionTargetWorkspaceId = workspace.id')
+    expect(panel).toContain('else if (root.activeTab === "sessions") root.closeSessionBrowser()')
+    expect(browser).not.toContain('tooltipText: "Close Boomux pane"')
+    expect(panel).toContain('onOutsideClicked: {')
+    expect(sidePane).toContain('signal outsideClicked()')
+    expect(panel).not.toContain('session", "resume"')
   })
 })
 
