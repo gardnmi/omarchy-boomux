@@ -11,6 +11,8 @@ about operations that can start processes or take over terminals.
 - `WorkspaceModel.js`: protocol-49 grouping, identity validation, and exact command construction
 - `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
+- `compatibility.json`: authoritative Boomux schema, protocol, capability, and
+  diagnostic release requirements
 - `README.md`: user contract, dependency, safety, and lifecycle documentation
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
 - `assets/bomb-spark.svg`: fixed yellow attention spark
@@ -322,6 +324,8 @@ qmllint -I /usr/share/omarchy/shell Panel.qml SidePane.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
 bun test tests/workspace-model.test.js
+bun test tests/compatibility.test.js
+bun scripts/validate-release.js
 mise tasks
 git diff --check
 ```
@@ -361,10 +365,13 @@ work here.
 
 ## Documentation And Release Checklist
 
-- Keep the README minimum Boomux version synchronized with every CLI command
-  used by `Panel.qml`.
+- Change Boomux requirements only in `compatibility.json`; keep runtime checks,
+  README guidance, and release tests derived from that declaration.
 - Update `manifest.json` semantically: patch for fixes/docs, minor for new user
   features, major for incompatible behavior.
+- Keep `main` release-ready. Successful CI for the current `main` commit creates
+  the immutable `v<manifest version>` tag and GitHub release; every pull request
+  must therefore advance the manifest version.
 - Keep install, update, remove, daemon behavior, external dependencies, process
   effects, privacy boundaries, and destructive-operation disclosures accurate.
 - The manifest license is `MIT AND CC-BY-4.0`: code is MIT and adapted Font

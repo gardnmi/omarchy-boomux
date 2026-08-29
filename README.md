@@ -48,6 +48,12 @@ terminals and Agent Sessions, monitoring Agents, and checking Nodes.
 - Boomux 1.7.0 or newer on `PATH`, advertising `exact_session_open` for Session activation.
 - A native terminal supported by `xdg-terminal-exec`.
 
+[`compatibility.json`](compatibility.json) is the machine-readable source of
+truth for the required CLI schema, minimum daemon protocol, capabilities, and
+diagnostic minimum Boomux release. The pane validates the installed CLI before
+starting passive daemon polling. An unsupported installation shows an update
+path instead of sending requests that the backend cannot handle.
+
 ## Install
 
 After installing Boomux, the recommended setup offers to install and enable the
@@ -315,6 +321,35 @@ omarchy plugin remove io.github.gardnmi.boomux
 Removing the plugin does not remove Boomux, stop managed processes, or delete
 Boomux data.
 
+### Compatibility And Releases
+
+Boomux and this plugin release independently. Matching version numbers are not
+required: compatibility is determined by the stable CLI schema, negotiated
+daemon protocol, and advertised capabilities in `compatibility.json`.
+
+Backend changes are released before the plugin begins to require them. New
+Boomux behavior should be additive, and replaced capabilities remain available
+until supported plugin releases no longer need them. Backend-only fixes do not
+require a plugin release when they preserve the declared contract.
+
+CI tests the plugin against the oldest declared Boomux release and the current
+stable release. A daily compatibility run detects new backend releases even
+without cross-repository credentials. The workflow also accepts a
+`boomux-release` repository dispatch for immediate validation.
+
+Every plugin release has a `v<manifest version>` Git tag and GitHub release for
+the exact commit that passed `main` CI. Normal Omarchy updates still follow the
+release-ready default branch; tags provide an audit and rollback point.
+
+Guided updates are backend-first: Boomux is updated and verified before Omarchy
+updates the plugin. If plugin replacement then fails, the existing plugin stays
+installed, the pane reports the detected compatibility state, and recovery is:
+
+```console
+boomux update
+omarchy plugin update io.github.gardnmi.boomux
+```
+
 If the pane appears stale, right-click the bar icon or press `R`. For CLI issues:
 
 ```console
@@ -338,7 +373,9 @@ omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Panel.qml SidePane.qml
 xmllint --noout assets/bomb.svg assets/bomb-spark.svg
 bash -n deploy-local.sh
-bun test tests/workspace-model.test.js
+bun test tests
+bun scripts/validate-release.js
+bash scripts/test-boomux-releases.sh
 git diff --check
 ```
 

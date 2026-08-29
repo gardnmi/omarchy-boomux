@@ -326,6 +326,11 @@ test("confirms plugin updates before invoking Omarchy once", () => {
   expect(panel).toContain("onClicked: root.requestPluginUpdate()")
   expect(panel).toContain('text: "Plugin " + root.pluginVersion + " → " + root.latestPluginVersion\n'
     + '              iconText: "↑"')
+  expect(panel).toContain("!pluginUpdateLaunchProcess.running && !root.boomuxUpdateAvailable")
+  expect(panel).toContain('if (boomuxUpdateAvailable) {\n'
+    + '        actionMessage = "Update Boomux before updating the plugin"')
+  expect(panel).toContain("if (boomuxUpdateAvailable || !pluginUpdateAvailable")
+  expect(panel).toContain("Run boomux update, then omarchy plugin update")
   expect(panel).not.toContain("onClicked: Qt.openUrlExternally(root.pluginRepositoryUrl)")
   expect(model.guidedPluginUpdateCommand()).toEqual([
     "omarchy-launch-tui", "--app-id=TUI.float", "omarchy", "plugin", "update",
@@ -556,7 +561,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.5.2")
+  expect(manifest.version).toBe("2.6.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -1619,7 +1624,8 @@ test("keeps project discovery online, fresh, retryable, and local", () => {
   expect(panel).toContain("projectChooserRequested = true")
   expect(panel).toContain("openFreshProjectChooser()")
   expect(panel).toContain("visible: root.online && root.projectListSupported")
-  expect(panel).toContain("invalidateProjectDiscovery()\n    if (!capabilityProcess.running)")
+  expect(panel).toContain("invalidateProjectDiscovery()\n    capabilitiesReady = false\n"
+    + "    if (!capabilityProcess.running)")
 })
 
 test("documents that generated Workspace creation does not open a terminal", () => {

@@ -1,0 +1,9 @@
+{
+  "schema": "omarchy-boomux.compatibility/v1",
+  "cli_schema": "boomux.cli/v1",
+  "minimum_protocol": 49,
+  "required_capabilities": [
+    "exact_session_open"
+  ],
+  "minimum_boomux": "1.7.0"
+}

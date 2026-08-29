@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Validate release metadata
+        run: bun scripts/validate-release.js
+      - name: Publish current main version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          current_main=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          if [[ $current_main != "$RELEASE_SHA" ]]; then
+            echo "Skipping superseded CI commit $RELEASE_SHA; main is $current_main"
+            exit 0
+          fi
+
+          version=$(jq -r .version manifest.json)
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            tagged_sha=$(git rev-list -n 1 "$tag")
+            if [[ $tagged_sha != "$RELEASE_SHA" ]]; then
+              echo "$tag already points to $tagged_sha, not $RELEASE_SHA" >&2
+              exit 1
+            fi
+            echo "$tag is already published for $RELEASE_SHA"
+            exit 0
+          fi
+
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            tagged_sha=$(git rev-list -n 1 "$tag")
+            if [[ $tagged_sha != "$RELEASE_SHA" ]]; then
+              echo "$tag already points to $tagged_sha, not $RELEASE_SHA" >&2
+              exit 1
+            fi
+            gh release create "$tag" --verify-tag --generate-notes --title "$tag"
+          else
+            gh release create "$tag" --target "$RELEASE_SHA" --generate-notes \
+              --title "$tag"
+          fi
