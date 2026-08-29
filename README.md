@@ -97,7 +97,7 @@ releases install it to `~/.local/bin`.
 | `Enter` in Sessions | Open the selected eligible Session through `boomux session open` |
 | Open in selector | Choose an existing coordinated Workspace for terminal presentation |
 | Open Session | Present the selected Session terminal in the chosen Workspace |
-| + New Workspace in selector | Create a generated Workspace, then present the selected Session terminal there |
+| + New Workspace in selector | Choose a generated Workspace as the destination; creation waits for **Open Session** |
 | `A` in Nodes | Open guided Node setup |
 | Create Shell in Nodes | Create and open a Shell in the active Workspace on that remote Node |
 | Authenticate in Nodes | Open interactive authentication for an existing registered Node |
@@ -165,7 +165,8 @@ selects it. Search filters the loaded catalog locally and does not query the
 daemon or any Node. Explicit actions open it in the active Workspace, an existing chosen
 Workspace, or a newly created generated Workspace. The destination control is
 an anchored dropdown; `+ New Workspace` is its final option rather than a
-separate action or modal chooser. `Escape` returns to the main
+separate action or modal chooser. Choosing it does not mutate anything; **Open
+Session** creates the Workspace and presents the selected Session. `Escape` returns to the main
 Agents pane, and clicking outside the floating browser does the same. Done or
 unavailable Sessions remain visible but cannot be opened.
 

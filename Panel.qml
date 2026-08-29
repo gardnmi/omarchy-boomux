@@ -54,6 +54,7 @@ Panel {
   property var sessionPreviewRequest: null
   property var sessionOpenRequest: null
   property string sessionTargetWorkspaceId: ""
+  property bool sessionCreateNewWorkspace: false
   property string sessionQuery: ""
   property var pendingSessionWorkspaceCreation: null
   property var projects: []
@@ -1375,6 +1376,7 @@ Panel {
     if (pendingSessionWorkspaceCreation) {
       var session = pendingSessionWorkspaceCreation
       pendingSessionWorkspaceCreation = null
+      sessionCreateNewWorkspace = false
       sessionTargetWorkspaceId = resolved.workspace.id
       openSession(session, resolved.workspace.id)
     }
@@ -1520,6 +1522,7 @@ Panel {
   }
 
   function openSessionBrowser() {
+    sessionCreateNewWorkspace = false
     sessionTargetWorkspaceId = activeBoomuxWorkspaceId
     sessionSearchField.text = ""
     selectTab("sessions")
@@ -1529,6 +1532,7 @@ Panel {
 
   function closeSessionBrowser() {
     sessionWorkspaceDropdown.close()
+    sessionCreateNewWorkspace = false
     sessionSearchField.text = ""
     selectTab("agents")
     panel.exitKeyboardMode()
@@ -1683,7 +1687,7 @@ Panel {
 
   function activateSelected() {
     if (activeTab === "agents") openAgent(selectedItem)
-    else if (activeTab === "sessions") openSession(selectedItem, sessionTargetWorkspaceId)
+    else if (activeTab === "sessions") openSelectedSession()
     else if (activeTab === "nodes" && selectedItem) showCursorActionMenu()
   }
 
@@ -2090,8 +2094,21 @@ Panel {
 
   function openSessionInWorkspace(workspace) {
     if (!workspace) return
+    sessionCreateNewWorkspace = false
     sessionTargetWorkspaceId = workspace.id
     sessionWorkspaceDropdown.close()
+  }
+
+  function selectNewWorkspaceForSession() {
+    sessionCreateNewWorkspace = true
+    sessionTargetWorkspaceId = ""
+    sessionWorkspaceDropdown.close()
+  }
+
+  function openSelectedSession() {
+    if (!selectedItem) return
+    if (sessionCreateNewWorkspace) createWorkspaceForSession()
+    else openSession(selectedItem, sessionTargetWorkspaceId)
   }
 
   function createWorkspaceForSession() {
@@ -6174,8 +6191,9 @@ Panel {
                   anchors.right: sessionDestinationChevron.left
                   anchors.rightMargin: Style.space(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.sessionTargetWorkspace
-                    ? String(root.sessionTargetWorkspace.name) : "Choose Workspace"
+                  text: root.sessionCreateNewWorkspace ? "+ New Workspace"
+                    : (root.sessionTargetWorkspace
+                      ? String(root.sessionTargetWorkspace.name) : "Choose Workspace")
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -6201,9 +6219,12 @@ Panel {
                 bordered: true
                 active: true
                 foreground: root.foreground
-                enabled: root.selectedItem !== null && root.sessionTargetWorkspace !== null
+                enabled: root.selectedItem !== null
+                  && (root.sessionCreateNewWorkspace
+                    ? root.atomicWorkspaceCreationSupported && !root.workspaceMutationBusy()
+                    : root.sessionTargetWorkspace !== null)
                   && !sessionOpenProcess.running
-                onClicked: root.openSession(root.selectedItem, root.sessionTargetWorkspaceId)
+                onClicked: root.openSelectedSession()
               }
             }
           }
@@ -6589,11 +6610,9 @@ Panel {
             bordered: false
             leftAlign: true
             foreground: modelData.create_new ? Color.accent : root.foreground
-            enabled: !modelData.create_new || (root.atomicWorkspaceCreationSupported
-              && root.selectedItem !== null && !root.workspaceMutationBusy()
-              && !sessionOpenProcess.running)
+            enabled: !modelData.create_new || root.atomicWorkspaceCreationSupported
             onClicked: {
-              if (modelData.create_new) root.createWorkspaceForSession()
+              if (modelData.create_new) root.selectNewWorkspaceForSession()
               else root.openSessionInWorkspace(modelData)
             }
           }
