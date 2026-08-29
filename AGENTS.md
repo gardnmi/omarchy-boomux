@@ -37,6 +37,21 @@ publication.
 - Supported Agent hosts come from `integration.status`; currently OpenCode, Pi,
   Claude Code, Codex, and Kiro CLI through Boomux lifecycle integrations
 
+### Compatibility Changes
+
+Update `compatibility.json` whenever the plugin begins requiring a new Boomux
+CLI schema, daemon protocol, or advertised capability.
+
+- Release the required Boomux behavior before updating the plugin.
+- Set `minimum_boomux` to the first release providing the complete required
+  contract.
+- Do not raise global requirements for optional, capability-gated features.
+- Keep older requirements until the plugin actually stops supporting them.
+- Run the oldest/current Boomux compatibility matrix after every requirement
+  change.
+- When changing the reusable compatibility workflow, release the plugin first,
+  then update the immutable workflow and `plugin_ref` pins in Boomux.
+
 Parse JSON only from commands advertised by `boomux capabilities --json`.
 Validate `schema`, `command`, and expected `data` fields. Use exact workspace,
 shell, launcher, Agent, run, and observation-revision IDs returned by Boomux;
