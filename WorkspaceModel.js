@@ -12,7 +12,8 @@ function resourceKey(nodeId, value) {
 }
 
 function versionParts(value) {
-  var match = String(value || "").match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
+  var match = String(value || "").match(
+    /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/)
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
 }
 
@@ -159,6 +160,69 @@ function parseEnvelope(raw, command) {
   if (!response || response.schema !== "boomux.cli/v1" || response.command !== command
       || !response.data) throw new Error("unexpected Boomux response")
   return response.data
+}
+
+function normalizeCompatibility(raw) {
+  var source = typeof raw === "string" ? JSON.parse(raw) : raw
+  if (!source || source.schema !== "omarchy-boomux.compatibility/v1")
+    throw new Error("invalid compatibility schema")
+  if (typeof source.cli_schema !== "string" || source.cli_schema === "")
+    throw new Error("invalid required CLI schema")
+  var minimumProtocol = Number(source.minimum_protocol)
+  if (!Number.isInteger(minimumProtocol) || minimumProtocol < 1)
+    throw new Error("invalid minimum protocol")
+  if (!versionParts(source.minimum_boomux)) throw new Error("invalid minimum Boomux version")
+  if (!Array.isArray(source.required_capabilities))
+    throw new Error("invalid required capabilities")
+  var requiredCapabilities = []
+  for (var i = 0; i < source.required_capabilities.length; i++) {
+    var capability = source.required_capabilities[i]
+    if (typeof capability !== "string" || capability === ""
+        || requiredCapabilities.indexOf(capability) >= 0)
+      throw new Error("invalid required capability")
+    requiredCapabilities.push(capability)
+  }
+  return {
+    cli_schema: source.cli_schema,
+    minimum_protocol: minimumProtocol,
+    required_capabilities: requiredCapabilities,
+    minimum_boomux: source.minimum_boomux
+  }
+}
+
+function boomuxCompatibility(requirements, capabilities) {
+  if (!requirements || !capabilities) throw new Error("missing compatibility input")
+  var schemas = Array.isArray(capabilities.json_schemas) ? capabilities.json_schemas : []
+  if (schemas.indexOf(requirements.cli_schema) < 0) return {
+    compatible: false,
+    reason: "Boomux does not advertise the required " + requirements.cli_schema + " CLI schema."
+  }
+  var protocol = Number(capabilities.daemon_protocol_version || 0)
+  if (!Number.isInteger(protocol) || protocol < requirements.minimum_protocol) return {
+    compatible: false,
+    reason: "Boomux protocol " + protocol + " is older than required protocol "
+      + requirements.minimum_protocol + "."
+  }
+  var features = Array.isArray(capabilities.features) ? capabilities.features : []
+  var missing = requirements.required_capabilities.filter(function(capability) {
+    return features.indexOf(capability) < 0
+  })
+  if (missing.length > 0) return {
+    compatible: false,
+    reason: "Boomux is missing required capability: " + missing.join(", ") + "."
+  }
+  return { compatible: true, reason: "" }
+}
+
+function daemonCompatibility(requirements, protocol) {
+  var observed = Number(protocol || 0)
+  if (requirements && Number.isInteger(observed)
+      && observed >= requirements.minimum_protocol) return { compatible: true, reason: "" }
+  return {
+    compatible: false,
+    reason: "The running Boomux daemon uses protocol " + observed
+      + ", but this plugin requires protocol " + requirements.minimum_protocol + "."
+  }
 }
 
 function requiredString(value, field, allowEmpty) {
@@ -1321,6 +1385,9 @@ if (typeof module !== "undefined") module.exports = {
   boomuxShellWindowKey: boomuxShellWindowKey,
   qualifiedMatches: qualifiedMatches,
   parseEnvelope: parseEnvelope,
+  normalizeCompatibility: normalizeCompatibility,
+  boomuxCompatibility: boomuxCompatibility,
+  daemonCompatibility: daemonCompatibility,
   normalizeSessionList: normalizeSessionList,
   normalizeSessionInspect: normalizeSessionInspect,
   normalizeSessionOccurrence: normalizeSessionOccurrence,

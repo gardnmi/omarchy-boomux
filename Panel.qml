@@ -73,6 +73,11 @@ Panel {
   property bool capabilitiesReady: false
   property bool cliAvailable: false
   property string cliVersion: ""
+  property var compatibilityRequirements: null
+  property string compatibilityError: ""
+  property bool compatibilityConfigurationInvalid: false
+  readonly property bool backendReady: capabilitiesReady && cliAvailable
+    && compatibilityError === ""
   property string latestBoomuxVersion: ""
   property string latestBoomuxUrl: ""
   property string boomuxUpdateAction: ""
@@ -327,7 +332,16 @@ Panel {
     } catch (exception) {
       pluginVersion = ""
     }
-    capabilityProcess.running = true
+    try {
+      compatibilityRequirements = WorkspaceModel.normalizeCompatibility(
+        pluginCompatibility.text())
+      capabilityProcess.running = true
+    } catch (exception) {
+      compatibilityConfigurationInvalid = true
+      compatibilityError = "The plugin compatibility declaration is invalid. Reinstall the plugin."
+      capabilitiesReady = true
+      console.warn("io.github.gardnmi.boomux:", exception)
+    }
     pluginUpdateProcess.running = true
     desktopWorkspaceProcess.running = true
     desktopTerminalProcess.running = true
@@ -548,7 +562,7 @@ Panel {
   }
 
   function refresh() {
-    if (capabilitiesReady && !cliAvailable) return
+    if (!backendReady) return
     if (opened && activeTab === "agents" && webLifecycleSupported
         && !webStatusProcess.running && !webStartProcess.running && !webStopProcess.running)
       webStatusProcess.running = true
@@ -558,6 +572,7 @@ Panel {
 
   function refreshInstalledState() {
     invalidateProjectDiscovery()
+    capabilitiesReady = false
     if (!capabilityProcess.running) capabilityProcess.running = true
     refresh()
   }
@@ -637,6 +652,14 @@ Panel {
         return
       }
       daemonProtocolVersion = Number(data.protocol_version || 0)
+      var compatibility = WorkspaceModel.daemonCompatibility(
+        compatibilityRequirements, daemonProtocolVersion)
+      if (!compatibility.compatible) {
+        compatibilityError = compatibility.reason + " Update Boomux to "
+          + compatibilityRequirements.minimum_boomux + " or newer."
+        setOffline(compatibilityError)
+        return
+      }
       if (explicitCreationCheck) requestFreshWorkspaceCreateSnapshot()
       else refreshData()
       startEventWait()
@@ -658,6 +681,10 @@ Panel {
       if (!Array.isArray(data.json_commands)) throw new Error("missing JSON commands")
       cliVersion = String(data.cli_version || "")
       cliFeatures = Array.isArray(data.features) ? data.features : []
+      var compatibility = WorkspaceModel.boomuxCompatibility(
+        compatibilityRequirements, data)
+      compatibilityError = compatibility.compatible ? "" : compatibility.reason
+        + " Update Boomux to " + compatibilityRequirements.minimum_boomux + " or newer."
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
       atomicWorkspaceCreationSupported = data.json_commands.indexOf("workspace.create") >= 0
         && cliFeatures.indexOf("atomic_workspace_shell_creation") >= 0
@@ -687,8 +714,12 @@ Panel {
         && cliFeatures.indexOf("multi_node_workspace_placements") >= 0
       if (localUpdateStatusSupported) localUpdateStatusProcess.running = true
       else boomuxUpdateProcess.running = true
+      if (!compatibility.compatible) setOffline(compatibilityError)
     } catch (exception) {
       cliVersion = ""
+      compatibilityError = "Could not validate this Boomux installation. Update Boomux to "
+        + compatibilityRequirements.minimum_boomux + " or newer."
+      setOffline(compatibilityError)
       projectListSupported = false
       atomicWorkspaceCreationSupported = false
       workspaceDefaultCwdSupported = false
@@ -838,7 +869,8 @@ Panel {
   }
 
   function startEventWait() {
-    if (!focusEventsSupported || daemonProtocolVersion < 39 || eventProcess.running) return
+    if (!backendReady || !focusEventsSupported || daemonProtocolVersion < 39
+        || eventProcess.running) return
     eventProcess.command = eventCursor === ""
       ? ["boomux", "events", "--json"]
       : ["boomux", "events", "--after", eventCursor, "--wait-ms", "30000", "--json"]
@@ -2520,6 +2552,10 @@ Panel {
     var item = confirmationTarget
     confirmationTarget = null
     if (item && item.kind === "plugin-update") {
+      if (boomuxUpdateAvailable) {
+        actionMessage = "Update Boomux before updating the plugin"
+        return
+      }
       if (!pluginUpdateAvailable || pluginUpdateLaunchProcess.running) return
       actionMessage = "Updating the Boomux plugin..."
       pluginUpdateLaunchProcess.command = WorkspaceModel.guidedPluginUpdateCommand()
@@ -3065,7 +3101,8 @@ Panel {
   }
 
   function requestPluginUpdate() {
-    if (!pluginUpdateAvailable || pluginUpdateLaunchProcess.running) return
+    if (boomuxUpdateAvailable || !pluginUpdateAvailable
+        || pluginUpdateLaunchProcess.running) return
     panel.enterKeyboardMode()
     confirmationDialog.selectedIndex = 0
     confirmationTarget = { kind: "plugin-update" }
@@ -3267,6 +3304,8 @@ Panel {
       else {
         root.cliAvailable = false
         root.cliVersion = ""
+        root.compatibilityError = ""
+        root.setOffline("Boomux is not installed or is unavailable on PATH")
         root.capabilitiesReady = true
         root.projectListSupported = false
         root.atomicWorkspaceCreationSupported = false
@@ -3758,9 +3797,12 @@ Panel {
         root.actionMessage = "Boomux plugin update finished"
         root.refreshInstalledState()
       } else {
-        root.actionMessage = "Boomux plugin update did not complete"
+        root.actionMessage = "Plugin update did not complete · Boomux "
+          + (root.cliVersion || "unknown") + " · plugin "
+          + (root.pluginVersion || "unknown")
         root.showNotice("Plugin update failed",
-          "The plugin update was canceled or could not be completed.",
+          root.actionMessage + ". Run boomux update, then omarchy plugin update "
+            + "io.github.gardnmi.boomux.",
           root.currentNoticeScreen(), true)
       }
     }
@@ -3967,6 +4009,13 @@ Panel {
   FileView {
     id: pluginManifest
     path: Qt.resolvedUrl("manifest.json")
+    blockLoading: true
+    printErrors: false
+  }
+
+  FileView {
+    id: pluginCompatibility
+    path: Qt.resolvedUrl("compatibility.json")
     blockLoading: true
     printErrors: false
   }
@@ -4512,10 +4561,12 @@ Panel {
               width: parent.width
               text: "Plugin " + root.pluginVersion + " → " + root.latestPluginVersion
               iconText: "↑"
-              tooltipText: "Review and update the Boomux plugin"
+              tooltipText: root.boomuxUpdateAvailable
+                ? "Update Boomux before updating the plugin"
+                : "Review and update the Boomux plugin"
               bordered: true
               foreground: root.foreground
-              enabled: !pluginUpdateLaunchProcess.running
+              enabled: !pluginUpdateLaunchProcess.running && !root.boomuxUpdateAvailable
               onClicked: root.requestPluginUpdate()
             }
           }
@@ -4523,6 +4574,7 @@ Panel {
 
         Item {
           visible: root.capabilitiesReady && !root.cliAvailable
+            && !root.compatibilityConfigurationInvalid
           width: parent.width
           implicitHeight: installColumn.implicitHeight
 
@@ -4568,7 +4620,54 @@ Panel {
         }
 
         Item {
-          visible: root.cliAvailable && root.editing
+          visible: root.capabilitiesReady && root.compatibilityError !== ""
+            && (root.cliAvailable || root.compatibilityConfigurationInvalid)
+          width: parent.width
+          implicitHeight: compatibilityColumn.implicitHeight
+
+          Column {
+            id: compatibilityColumn
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: root.compatibilityConfigurationInvalid
+                ? "PLUGIN REINSTALL REQUIRED" : "BOOMUX UPDATE REQUIRED"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            Text {
+              width: parent.width
+              text: root.compatibilityError
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+            }
+            Button {
+              width: parent.width
+              text: root.compatibilityConfigurationInvalid ? "Open Plugin Page" : "Update Boomux"
+              iconText: root.compatibilityConfigurationInvalid ? "↗"
+                : (root.guidedLocalUpdateSupported
+                && root.boomuxUpdateAction === "run_update" ? "↑" : "↗"
+                )
+              bordered: true
+              active: true
+              foreground: root.foreground
+              enabled: !localUpdateProcess.running
+              onClicked: {
+                if (root.compatibilityConfigurationInvalid)
+                  Qt.openUrlExternally(root.pluginRepositoryUrl)
+                else root.startLocalUpdate()
+              }
+            }
+          }
+        }
+
+        Item {
+          visible: root.backendReady && root.editing
           width: parent.width
           implicitHeight: formColumn.implicitHeight
 
@@ -5047,7 +5146,7 @@ Panel {
         }
 
         Item {
-          visible: root.cliAvailable && !root.editing
+          visible: root.backendReady && !root.editing
           width: parent.width
           implicitHeight: workspaceTreeColumn.implicitHeight
 
@@ -5454,7 +5553,7 @@ Panel {
 
         Item {
           id: workspaceResizeHandle
-          visible: root.cliAvailable && !root.editing
+          visible: root.backendReady && !root.editing
           width: parent.width
           height: Style.space(12)
 
@@ -5486,7 +5585,7 @@ Panel {
         }
 
         Row {
-          visible: root.cliAvailable && !root.editing
+          visible: root.backendReady && !root.editing
           width: parent.width
           spacing: Style.space(5)
           Button {
@@ -5508,12 +5607,12 @@ Panel {
         }
 
         PanelSeparator {
-          visible: root.cliAvailable && root.activeTab === "nodes" && !root.editing
+          visible: root.backendReady && root.activeTab === "nodes" && !root.editing
           foreground: root.foreground
         }
 
         Item {
-          visible: root.cliAvailable && root.activeTab === "sessions" && !root.editing
+          visible: root.backendReady && root.activeTab === "sessions" && !root.editing
           width: parent.width
           implicitHeight: sessionColumn.implicitHeight
 
@@ -5663,7 +5762,7 @@ Panel {
         }
 
         Item {
-          visible: root.cliAvailable && root.activeTab === "agents" && !root.editing
+          visible: root.backendReady && root.activeTab === "agents" && !root.editing
           width: parent.width
           implicitHeight: agentColumn.implicitHeight
 
@@ -5798,7 +5897,7 @@ Panel {
         }
 
         Item {
-          visible: root.cliAvailable && root.activeTab === "nodes" && !root.editing
+          visible: root.backendReady && root.activeTab === "nodes" && !root.editing
           width: parent.width
           implicitHeight: nodeColumn.implicitHeight
 

@@ -3,8 +3,16 @@ description = "Deploy the local plugin and restart Omarchy shell"
 run = "bash deploy-local.sh"
 
 [tasks.test]
-description = "Run focused Workspace model tests"
-run = "bun test tests/workspace-model.test.js"
+description = "Run plugin model and compatibility tests"
+run = "bun test tests"
+
+[tasks.validate-release]
+description = "Validate release and compatibility metadata"
+run = "bun scripts/validate-release.js"
+
+[tasks.test-boomux-releases]
+description = "Test the oldest supported and current Boomux releases"
+run = "bash scripts/test-boomux-releases.sh"
 
 [tasks.bench]
 description = "Benchmark Workspace snapshot normalization"
