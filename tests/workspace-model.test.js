@@ -307,6 +307,8 @@ test("delegates local updates to the capability-gated Boomux flow", () => {
   expect(panel).toContain("Boomux update did not complete · run boomux update in a terminal to review the error")
   expect(panel).toContain("id: localUpdateVerificationTimer")
   expect(panel).toContain("!WorkspaceModel.versionIsNewer(localUpdateExpectedVersion, current)")
+  expect(panel).toContain('localUpdateVerificationTimer.stop()\n          cliVersion = current\n'
+    + '          actionMessage = "Boomux updated to " + current')
   expect(panel).toContain("Update with the AUR or package helper that installed Boomux.")
   expect(panel).not.toContain('root.actionMessage = "Boomux update finished"')
   expect(panel).not.toContain('localUpdateProcess.command = ["curl"')
@@ -1190,7 +1192,7 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('Install Boomux 1.7.0 or newer to open exact Sessions')
     expect(panel).toContain('showActionFailure("Session unavailable", "Done Sessions cannot be opened")')
     expect(panel).toContain('showActionFailure("Session unavailable", "The owning Node is not currently available")')
-    expect(panel).toContain('else if (activeTab === "sessions") openSession(selectedItem, sessionTargetWorkspaceId)')
+    expect(panel).toContain('else if (activeTab === "sessions") openSelectedSession()')
     expect(panel).toContain('id: sessionBrowser')
     expect(panel).toContain('root.activeTab === "sessions" ? root.sessionBrowserWidth : root.paneWidth')
     expect(panel).toContain('text: "‹ Boomux"')
@@ -1219,8 +1221,17 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('WorkspaceModel.filterSessions(allPaneSessions, sessionQuery)')
     expect(panel).toContain('enabled: !sessionOpenProcess.running')
     expect(panel).toContain('function chooseSessionWorkspace() {\n    if (sessionWorkspaceDropdown.opened)')
-    expect(panel).toContain('if (!workspace) return\n    sessionTargetWorkspaceId = workspace.id')
-    expect(panel).toContain('root.selectedItem !== null && !root.workspaceMutationBusy()')
+    expect(panel).toContain('if (!workspace) return\n    sessionCreateNewWorkspace = false\n'
+      + '    sessionTargetWorkspaceId = workspace.id')
+    expect(panel).toContain('function selectNewWorkspaceForSession() {')
+    const newWorkspaceSelection = panel.slice(
+      panel.indexOf('function selectNewWorkspaceForSession()'),
+      panel.indexOf('function openSelectedSession()'))
+    expect(newWorkspaceSelection).toContain('sessionCreateNewWorkspace = true')
+    expect(newWorkspaceSelection).not.toContain('requestGeneratedWorkspace')
+    expect(panel).toContain('if (sessionCreateNewWorkspace) createWorkspaceForSession()')
+    expect(panel).toContain('onClicked: root.openSelectedSession()')
+    expect(panel).toContain('if (modelData.create_new) root.selectNewWorkspaceForSession()')
     expect(panel).toContain('parent: sessionDestinationButton')
     expect(panel).toContain('popupType: Popup.Item')
     expect(panel).toContain('y: sessionDestinationButton.height + Style.space(4)')

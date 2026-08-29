@@ -207,7 +207,8 @@ or lifecycle observation.
   Keep each row to one primary title line and one secondary metadata line. The
   browser must use one anchored destination dropdown and one primary Open action.
   New Workspace is the dropdown's final option, never a separate button or modal
-  chooser. Escape or outside click returns to Agents.
+  chooser. Destination selection is non-mutating; create a new Workspace only
+  when the user activates the primary Open action. Escape or outside click returns to Agents.
   Unsupported activation must
   explain the required Boomux capability rather than silently doing nothing.
   Done and unavailable Sessions remain visible but non-actionable.
