@@ -13,6 +13,8 @@ about operations that can start processes or take over terminals.
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
 - `compatibility.json`: authoritative Boomux schema, protocol, capability, and
   diagnostic release requirements
+- `.github/workflows/boomux-compatibility.yml`: credential-free reusable check
+  for one exact published Boomux release
 - `README.md`: user contract, dependency, safety, and lifecycle documentation
 - `assets/bomb.svg`: theme-colored Font Awesome bomb body
 - `assets/bomb-spark.svg`: fixed yellow attention spark
