@@ -5,3 +5,7 @@ run = "bash deploy-local.sh"
 [tasks.test]
 description = "Run focused Workspace model tests"
 run = "bun test tests/workspace-model.test.js"
+
+[tasks.bench]
+description = "Benchmark Workspace snapshot normalization"
+run = "bun benchmarks/workspace-model.js"
