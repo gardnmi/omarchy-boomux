@@ -4511,7 +4511,7 @@ Panel {
               visible: root.pluginUpdateAvailable
               width: parent.width
               text: "Plugin " + root.pluginVersion + " → " + root.latestPluginVersion
-              iconText: "↗"
+              iconText: "↑"
               tooltipText: "Review and update the Boomux plugin"
               bordered: true
               foreground: root.foreground
