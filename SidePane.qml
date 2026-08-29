@@ -13,6 +13,7 @@ PanelWindow {
   property bool open: false
   property string side: "left"
   property int paneWidth: Style.space(360)
+  property int reservationWidth: paneWidth
   property int margin: Style.gapsOut
   property int padding: Style.spacing.popupPadding
   property var borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border,
@@ -21,6 +22,7 @@ PanelWindow {
   property Item focusTarget: null
   property bool keyboardMode: false
   property real focusEmphasis: 0
+  signal outsideClicked()
 
   default property alias contentItem: contentHolder.children
 
@@ -40,6 +42,7 @@ PanelWindow {
   readonly property real availablePaneHeight: Math.max(0,
     screenH - topInset - bottomInset)
   readonly property real effectivePaneWidth: Math.min(paneWidth, availablePaneWidth)
+  readonly property real effectiveReservationWidth: Math.min(reservationWidth, availablePaneWidth)
   readonly property real paneX: onRight
     ? screenW - effectivePaneWidth - sideInset : sideInset
   readonly property real closedX: onRight ? screenW + Style.space(8)
@@ -117,7 +120,7 @@ PanelWindow {
     MouseArea {
       anchors.fill: parent
       acceptedButtons: Qt.AllButtons
-      onClicked: root.exitKeyboardMode()
+      onClicked: root.outsideClicked()
     }
   }
 
@@ -126,7 +129,7 @@ PanelWindow {
     screen: root.screen
     visible: root.open && root.screen !== null
     color: "transparent"
-    implicitWidth: Math.ceil(root.sideInset + root.effectivePaneWidth)
+    implicitWidth: Math.ceil(root.sideInset + root.effectiveReservationWidth)
     exclusionMode: ExclusionMode.Normal
     exclusiveZone: implicitWidth
     anchors {

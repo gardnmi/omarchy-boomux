@@ -72,21 +72,27 @@ test("keeps mixed-version private runner Shells and Agents out of user views", (
         name: "terminal", owner: "user", status: "running", cwd: "/tmp" },
       { id: "command", node_id: "node", node_alias: "local", name: "server",
         owner: "user", status: { exited: 2 }, command: ["bun", "run", "dev"] },
+      { id: "agent-command", node_id: "node", node_alias: "local", name: "resumed",
+        owner: "user", status: "running", run: { id: "agent-run" },
+        command: ["boomux", "agent", "supervise"] },
       { id: "private", node_id: "node", name: "private", owner: { kind: "schedule" },
         status: "running" }
     ],
+    agents: [{ node_id: "node", shell_id: "agent-command", run_id: "agent-run",
+      ended_at_ms: null, observation: { state: "idle" } }],
     launchers: [{ id: "launcher", node_id: "node", node_alias: "local", name: "browser",
       command: ["xdg-open", "https://example.com"] }]
   })
   expect(items.map(item => [item.kind, item.name, item.status])).toEqual([
     ["shell", "terminal", "running"],
     ["command", "server", "exited"],
+    ["agent", "resumed", "running"],
     ["launcher", "browser", "on open"]
   ])
   expect(items[1].detail).toBe("bun run dev")
-  expect(items[0].workspace.shells).toHaveLength(3)
-  expect(items[2].launcher.id).toBe("launcher")
-  expect(items[2]).toEqual(expect.objectContaining({
+  expect(items[0].workspace.shells).toHaveLength(4)
+  expect(items[3].launcher.id).toBe("launcher")
+  expect(items[3]).toEqual(expect.objectContaining({
     id: "launcher", node_id: "node", node_local: false
   }))
 })
@@ -199,6 +205,7 @@ test("discovers Agent hosts instead of hard-coding host buttons", () => {
 
 test("opens pane settings and the Boomux config editor", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
   expect(panel).toContain('tooltipText: "Open Boomux settings"')
   expect(panel).toContain("onClicked: root.showSettings()")
   expect(panel).toContain("function persistPaneSettings(values)")
@@ -207,6 +214,9 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.persistPaneSettings({ side: "right" })')
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
+  expect(panel).toContain("reservationWidth: root.paneWidth")
+  expect(sidePane).toContain("property int reservationWidth: paneWidth")
+  expect(sidePane).toContain("root.sideInset + root.effectiveReservationWidth")
   expect(panel).toContain("omarchy-launch-tui --app-id=TUI.float boomux config edit")
   expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
   expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
@@ -240,7 +250,7 @@ test("separates persistent pane visibility from explicit keyboard mode", () => {
   expect(sidePane).toContain("keyboardMode = false")
   expect(sidePane).toContain("id: keyboardDismissArea")
   expect(sidePane).toContain("root.keyboardMode ? keyboardDismissArea : card")
-  expect(sidePane).toContain("onClicked: root.exitKeyboardMode()")
+  expect(sidePane).toContain("onClicked: root.outsideClicked()")
   expect(sidePane).toContain("id: focusEntryAnimation")
   expect(sidePane).toContain("property real focusEmphasis: 0")
   expect(sidePane).toContain("x: root.onRight ? 0 : parent.width - width")
@@ -480,11 +490,11 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(activation).toContain("if (!presentationOnly) requestWorkspaceSelection(workspace)")
   expect(panel).toContain("root.startPendingWorkspaceOpen()")
   expect(panel).not.toContain("&& !actionProcess.running\n                  cursorShape")
-  expect(panel).toContain('var tabs = ["agents", "sessions", "nodes"]')
-  expect(panel).toContain('else if (text === "2") root.selectTab("sessions")')
-  expect(panel).toContain('else if (text === "3") root.selectTab("nodes")')
+  expect(panel).toContain('var tabs = ["agents", "nodes"]')
+  expect(panel).toContain('else if (text === "2") root.selectTab("nodes")')
+  expect(panel).toContain('root.openSessionBrowser()')
   expect(panel).not.toContain('root.selectTab("schedules")')
-  expect(panel).toContain('width: (parent.width - parent.spacing * 2) / 3')
+  expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
   expect(panel).not.toContain("Up/Down selects · A creates a Node · Tab switches · R refreshes")
   expect(panel).not.toContain("id: actionStatusText")
@@ -604,7 +614,8 @@ test("shows passive Workspace notices", () => {
 
 test("documents actual keyboard navigation and configuration mutation", () => {
   const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
-  expect(readme).toContain("Switch Agents, Sessions, and Nodes")
+  expect(readme).toContain("Switch Agents and Nodes")
+  expect(readme).toContain("Open the Session browser")
   expect(readme).not.toContain("Schedules")
   expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
   expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
@@ -1004,6 +1015,22 @@ describe("Agent Sessions", () => {
       "node-a", "same")).toBe(false)
   })
 
+  test("filters Sessions locally across visible catalog fields", () => {
+    const values = [
+      summary({ id: "one", description: "Fix checkout", workspace_name: "storefront",
+        integration: "opencode", state: "working", state_is_current: true }),
+      Object.assign(summary({ id: "two", description: "Review schema",
+        workspace_name: "warehouse", integration: "claude", state: "idle",
+        state_is_current: false }), { node_alias: "build-node" })
+    ]
+    expect(model.filterSessions(values, "")).toBe(values)
+    expect(model.filterSessions(values, "CHECK storefront").map(value => value.id))
+      .toEqual(["one"])
+    expect(model.filterSessions(values, "historical build").map(value => value.id))
+      .toEqual(["two"])
+    expect(model.filterSessions(values, "missing")).toEqual([])
+  })
+
   test("builds exact local and remote argv without shell interpolation", () => {
     const session = { id: "session;$(touch /tmp/no)", node_id: remote.node_id,
       node_local: false }
@@ -1017,9 +1044,9 @@ describe("Agent Sessions", () => {
       "boomux", "session", "inspect", "session;$(touch /tmp/no)", "--json",
       "--node", "node;$(false)"
     ])
-    expect(model.sessionOpenCommand(session)).toEqual([
+    expect(model.sessionOpenCommand(session, "active-workspace")).toEqual([
       "boomux", "session", "open", "session;$(touch /tmp/no)",
-      "--node", "node;$(false)"
+      "--node", "node;$(false)", "--workspace", "active-workspace"
     ])
     const localSession = Object.assign({}, session, { node_id: local.node_id, node_local: true })
     expect(model.sessionInspectCommand(localSession)).toEqual([
@@ -1028,6 +1055,22 @@ describe("Agent Sessions", () => {
     expect(model.sessionOpenCommand(localSession)).toEqual([
       "boomux", "session", "open", "session;$(touch /tmp/no)"
     ])
+  })
+
+  test("reads only the exact current local Session run for preview", () => {
+    const session = { id: "session", node_local: true, occurrences: [
+      { shell_id: "old", run_id: "old-run", is_current: false },
+      { shell_id: "shell", run_id: "run", is_current: true }
+    ] }
+    expect(model.sessionPreviewCommand(session)).toEqual([
+      "boomux", "read", "shell", "--lines", "40", "--json", "--run-id", "run",
+      "--after-revision", "0"
+    ])
+    expect(model.normalizeSessionPreview(envelope("read", {
+      shell_id: "shell", run_id: "run", output: "recent output", status: "running"
+    }), session)).toEqual({ available: true, output: "recent output", status: "running" })
+    expect(model.sessionPreviewCommand(Object.assign({}, session, { node_local: false })))
+      .toEqual([])
   })
 
   test("normalizes documented local occurrence fields", () => {
@@ -1100,12 +1143,13 @@ describe("Agent Sessions", () => {
       .toEqual(["OpenCode", "Pi", "Claude Code", "Codex", "Kiro CLI"])
   })
 
-  test("integrates three tabs, lazy fan-out, privacy clearing, details, and direct open", () => {
+  test("integrates a full-width compact Session launcher browser", () => {
     const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-    expect(panel).toContain('var tabs = ["agents", "sessions", "nodes"]')
-    expect(panel).toContain('text: "Sessions"')
+    const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
+    expect(panel).toContain('var tabs = ["agents", "nodes"]')
+    expect(panel).toContain('id: openSessionsButton')
+    expect(panel).toContain('tooltipText: "Browse " + root.paneSessions.length + " Agent Sessions"')
     expect(panel).toContain('data.json_commands.indexOf("session.list") >= 0')
-    expect(panel).toContain('data.json_commands.indexOf("session.inspect") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("projected_agent_sessions") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("exact_session_open") >= 0')
     expect(panel).toContain('running: root.opened && root.activeTab === "sessions"')
@@ -1121,25 +1165,66 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('var nextResults = Object.assign({}, root.sessionResults)')
     expect(panel).toContain('nextResults[request.nodeId] = WorkspaceModel.normalizeSessionList(')
     expect(panel).toContain('clearSessionPrivacy()')
+    const suspended = panel.slice(panel.indexOf('function suspendSessionActivity()'),
+      panel.indexOf('function clearSessionPrivacy()'))
+    expect(suspended).not.toContain('sessions = []')
+    expect(suspended).toContain('stopAndClearSessionProcess(sessionListProcess)')
+    const cleared = panel.slice(panel.indexOf('function clearSessionPrivacy()'),
+      panel.indexOf('function prepareSessionProcess(process)'))
+    expect(cleared).toContain('sessions = []')
+    expect(panel).toContain('pendingWorkspacePositionKey = ""\n    settingsOpen = false\n'
+      + '    confirmationTarget = null\n    suspendSessionActivity()')
     expect(panel).toContain('stopAndClearSessionProcess(sessionOpenProcess)')
     expect(panel).toContain('id: sessionCollectorFactory')
-    expect(panel).toContain('root.clearSessionProcessOutput(sessionInspectProcess)')
     expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionList)')
-    expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionInspect)')
     expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionOpen)')
-    expect(panel).toContain('sessionDetail = null')
-    expect(panel).toContain('onClicked: {\n                    root.focusSection = "lower"')
-    expect(panel).toContain('root.openSession(modelData)')
+    const browser = panel.slice(panel.indexOf('id: sessionBrowser'),
+      panel.indexOf('id: sessionWorkspaceDropdown'))
+    expect(browser).not.toContain('root.openSession(modelData)')
     expect(panel).toContain('Install Boomux 1.7.0 or newer to open exact Sessions')
     expect(panel).toContain('showActionFailure("Session unavailable", "Done Sessions cannot be opened")')
     expect(panel).toContain('showActionFailure("Session unavailable", "The owning Node is not currently available")')
-    expect(panel).toContain('else if (activeTab === "sessions") openSession(selectedItem)')
-    expect(panel).toContain('root.inspectSession(root.selectedItem)')
-    expect(panel).toContain('root.compactPath(root.sessionDetail.source_cwd)')
-    expect(panel).toContain('if (root.sessionDetail) return')
+    expect(panel).toContain('else if (activeTab === "sessions") openSession(selectedItem, sessionTargetWorkspaceId)')
+    expect(panel).toContain('id: sessionBrowser')
+    expect(panel).toContain('root.activeTab === "sessions" ? root.sessionBrowserWidth : root.paneWidth')
+    expect(panel).toContain('text: "‹ Boomux"')
+    expect(panel).toContain('width: parent.width\n              height: parent.height')
+    expect(panel).toContain('height: Style.space(46)')
+    expect(panel).toContain('text: modelData.description || "Untitled Session"')
+    expect(panel).toContain('+ root.sessionStatusLabel(modelData) + " · "')
+    expect(panel).toContain('WorkspaceModel.sessionHarnessLabel(modelData.integration) + " · "')
     expect(panel).toContain('function sessionStatusLabel(session)')
     expect(panel).toContain('function sessionActionLabel(session)')
-    expect(panel).toContain('WorkspaceModel.sessionOpenCommand(session)')
+    expect(panel).toContain('WorkspaceModel.sessionOpenCommand(session, targetWorkspaceId)')
+    expect(panel).toContain('"Select where the Session terminal should open"')
+    expect(panel).toContain('workspaceId: targetWorkspaceId')
+    expect(panel).toContain('sessionOpenProcess.running = true\n    closeSessionBrowser()')
+    expect(panel).toContain('text: "Sessions ›"')
+    expect(panel).toContain('text: "OPEN IN"')
+    expect(panel).toContain('name: "+ New Workspace"')
+    expect(panel).toContain('text: "Open Session"')
+    expect(panel).toContain('id: sessionDestinationButton')
+    expect(panel).toContain('bordered: true\n                focusable: true\n'
+      + '                foreground: root.foreground')
+    expect(panel).toContain('id: sessionDestinationChevron')
+    expect(panel).toContain('anchors.right: parent.right\n                  anchors.rightMargin: Style.space(12)')
+    expect(panel).toContain('id: sessionWorkspaceDropdown')
+    expect(panel).toContain('id: sessionSearchField')
+    expect(panel).toContain('WorkspaceModel.filterSessions(allPaneSessions, sessionQuery)')
+    expect(panel).toContain('enabled: !sessionOpenProcess.running')
+    expect(panel).toContain('function chooseSessionWorkspace() {\n    if (sessionWorkspaceDropdown.opened)')
+    expect(panel).toContain('if (!workspace) return\n    sessionTargetWorkspaceId = workspace.id')
+    expect(panel).toContain('root.selectedItem !== null && !root.workspaceMutationBusy()')
+    expect(panel).toContain('parent: sessionDestinationButton')
+    expect(panel).toContain('popupType: Popup.Item')
+    expect(panel).toContain('y: sessionDestinationButton.height + Style.space(4)')
+    expect(panel).toContain('margins: -1')
+    expect(panel).toContain('closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside')
+    expect(panel).toContain('sessionTargetWorkspaceId = workspace.id')
+    expect(panel).toContain('else if (root.activeTab === "sessions") root.closeSessionBrowser()')
+    expect(browser).not.toContain('tooltipText: "Close Boomux pane"')
+    expect(panel).toContain('onOutsideClicked: {')
+    expect(sidePane).toContain('signal outsideClicked()')
     expect(panel).not.toContain('session", "resume"')
   })
 })

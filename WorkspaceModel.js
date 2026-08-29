@@ -328,6 +328,19 @@ function sessionsNewestFirst(sessions) {
   })
 }
 
+function filterSessions(sessions, query) {
+  var terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return sessions
+  return sessions.filter(function(session) {
+    var text = [session.description, session.workspace_name, session.integration,
+      session.state, session.state_is_current ? "current" : "historical",
+      session.node_alias, session.external_session_id].map(function(value) {
+        return String(value || "").toLowerCase()
+      }).join(" ")
+    return terms.every(function(term) { return text.indexOf(term) >= 0 })
+  })
+}
+
 function sessionIdentityMatches(session, nodeId, sessionId) {
   return !!session && String(session.node_id) === String(nodeId)
     && String(session.id) === String(sessionId)
@@ -345,10 +358,31 @@ function sessionInspectCommand(session) {
   return argv
 }
 
-function sessionOpenCommand(session) {
+function sessionOpenCommand(session, workspaceId) {
   var argv = ["boomux", "session", "open", String(session.id)]
   if (!session.node_local) argv.push("--node", String(session.node_id))
+  if (String(workspaceId || "") !== "") argv.push("--workspace", String(workspaceId))
   return argv
+}
+
+function sessionPreviewCommand(session) {
+  if (!session || !session.node_local || !Array.isArray(session.occurrences)) return []
+  var current = session.occurrences.find(function(occurrence) { return occurrence.is_current })
+  if (!current) return []
+  return ["boomux", "read", String(current.shell_id), "--lines", "40", "--json",
+    "--run-id", String(current.run_id), "--after-revision", "0"]
+}
+
+function normalizeSessionPreview(raw, session) {
+  var data = parseEnvelope(raw, "read")
+  var current = session && Array.isArray(session.occurrences)
+    ? session.occurrences.find(function(occurrence) { return occurrence.is_current }) : null
+  if (!current || String(data.shell_id || "") !== String(current.shell_id)
+      || String(data.run_id || "") !== String(current.run_id))
+    throw new Error("unexpected Session preview identity")
+  if (typeof data.output !== "string" || typeof data.status !== "string")
+    throw new Error("invalid Session preview")
+  return { available: true, output: data.output, status: data.status }
 }
 
 function sessionNodeEligible(node, cliFeatures) {
@@ -869,12 +903,25 @@ function workspaceTreeItems(workspace) {
   if (!workspace) return []
   var items = []
   var shells = workspace.shells || []
+  var agents = workspace.agents || []
   for (var s = 0; s < shells.length; s++) {
     var shell = shells[s]
     if (!shell || shellOwner(shell.owner) === "schedule") continue
+    var activeAgent = null
+    for (var a = 0; a < agents.length; a++) {
+      var candidate = agents[a]
+      var state = candidate && candidate.observation
+        ? String(candidate.observation.state || "unknown") : "unknown"
+      if (agentMatchesShell(candidate, shell) && candidate.ended_at_ms == null
+          && state !== "inactive" && state !== "done") {
+        activeAgent = candidate
+        break
+      }
+    }
     items.push({
       key: String(shell.key || resourceKey(shell.node_id, shell.id)),
-      kind: shell.command && shell.command.length > 0 ? "command" : "shell",
+      kind: activeAgent ? "agent"
+        : (shell.command && shell.command.length > 0 ? "command" : "shell"),
       name: String(shell.name || "unnamed"),
       status: shellStatus(shell.status),
       detail: shell.command && shell.command.length > 0
@@ -1265,10 +1312,13 @@ if (typeof module !== "undefined") module.exports = {
   normalizeSessionInspect: normalizeSessionInspect,
   normalizeSessionOccurrence: normalizeSessionOccurrence,
   sessionsNewestFirst: sessionsNewestFirst,
+  filterSessions: filterSessions,
   sessionIdentityMatches: sessionIdentityMatches,
   sessionListCommand: sessionListCommand,
   sessionInspectCommand: sessionInspectCommand,
   sessionOpenCommand: sessionOpenCommand,
+  sessionPreviewCommand: sessionPreviewCommand,
+  normalizeSessionPreview: normalizeSessionPreview,
   sessionNodeEligible: sessionNodeEligible,
   sessionRequestCurrent: sessionRequestCurrent,
   sessionActionable: sessionActionable,
