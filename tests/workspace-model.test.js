@@ -307,6 +307,8 @@ test("delegates local updates to the capability-gated Boomux flow", () => {
   expect(panel).toContain("Boomux update did not complete · run boomux update in a terminal to review the error")
   expect(panel).toContain("id: localUpdateVerificationTimer")
   expect(panel).toContain("!WorkspaceModel.versionIsNewer(localUpdateExpectedVersion, current)")
+  expect(panel).toContain('localUpdateVerificationTimer.stop()\n          cliVersion = current\n'
+    + '          actionMessage = "Boomux updated to " + current')
   expect(panel).toContain("Update with the AUR or package helper that installed Boomux.")
   expect(panel).not.toContain('root.actionMessage = "Boomux update finished"')
   expect(panel).not.toContain('localUpdateProcess.command = ["curl"')

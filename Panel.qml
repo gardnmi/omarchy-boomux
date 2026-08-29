@@ -3021,6 +3021,7 @@ Panel {
             && !WorkspaceModel.versionIsNewer(localUpdateExpectedVersion, current)) {
           localUpdateVerificationPending = false
           localUpdateVerificationTimer.stop()
+          cliVersion = current
           actionMessage = "Boomux updated to " + current
           showNotice("Boomux update complete", actionMessage,
             currentNoticeScreen(), false)
