@@ -10,7 +10,12 @@ latest_tag=$(gh release view --repo "$repo" --json tagName --jq .tagName)
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT
 
-for tag in "$minimum_tag" "$latest_tag"; do
+for tag in "$minimum_tag" "$latest_tag" "$@"; do
+  [[ -z $tag ]] && continue
+  if [[ ! $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    printf 'invalid Boomux release tag: %s\n' "$tag" >&2
+    exit 1
+  fi
   [[ -f $temp_dir/$tag.checked ]] && continue
   version=${tag#v}
   archive="boomux-v${version}-${target}.tar.gz"

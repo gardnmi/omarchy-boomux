@@ -335,7 +335,9 @@ require a plugin release when they preserve the declared contract.
 CI tests the plugin against the oldest declared Boomux release and the current
 stable release. A daily compatibility run detects new backend releases even
 without cross-repository credentials. The workflow also accepts a
-`boomux-release` repository dispatch for immediate validation.
+`boomux-release` repository dispatch, and Boomux can call the pinned reusable
+compatibility workflow directly after publishing a release without a shared
+credential.
 
 Every plugin release has a `v<manifest version>` Git tag and GitHub release for
 the exact commit that passed `main` CI. Normal Omarchy updates still follow the
