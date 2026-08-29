@@ -324,6 +324,8 @@ test("confirms plugin updates before invoking Omarchy once", () => {
   expect(panel).toContain('if (item.kind === "plugin-update") return "Update"')
   expect(panel).toContain("WorkspaceModel.guidedPluginUpdateCommand()")
   expect(panel).toContain("onClicked: root.requestPluginUpdate()")
+  expect(panel).toContain('text: "Plugin " + root.pluginVersion + " → " + root.latestPluginVersion\n'
+    + '              iconText: "↑"')
   expect(panel).not.toContain("onClicked: Qt.openUrlExternally(root.pluginRepositoryUrl)")
   expect(model.guidedPluginUpdateCommand()).toEqual([
     "omarchy-launch-tui", "--app-id=TUI.float", "omarchy", "plugin", "update",
@@ -554,7 +556,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.5.1")
+  expect(manifest.version).toBe("2.5.2")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
