@@ -630,8 +630,11 @@ test("keeps Tailscale Web lifecycle behind the Boomux CLI", () => {
   expect(panel).not.toContain("root.webStartProcess")
   expect(panel).not.toContain("root.webStopProcess")
   expect(panel).toContain('text: "Tailnet Web · "')
-  expect(panel).toContain('root.webRunning ? "Open" : "Start Web"')
+  expect(panel).toContain('root.webRunning ? "Open Web" : "Start Web"')
   expect(panel.indexOf('text: "Tailnet Web · "')).toBeLessThan(panel.indexOf('text: "AGENTS"'))
+  expect(panel).toContain('webStopProcess.running ? "Stopping" : "Stop"')
+  expect(panel).toContain('tooltipText: "Stop Web and remove only Boomux-owned Tailscale routes"\n'
+    + '                  bordered: false')
 })
 
 test("bounds passive update responses before collecting stdout", () => {
@@ -1148,7 +1151,10 @@ describe("Agent Sessions", () => {
     const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
     expect(panel).toContain('var tabs = ["agents", "nodes"]')
     expect(panel).toContain('id: openSessionsButton')
-    expect(panel).toContain('tooltipText: "Browse " + root.paneSessions.length + " Agent Sessions"')
+    expect(panel).toContain('text: "AGENTS"')
+    expect(panel).toContain('text: "Sessions  ›"\n                tooltipText: "Browse Agent Sessions"')
+    expect(panel).toContain('tooltipText: "Browse Agent Sessions"\n                bordered: false')
+    expect(panel).not.toContain('root.paneSessions.length + " Agent Sessions"')
     expect(panel).toContain('data.json_commands.indexOf("session.list") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("projected_agent_sessions") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("exact_session_open") >= 0')
@@ -1199,7 +1205,7 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('"Select where the Session terminal should open"')
     expect(panel).toContain('workspaceId: targetWorkspaceId')
     expect(panel).toContain('sessionOpenProcess.running = true\n    closeSessionBrowser()')
-    expect(panel).toContain('text: "Sessions ›"')
+    expect(panel).toContain('text: "Sessions  ›"\n                tooltipText: "Browse Agent Sessions"')
     expect(panel).toContain('text: "OPEN IN"')
     expect(panel).toContain('name: "+ New Workspace"')
     expect(panel).toContain('text: "Open Session"')

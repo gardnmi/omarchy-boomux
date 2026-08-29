@@ -5490,7 +5490,7 @@ Panel {
         }
 
         PanelSeparator {
-          visible: root.cliAvailable && !root.editing
+          visible: root.cliAvailable && root.activeTab === "nodes" && !root.editing
           foreground: root.foreground
         }
 
@@ -5670,14 +5670,14 @@ Panel {
               }
               Row {
                 id: webActions
-                width: root.webRunning ? Style.space(142) : Style.space(86)
+                width: root.webRunning ? Style.space(152) : Style.space(94)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(5)
                 Button {
-                  width: root.webRunning ? Style.space(76) : Style.space(86)
+                  width: root.webRunning ? Style.space(92) : Style.space(94)
                   height: Style.space(30)
                   text: webStartProcess.running ? "Starting"
-                    : (root.webRunning ? "Open" : "Start Web")
+                    : (root.webRunning ? "Open Web" : "Start Web")
                   iconText: root.webRunning ? "↗" : ""
                   tooltipText: root.webRunning ? root.webDashboardUrl
                     : "Publish the dashboard and OpenCode through Tailscale"
@@ -5694,14 +5694,14 @@ Panel {
                 }
                 Button {
                   visible: root.webRunning
-                  width: Style.space(61)
+                  width: Style.space(55)
                   height: Style.space(30)
                   text: webStopProcess.running ? "Stopping" : "Stop"
                   tooltipText: "Stop Web and remove only Boomux-owned Tailscale routes"
-                  bordered: true
+                  bordered: false
                   focusable: true
                   enabled: !webStartProcess.running && !webStopProcess.running
-                  foreground: root.foreground
+                  foreground: root.dim
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(4)
                   verticalPadding: Style.space(1)
@@ -5710,7 +5710,6 @@ Panel {
               }
             }
             PanelSeparator {
-              visible: root.webLifecycleSupported
               foreground: root.foreground
             }
             Row {
@@ -5726,15 +5725,15 @@ Panel {
               }
               Button {
                 id: openSessionsButton
-                width: Style.space(92)
+                width: Style.space(88)
                 height: Style.space(24)
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Sessions ›"
-                tooltipText: "Browse " + root.paneSessions.length + " Agent Sessions"
+                text: "Sessions  ›"
+                tooltipText: "Browse Agent Sessions"
                 bordered: false
                 foreground: root.foreground
                 fontSize: Style.font.caption
-                horizontalPadding: Style.space(6)
+                horizontalPadding: Style.space(4)
                 onClicked: root.openSessionBrowser()
               }
             }
