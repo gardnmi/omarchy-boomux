@@ -561,7 +561,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.6.2")
+  expect(manifest.version).toBe("2.7.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -735,7 +735,7 @@ test("uses atomic Workspace creation from plus, N, and configured projects", () 
   expect(panel).toContain("var projectName = String(selectedProject.name)")
   expect(panel).toContain("WorkspaceModel.atomicWorkspaceCreateCommand(")
   expect(panel.match(/WorkspaceModel\.atomicWorkspaceCreateCommand\(/g)).toHaveLength(1)
-  expect(panel).toContain("command: WorkspaceModel.workspaceDaemonStartCommand()")
+  expect(panel).toContain("command: WorkspaceModel.workspaceDaemonStartCommand(root.explicitDaemonStartSupported)")
   expect(panel).toContain('workspaceCreateRequested = { cwd: path, name: String(name || "") }')
   expect(panel).toContain("daemonStatusProcess.running = true")
   expect(panel).toContain("requestFreshWorkspaceCreateStatus()")
@@ -1398,9 +1398,10 @@ describe("qualified commands and action gates", () => {
   })
 
   test("atomically creates one generated Workspace and Shell on the exact local Node", () => {
-    expect(model.workspaceDaemonStartCommand()).toEqual([
+    expect(model.workspaceDaemonStartCommand(false)).toEqual([
       "boomux", "workspace", "list", "--json"
     ])
+    expect(model.workspaceDaemonStartCommand(true)).toEqual(["boomux", "daemon", "start"])
     expect(model.atomicWorkspaceCreateCommand(
       "node;$(false)", "/tmp/project with spaces/;rm -rf --no")).toEqual([
       "boomux", "workspace", "create", "--node", "node;$(false)",
@@ -1598,6 +1599,16 @@ test("requires a fresh status and authoritative Node snapshot for every creation
     panel.indexOf("function parseEnvelope"))
   expect(status.indexOf("daemonStartProcess.running = true"))
     .toBeLessThan(status.indexOf('setOffline("Boomux daemon is stopped")'))
+})
+
+test("offers an explicit stopped-daemon recovery action", () => {
+  const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  expect(panel).toContain('text: "BOOMUX IS STOPPED"')
+  expect(panel).toContain('text: daemonStartProcess.running ? "Starting Boomux..." : "Start Boomux"')
+  expect(panel).toContain("onClicked: root.startDaemon()")
+  expect(panel).toContain('cliFeatures.indexOf("explicit_daemon_start") >= 0')
+  expect(panel).toContain("Qt.callLater(function() { root.refresh() })")
+  expect(panel).toContain('root.showActionFailure("Daemon startup failed", message)')
 })
 
 test("bounds post-success snapshot confirmation without replaying mutations", () => {

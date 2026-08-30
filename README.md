@@ -265,9 +265,11 @@ must provide TLS, authentication, and authorization.
   and reopening the pane can render immediately. Stale rows refresh in the
   background. Requests, process output, and details are cleared on pane close;
   daemon loss clears the cache. Nothing is written to disk or logged.
-- Passive refresh leaves a stopped daemon stopped. Explicit `+`/`N` creation
-  starts Boomux when needed, refreshes its protocol and Node snapshot, resolves
-  exactly one eligible local Node, and only then builds the atomic command once.
+- Passive refresh leaves a stopped daemon stopped. The offline pane presents an
+  explicit **Start Boomux** action and refreshes automatically after startup.
+  Explicit `+`/`N` creation can also start Boomux when needed, refresh its
+  protocol and Node snapshot, resolve exactly one eligible local Node, and only
+  then build the atomic command once.
 - Workspace creation and Shell start-folder changes use exact argv and returned
   IDs. The pane does not reissue a mutation after completion or an unknown
   outcome, optimistically update the model, or fall back to a remote Node.
