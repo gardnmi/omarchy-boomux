@@ -22,6 +22,12 @@ test("normalizes the published compatibility declaration", () => {
     required_capabilities: ["exact_session_open"],
     minimum_boomux: "1.7.0"
   })
+  expect(requirements.required_capabilities).not.toContain("session_display_names")
+  expect(requirements.required_capabilities).not.toContain("observed_agent_working_contexts")
+  expect(requirements.required_capabilities).not.toContain("session_latest_agent_attribution")
+  expect(requirements.required_capabilities).not.toContain("session_working_context_push_status")
+  expect(requirements.required_capabilities).not.toContain("session_working_context_worktree_status")
+  expect(requirements.required_capabilities).not.toContain("workspace_session_hiding")
 })
 
 test("rejects malformed compatibility declarations", () => {
