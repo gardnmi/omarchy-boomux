@@ -1434,8 +1434,10 @@ function atomicWorkspaceCreateCommand(nodeId, cwd, name) {
   return command.concat(["--node", String(nodeId), "--cwd", String(cwd), "--json"])
 }
 
-function workspaceDaemonStartCommand() {
-  return ["boomux", "workspace", "list", "--json"]
+function workspaceDaemonStartCommand(explicitStartSupported) {
+  return explicitStartSupported
+    ? ["boomux", "daemon", "start"]
+    : ["boomux", "workspace", "list", "--json"]
 }
 
 function absolutePath(value) {

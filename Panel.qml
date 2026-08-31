@@ -127,6 +127,7 @@ Panel {
   property var cliFeatures: []
   property bool projectListSupported: false
   property bool atomicWorkspaceCreationSupported: false
+  property bool explicitDaemonStartSupported: false
   property bool workspaceDefaultCwdSupported: false
   property bool integrationStatusSupported: false
   property bool localUpdateStatusSupported: false
@@ -205,6 +206,7 @@ Panel {
   property var workspaceCreateRequested: null
   property bool workspaceCreateStatusQueued: false
   property bool workspaceCreateStatusActive: false
+  property bool daemonStartRequested: false
   property bool workspaceCreateSnapshotQueued: false
   property bool workspaceCreateSnapshotActive: false
   property var pendingWorkspaceCreation: null
@@ -668,6 +670,13 @@ Panel {
     listProcess.running = true
   }
 
+  function startDaemon() {
+    if (daemonStartProcess.running) return
+    daemonStartRequested = true
+    actionMessage = "Starting Boomux..."
+    daemonStartProcess.running = true
+  }
+
   function setOffline(message) {
     pollEpoch++
     eventCursor = ""
@@ -754,6 +763,7 @@ Panel {
       projectListSupported = data.json_commands.indexOf("project.list") >= 0
       atomicWorkspaceCreationSupported = data.json_commands.indexOf("workspace.create") >= 0
         && cliFeatures.indexOf("atomic_workspace_shell_creation") >= 0
+      explicitDaemonStartSupported = cliFeatures.indexOf("explicit_daemon_start") >= 0
       workspaceDefaultCwdSupported = data.json_commands.indexOf("workspace.set-default-cwd") >= 0
         && cliFeatures.indexOf("workspace_placement_default_cwd") >= 0
       integrationStatusSupported = data.json_commands.indexOf("integration.status") >= 0
@@ -796,6 +806,7 @@ Panel {
       setOffline(compatibilityError)
       projectListSupported = false
       atomicWorkspaceCreationSupported = false
+      explicitDaemonStartSupported = false
       workspaceDefaultCwdSupported = false
       integrationStatusSupported = false
       localUpdateStatusSupported = false
@@ -3982,6 +3993,7 @@ Panel {
         root.capabilitiesReady = true
         root.projectListSupported = false
         root.atomicWorkspaceCreationSupported = false
+        root.explicitDaemonStartSupported = false
         root.workspaceDefaultCwdSupported = false
         root.federationSupported = false
         root.globalWorkspacesSupported = false
@@ -4139,17 +4151,27 @@ Panel {
 
   Process {
     id: daemonStartProcess
-    command: WorkspaceModel.workspaceDaemonStartCommand()
+    command: WorkspaceModel.workspaceDaemonStartCommand(root.explicitDaemonStartSupported)
     stdout: StdioCollector { id: daemonStartStdout; waitForEnd: true }
     stderr: StdioCollector { id: daemonStartStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      var explicitStart = root.daemonStartRequested
+      root.daemonStartRequested = false
       if (exitCode === 0) {
-        Qt.callLater(function() { root.requestFreshWorkspaceCreateStatus() })
+        if (root.workspaceCreateRequested)
+          Qt.callLater(function() { root.requestFreshWorkspaceCreateStatus() })
+        else {
+          root.actionMessage = "Boomux daemon started"
+          Qt.callLater(function() { root.refresh() })
+        }
       } else {
-        root.workspaceCreateRequested = null
-        root.showActionFailure("Workspace creation unavailable", root.processError(
-          daemonStartStderr.text || daemonStartStdout.text,
-          "Could not start Boomux"))
+        var message = root.processError(daemonStartStderr.text || daemonStartStdout.text,
+          "Could not start Boomux")
+        if (explicitStart) root.showActionFailure("Daemon startup failed", message)
+        else {
+          root.workspaceCreateRequested = null
+          root.showActionFailure("Workspace creation unavailable", message)
+        }
       }
     }
   }
@@ -5290,6 +5312,48 @@ Panel {
 
         PanelSeparator {
           foreground: root.foreground
+        }
+
+        Rectangle {
+          visible: root.backendReady && !root.online && !root.editing
+          width: parent.width
+          implicitHeight: daemonOfflineColumn.implicitHeight + Style.space(24)
+          radius: Style.space(8)
+          color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
+          border.width: 1
+          border.color: root.dim
+
+          Column {
+            id: daemonOfflineColumn
+            anchors.fill: parent
+            anchors.margins: Style.space(12)
+            spacing: Style.space(7)
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "BOOMUX IS STOPPED"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            Text {
+              width: parent.width
+              text: "Start the daemon to restore your Workspaces, Sessions, and Nodes."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+            Button {
+              width: parent.width
+              height: Style.space(34)
+              text: daemonStartProcess.running ? "Starting Boomux..." : "Start Boomux"
+              bordered: true
+              active: true
+              enabled: !daemonStartProcess.running
+              foreground: root.foreground
+              onClicked: root.startDaemon()
+            }
+          }
         }
 
         Item {
