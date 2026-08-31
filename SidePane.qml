@@ -14,8 +14,19 @@ PanelWindow {
   property string side: "left"
   property int paneWidth: Style.space(360)
   property int reservationWidth: paneWidth
+  property int edgeOffset: 0
+  property bool slideFromEdgeOffset: false
+  property bool reserveSpace: true
+  property int minimumPaneWidth: Style.space(280)
+  property int maximumPaneWidth: Style.space(520)
+  property real resizeStartWidth: paneWidth
+  property real resizeStartPointerX: 0
+  property real resizePreviewWidth: paneWidth
+  property bool resizeActive: false
+  property bool resizeShortcutActive: false
   property int margin: Style.gapsOut
   property int padding: Style.spacing.popupPadding
+  property string namespace: "omarchy-boomux-side-pane"
   property var borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border,
     Math.max(1, Style.space(2)))
   property color focusColor: Color.urgent
@@ -23,8 +34,10 @@ PanelWindow {
   property bool keyboardMode: false
   property real focusEmphasis: 0
   signal outsideClicked()
+  signal paneWidthCommitted(int width)
 
   default property alias contentItem: contentHolder.children
+  property alias contentContainer: contentHolder
 
   readonly property var anchorWindow: anchorItem ? anchorItem.QsWindow.window : null
   readonly property string barPos: bar ? bar.position : "top"
@@ -38,13 +51,14 @@ PanelWindow {
   readonly property real sideInset: ((barPos === "left" && !onRight)
     || (barPos === "right" && onRight)) ? barW + margin : margin
   readonly property real availablePaneWidth: Math.max(0,
-    screenW - sideInset - margin)
+    screenW - sideInset - margin - edgeOffset)
   readonly property real availablePaneHeight: Math.max(0,
     screenH - topInset - bottomInset)
-  readonly property real effectivePaneWidth: Math.min(paneWidth, availablePaneWidth)
+  readonly property real interactivePaneWidth: resizeActive ? resizePreviewWidth : paneWidth
+  readonly property real effectivePaneWidth: Math.min(interactivePaneWidth, availablePaneWidth)
   readonly property real effectiveReservationWidth: Math.min(reservationWidth, availablePaneWidth)
   readonly property real paneX: onRight
-    ? screenW - effectivePaneWidth - sideInset : sideInset
+    ? screenW - effectivePaneWidth - sideInset - edgeOffset : sideInset + edgeOffset
   readonly property real closedX: onRight ? screenW + Style.space(8)
     : -effectivePaneWidth - Style.space(8)
   property real revealProgress: open ? 1 : 0
@@ -52,6 +66,14 @@ PanelWindow {
   function close() {
     if (owner && "close" in owner) owner.close()
     else root.open = false
+  }
+
+  function clampedPaneWidth(width) {
+    return Math.max(minimumPaneWidth, Math.min(maximumPaneWidth, width))
+  }
+
+  function resizePointerX(mouse) {
+    return resizeArea.mapToItem(null, mouse.x, mouse.y).x
   }
 
   function enterKeyboardMode() {
@@ -79,7 +101,7 @@ PanelWindow {
   exclusionMode: ExclusionMode.Ignore
   anchors { top: true; bottom: true; left: true; right: true }
 
-  WlrLayershell.namespace: "omarchy-boomux-side-pane"
+  WlrLayershell.namespace: root.namespace
   WlrLayershell.layer: WlrLayer.Overlay
   WlrLayershell.keyboardFocus: keyboardMode
     ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
@@ -127,7 +149,7 @@ PanelWindow {
   PanelWindow {
     id: reservationWindow
     screen: root.screen
-    visible: root.open && root.screen !== null
+    visible: root.reserveSpace && root.open && root.screen !== null
     color: "transparent"
     implicitWidth: Math.ceil(root.sideInset + root.effectiveReservationWidth)
     exclusionMode: ExclusionMode.Normal
@@ -139,14 +161,27 @@ PanelWindow {
       right: root.onRight
     }
     mask: Region {}
-    WlrLayershell.namespace: "omarchy-boomux-side-pane-reservation"
+    WlrLayershell.namespace: root.namespace + "-reservation"
     WlrLayershell.layer: WlrLayer.Top
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
   }
 
+  Item {
+    id: revealViewport
+    x: root.slideFromEdgeOffset && !root.onRight ? root.paneX : 0
+    width: root.slideFromEdgeOffset
+      ? (root.onRight ? root.paneX + root.effectivePaneWidth : root.screenW - root.paneX)
+      : root.screenW
+    height: root.screenH
+    clip: root.slideFromEdgeOffset
+
   BorderSurface {
     id: card
-    x: root.closedX + (root.paneX - root.closedX) * root.revealProgress
+    x: root.slideFromEdgeOffset
+      ? (root.onRight
+        ? revealViewport.width - width * root.revealProgress
+        : -width + width * root.revealProgress)
+      : root.closedX + (root.paneX - root.closedX) * root.revealProgress
     y: root.topInset
     width: root.effectivePaneWidth
     height: root.availablePaneHeight
@@ -155,6 +190,36 @@ PanelWindow {
     padding: root.padding
     radius: Style.cornerRadius
     opacity: root.revealProgress
+
+    MouseArea {
+      id: resizeArea
+      anchors.fill: parent
+      z: 100
+      acceptedButtons: Qt.RightButton
+      preventStealing: true
+      onPressed: function(mouse) {
+        if (!root.resizeShortcutActive) {
+          mouse.accepted = false
+          return
+        }
+        root.resizeStartWidth = root.paneWidth
+        root.resizePreviewWidth = root.paneWidth
+        root.resizeStartPointerX = root.resizePointerX(mouse)
+        root.resizeActive = true
+      }
+      onPositionChanged: function(mouse) {
+        if (!root.resizeActive) return
+        var delta = (root.onRight ? -1 : 1)
+          * (root.resizePointerX(mouse) - root.resizeStartPointerX)
+        root.resizePreviewWidth = root.clampedPaneWidth(root.resizeStartWidth + delta)
+      }
+      onReleased: function(mouse) {
+        if (!root.resizeActive) return
+        root.paneWidthCommitted(Math.round(root.resizePreviewWidth))
+        root.resizeActive = false
+      }
+      onCanceled: root.resizeActive = false
+    }
 
     Rectangle {
       anchors.fill: parent
@@ -201,5 +266,6 @@ PanelWindow {
       anchors.bottomMargin: card.contentBottomInset
       anchors.leftMargin: card.contentLeftInset
     }
+  }
   }
 }

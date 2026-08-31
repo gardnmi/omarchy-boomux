@@ -8,7 +8,8 @@ about operations that can start processes or take over terminals.
 
 - `Panel.qml`: runtime integration, bar indicator, and pane content
 - `SidePane.qml`: configurable layer-shell drawer, focus, animation, and dismissal
-- `WorkspaceModel.js`: protocol-49 grouping, identity validation, and exact command construction
+- `WorkspaceModel.js`: protocol-51 Session grouping and optional presentation
+  context, identity validation, and exact command construction
 - `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
 - `compatibility.json`: authoritative Boomux schema, protocol, capability, and
@@ -31,9 +32,34 @@ publication.
 - Required Boomux daemon protocol: 49; require advertised command and feature
   gates rather than assuming an unreleased semantic version
 - Stable JSON envelope: `boomux.cli/v1`
-- Current paired-branch daemon protocol: 49; Node helper versions and guided
+- Current paired-branch daemon protocol: 51; Node helper versions and guided
   upgrade coordination require protocol 41 capabilities, while guided remote
   uninstall requires protocol 48 uninstall coordination on both Nodes
+- Session display names are optional protocol-50 behavior. Gate them on
+  `session_display_names`, `session.rename`, and `session.reset-name`; do not add
+  them to `compatibility.json` requirements or raise the minimum Boomux release.
+- Session attention and Git branch context are optional protocol-50 behavior.
+  Gate owner actions on `session_presentation_context`, retain empty/null defaults,
+  and never derive remote branch context locally.
+- Observed Agent working contexts are optional protocol-50 presentation under
+  `observed_agent_working_contexts`. Preserve their owner ordering, four-item
+  list bound, and total count; exact inspection may return up to 64 contexts for
+  the detail pane. Present `git_branch` as separate launch context and rely on the
+  owner to omit that canonical root from observed rows. Never imply completeness
+  or derive a remote context locally. Do not add the
+  capability to `compatibility.json` requirements.
+- Latest Agent attribution, Working Context push status, and worktree status are
+  optional protocol-51 presentation under `session_latest_agent_attribution`,
+  `session_working_context_push_status`, and `session_working_context_worktree_status`.
+  Preserve null defaults. This is bounded no-fetch owner data; do not imply fetched
+  state or absence of behind commits. Render only exceptional labels: `Unstaged`
+  includes untracked work, `Staged` marks index changes, `↑N` marks ahead commits,
+  and `Unpublished` marks no upstream. **Seen** remains the Working Context observation time.
+- Persistent Session hiding is optional protocol-51 behavior. Gate it on
+  `workspace_session_hiding`, `session.hide`, exact Node eligibility, and a
+  positive owner Workspace revision. It is a Workspace-owned presentation
+  tombstone, not provider-history or process deletion. Do not persist hidden IDs
+  in plugin settings or add the capability to global compatibility requirements.
 - Supported Agent hosts come from `integration.status`; currently OpenCode, Pi,
   Claude Code, Codex, and Kiro CLI through Boomux lifecycle integrations
 
@@ -91,11 +117,37 @@ current online non-stale Node and both local and observed
 requires the static `exact_session_open` feature and invokes only
 `boomux session open SESSION_ID [--node NODE_ID] [--workspace WORKSPACE_ID]`; the plugin must not rebuild
 harness resume argv or substitute ordinary Shell opening.
+Workspace-scoped discovery starts only while the Session rail is visible for the
+currently presented coordinated Workspace. The Workspace-row Session icon must
+passively toggle its exact rail, while **Browse Sessions** reveals the rail with
+keyboard focus. Opening either entry must present its exact Workspace first; it
+must not query whichever Workspace was
+active before that presentation completes. Build one request per exact active
+eligible placement using the owner Workspace ID, reject returned rows for
+another owner. Retain catalog-only rows with zero occurrences. Group exact
+attention first, then current Sessions, seven-day recent history, and older
+history. History starts collapsed. Retain collapse, search, and exact selection
+with that source's in-memory cache; clearing pane privacy clears presentation
+state too. Successful activation opens in the source Workspace.
+Keep Session totals in the rail header. Do not query other Workspaces eagerly
+to populate Workspace-row rollups; that would violate source-scoped lazy
+discovery and overstate partial cached results.
+Display-name changes require the exact
+Session ID, Node, and returned owner Workspace revision; never retry a mutation.
+Protocol-49 additive defaults report Workspace revision `0`; browsing and
+inspection remain available, but display-name mutation requires a positive
+revision. Cache Session catalogs only under the exact source identity and active
+placement owner revisions that produced them.
+Hide uses `boomux session hide SESSION_ID --workspace WORKSPACE_ID [--node
+NODE_ID] --json`, validates the exact returned Node, Session, Workspace, revision,
+and `changed`, and invalidates only the originating source cache. Invoke it
+directly from the explicit Session-menu action and do not retry an unknown
+outcome. There is no unhide action.
 
 ## Runtime Model
 
-The sliding pane has a persistent expandable Workspace tree and two lower views,
-plus a dedicated Session browser opened from Agents:
+The sliding main pane has a persistent expandable Workspace tree and two lower
+views, plus a user-controlled contextual Session drawer on its inward edge:
 
 - **Workspace tree**: coordinated and external Workspaces, with the currently
   presented Hyprland special Workspace highlighted independently from the
@@ -105,17 +157,25 @@ plus a dedicated Session browser opened from Agents:
   durable attention, ordered by their latest authoritative update; private
   runner-owned Agents are excluded by shell ownership; capability-gated controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
-- **Sessions**: a lazy, cross-Node canonical Agent Session catalog ordered by
+- **Sessions**: a lazy, cross-Node canonical Agent Session catalog for the
+  currently presented coordinated Workspace, ordered by
   newest activity, with structural `(node_id, session_id)` identity, exact
-  inspection, and Boomux-owned exact activation
+  inspection, Boomux-owned exact activation, coordinated Workspace source
+  scopes, and optional owner-authoritative display-name actions
 - **Nodes**: a health and version table with selected-Node route, helper and
   control versions, protocol, freshness, workload, eligibility,
   exact identity, guided creation, guided reauthentication, guided upgrade, and
   local registration removal
 
-The Session browser may be wider than the configured pane, but that extra width
-is floating overlay space. Keep the layer-shell reservation at the configured
-main pane width so opening Sessions never reflows existing desktop tiles.
+The main pane must always retain its configured width and edge reservation. Put
+the Session drawer beside its inward edge, mirrored with the main pane side,
+at its fixed maximum width with its own layer-shell namespace but no second
+reservation. Clamp only when the remaining screen area is narrower. Clip its
+reveal at that inner edge so it emerges from the main pane rather than the screen
+boundary. Closing the main pane must also close the drawer. The existing passive
+Boomux toggle opens only the main pane. Passively open or close a Session rail from
+its coordinated Workspace row, or open it with keyboard focus from the action menu;
+do not add a second Hyprland binding.
 
 The header Settings surface owns pane-local presentation settings. Side and
 width changes persist through Omarchy's inline plugin settings API. Opening the
@@ -210,9 +270,9 @@ or lifecycle observation.
 
 - Keep immediate generated Workspace creation and the project-folder action at
   Workspace-tree scope. Do not restore Workspace name or arbitrary-path forms.
-- Gate **Change Default Path** on protocol 49, `workspace.set-default-cwd`, and
-  `workspace_placement_default_cwd`, and expose it only for an active local
-  coordinated placement. Existing Shells must not be restarted.
+- Do not expose **Change Default Path** in the Workspace action menu. If another
+  surface reintroduces it, gate it on protocol 49, `workspace.set-default-cwd`,
+  and `workspace_placement_default_cwd`; existing Shells must not be restarted.
 - Keep Workspace expansion separate from activation. The chevron changes only
   local pane state; the row persists the default and performs explicit open
   without dismissing the pane, and makes that opened Workspace the expanded row.
@@ -222,18 +282,27 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
-- Session rows select on pointer input; Enter and explicit action buttons activate.
-  Keep each row to one primary title line and one secondary metadata line. The
-  browser must use one anchored destination dropdown and one primary Open action.
-  New Workspace is the dropdown's final option, never a separate button or modal
-  chooser. Destination selection is non-mutating; create a new Workspace only
-  when the user activates the primary Open action. Escape or outside click returns to Agents.
+- Session card body clicks select and toggle context; Enter, the terminal icon,
+  and double-click activate. Spin the icon only for the exact active
+  request. Keep the collapsed row compact, and reveal labeled launch and
+  observed-work context through the card body or Left/Right keyboard controls. Show the effective
+  title, override and attention markers, activity age first, lifecycle, and harness metadata,
+  but not Agent-instance counts. Show latest Agent attribution only when it
+  differs from the harness label. Keep a menu for inline rename, persistent Hide, and conditional attention
+  dismissal. Do not add visible Inspect, Reset Name, or alternate destination
+  controls. Escape or outside click
+  releases keyboard ownership from the rail back to the main pane without
+  hiding the rail; only its close button or main-pane close hides it.
   Unsupported activation must
   explain the required Boomux capability rather than silently doing nothing.
   Done and unavailable Sessions remain visible but non-actionable.
 - Keep drawer visibility separate from keyboard ownership. Opening or toggling
   the persistent pane is passive; the IPC `focus` action toggles an explicit
   keyboard mode with a contrasting outline, inner-edge wash, and focus rail.
+- Keep main-pane and Session-rail keyboard ownership explicit and exclusive.
+  Revealing the rail from keyboard mode transfers ownership to it; release from
+  the rail returns ownership to the still-visible main pane. Search retains
+  ordinary text input and arrows transfer selection to the card list.
 - Keyboard mode uses exclusive layer focus until explicit release. Super-modified
   arrow bindings must invoke the pane's IPC focus release before Hyprland's
   native directional focus dispatcher.
@@ -318,14 +387,40 @@ same read with owner-local grouping. Older daemons retain the local list polling
 path. A future event-driven implementation should retain the passive-daemon
 invariant and handle cursor expiry by reacquiring a baseline.
 
-Session discovery is independent, serial, and lazy while the dedicated browser
-is open. Refresh it on browser entry, after a 10-second visible TTL, and
-after explicit refresh obtains a fresh Node snapshot. Preserve successful Node
-results across partial failures, bound warnings, discard stale generations and
-Node mismatches. Retain the last complete bounded Session rows in process memory
-across pane close, while clearing requests, process output, details, and stale
-generations. Render retained rows immediately and refresh them in the background
-after TTL expiry. Daemon loss clears the cache. Never persist Session data.
+Session discovery is independent, serial, and lazy while the contextual rail is
+open for a presented coordinated Workspace. Refresh it on cold or stale rail
+entry, relevant owner freshness changes, and after explicit refresh obtains a
+fresh Node snapshot; do not poll catalogs merely because the rail remains open.
+Stage placement results separately from the committed visible catalog and publish
+one aggregate only after every placement settles. Preserve successful Node results
+across partial failures, bound warnings, discard stale generations and Node
+mismatches. Retain at most eight complete bounded Session sources in process
+memory across pane close, while clearing requests, process output, details, and
+stale generations. Daemon loss clears the cache. Never persist Session data.
+For Workspace-scoped discovery, exclude stale, unavailable, and `close_pending`
+placements before constructing argv. Treat Node/owner placement keys as source
+identity and placement owner revisions as source freshness. An identity change
+clears source-bound rows and selection; freshness-only changes refetch while
+preserving qualified selection, search text, and scroll position. Preserve the
+exact source Workspace through open and display-name failures. Session
+presentation context must match attention by exact Node, owner Workspace, Agent
+ID, reason, and observation revision. Selecting never acknowledges attention;
+only a successful Session open or explicit Dismiss Attention may queue the exact
+guarded acknowledgment.
+Do not terminate or forget an in-flight display-name process when the pane or
+source scope changes. Validate its exact response and notify the result, but
+apply it to an in-memory catalog only when that catalog still has the originating
+scope signature. Display-name commands accept only the minimal result envelope:
+`data.result` carries Session ID, owner Workspace ID, effective user display
+name, Workspace revision, and `changed`; remote responses additionally carry
+`data.node_id`. Fresh and exactly replayed successful responses both carry
+exactly the requested Workspace revision plus one.
+Do not terminate or forget an in-flight Session hide when the pane or source
+scope changes. Validate the minimal owner result before removing the exact row.
+Apply it directly only when the originating source is still current; otherwise
+drop only that source's cache. A changed result advances the listed Workspace
+revision by one; `changed: false` retains it. Never retry the mutation after an
+ambiguous result.
 
 Workspace inspection must preserve selection by structural Node/workspace key.
 If a new selection arrives while an inspection is running, issue the latest

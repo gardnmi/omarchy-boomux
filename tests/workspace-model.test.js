@@ -214,9 +214,32 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.persistPaneSettings({ side: "right" })')
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
+  expect(panel).toContain("readonly property int sessionPaneWidth: Style.space(520)")
+  expect(panel).not.toContain("SESSION PANE WIDTH")
   expect(panel).toContain("reservationWidth: root.paneWidth")
+  expect(panel).toContain("reserveSpace: false")
+  expect(panel).not.toContain('text: "Open Sessions with Boomux"')
+  expect(panel).not.toContain('openSessionsWithBoomux')
+  const toggle = panel.slice(panel.indexOf("function toggle()"),
+    panel.indexOf("function closeSessionRail()"))
+  expect(toggle).toContain("if (opened)")
+  expect(toggle).toContain("close()")
+  expect(toggle).toContain("open()")
+  expect(toggle).not.toContain("sessionRail")
   expect(sidePane).toContain("property int reservationWidth: paneWidth")
+  expect(sidePane).toContain("property int edgeOffset: 0")
+  expect(sidePane).toContain("property bool slideFromEdgeOffset: false")
+  expect(sidePane).toContain("property bool reserveSpace: true")
   expect(sidePane).toContain("root.sideInset + root.effectiveReservationWidth")
+  expect(sidePane).toContain("acceptedButtons: Qt.RightButton")
+  expect(sidePane).toContain("property bool resizeShortcutActive: false")
+  expect(sidePane).toContain("if (!root.resizeShortcutActive)")
+  expect(sidePane).toContain("resizeArea.mapToItem(null, mouse.x, mouse.y).x")
+  expect(sidePane).toContain("preventStealing: true")
+  expect(sidePane).toContain("signal paneWidthCommitted(int width)")
+  expect(panel).toContain('name: "boomux-pane-resize"')
+  expect(panel.match(/resizeShortcutActive: paneResizeShortcut.pressed/g)).toHaveLength(1)
+  expect(panel.match(/onPaneWidthCommitted/g)).toHaveLength(1)
   expect(panel).toContain("omarchy-launch-tui --app-id=TUI.float boomux config edit")
   expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
   expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
@@ -240,7 +263,8 @@ test("separates persistent pane visibility from explicit keyboard mode", () => {
   expect(panel).toContain("if (opened && panel.keyboardMode)")
   expect(panel).toContain("panel.exitKeyboardMode()")
   expect(panel).toContain("function focus(): void { root.focusPane() }")
-  expect(panel).toContain("function releaseFocus(): void { panel.exitKeyboardMode() }")
+  expect(panel).toContain("function releaseFocus(): void {")
+  expect(panel).toContain("sessionRail.exitKeyboardMode()\n      panel.exitKeyboardMode()")
   expect(panel).toContain("PanelKeyCatcher {")
   expect(panel).toContain('text: "BOOMUX"')
   expect(sidePane).toContain("property bool keyboardMode: false")
@@ -469,7 +493,7 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Beginning)")
   expect(panel).not.toContain("onActiveBoomuxTerminalKeyChanged")
   expect(panel).not.toContain("function positionFocusedWorkspace")
-  expect(panel).not.toContain("onActiveBoomuxWorkspaceIdChanged")
+  expect(panel).toContain("onActiveBoomuxWorkspaceIdChanged: {")
   expect(panel).toContain("workspacePositionTimer.restart()")
   expect(panel).toContain("interval: 180")
   expect(panel).toContain("root.applyWorkspacePosition(workspaceKey)")
@@ -485,7 +509,19 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).not.toContain("setWorkspaceTreeHeight(workspaceTreeHeight)")
   expect(panel).toContain("panel.height - Style.space(260)")
   expect(panel).not.toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Contain)")
-  expect(panel).toContain("root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
+  expect(panel).toContain("onClicked: {\n                    root.focusSection = \"workspaces\"\n"
+    + "                    root.selectedWorkspaceIndex = index\n"
+    + "                    root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
+  const workspaceRow = panel.slice(panel.indexOf("id: workspaceHeaderActions"),
+    panel.indexOf("id: childColumn"))
+  expect(workspaceRow).toContain('text: "⋮"')
+  expect(workspaceRow).toContain('id: workspaceSessionsButton')
+  expect(workspaceRow).toContain('iconText: ""')
+  expect(workspaceRow).toContain('active: root.sessionRailIsOpenForWorkspace(modelData)')
+  expect(workspaceRow).toContain('root.toggleWorkspaceSessionRail(modelData)')
+  expect(workspaceRow).toContain('visible: modelData.is_global && !modelData.closing')
+  expect(workspaceRow).not.toContain('text: "i"')
+  expect(workspaceRow).not.toContain('text: "↗"')
   expect(panel).toContain("if (panel.keyboardMode) return")
   const activation = panel.slice(panel.indexOf("function activateWorkspaceRow"),
     panel.indexOf("function openWorkspaceTreeItem"))
@@ -501,7 +537,7 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).not.toContain("&& !actionProcess.running\n                  cursorShape")
   expect(panel).toContain('var tabs = ["agents", "nodes"]')
   expect(panel).toContain('else if (text === "2") root.selectTab("nodes")')
-  expect(panel).toContain('root.openSessionBrowser()')
+  expect(panel).not.toContain('toggleSessionRail')
   expect(panel).not.toContain('root.selectTab("schedules")')
   expect(panel).toContain('width: (parent.width - parent.spacing) / 2')
   expect(panel).not.toContain("Enter opens · D dismisses · Tab switches · R refreshes")
@@ -511,8 +547,9 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("onActionMessageChanged:")
   expect(panel).toContain('showNotice("Boomux", actionMessage, currentNoticeScreen(), true)')
   expect(panel).not.toContain('root.actionMessage = "Workspace shown"')
-  expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane"')
-  expect(sidePane).toContain('WlrLayershell.namespace: "omarchy-boomux-side-pane-reservation"')
+  expect(sidePane).toContain('property string namespace: "omarchy-boomux-side-pane"')
+  expect(sidePane).toContain('WlrLayershell.namespace: root.namespace')
+  expect(sidePane).toContain('WlrLayershell.namespace: root.namespace + "-reservation"')
   expect(sidePane).toContain("exclusiveZone: implicitWidth")
   expect(sidePane).toContain("left: !root.onRight")
   expect(sidePane).toContain("right: root.onRight")
@@ -561,7 +598,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.7.0")
+  expect(manifest.version).toBe("2.8.0")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -624,7 +661,7 @@ test("shows passive Workspace notices", () => {
 test("documents actual keyboard navigation and configuration mutation", () => {
   const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8")
   expect(readme).toContain("Switch Agents and Nodes")
-  expect(readme).toContain("Open the Session browser")
+  expect(readme).toContain("Session icon on a coordinated Workspace")
   expect(readme).not.toContain("Schedules")
   expect(readme).toContain("Omarchy stores pane settings in `~/.config/omarchy/shell.json`")
   expect(readme).not.toContain("does not modify Boomux or Omarchy configuration directly")
@@ -1086,7 +1123,68 @@ describe("Agent Sessions", () => {
       node_id: remote.node_id, sessions: [summary()]
     }), remote)
     expect(remoteSessions[0]).toMatchObject({ node_id: remote.node_id, node_alias: "build",
-      node_local: false })
+      node_local: false, workspace_name: "Project", user_display_name: null,
+      workspace_revision: 0 })
+    expect(model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ workspace_revision: 0 })]
+    }), local)[0].workspace_revision).toBe(0)
+    const differentlyNamedPlacement = model.normalizeSessionList(envelope("session.list", {
+      node_id: remote.node_id,
+      sessions: [summary({ workspace_name: "Different placement name" })]
+    }), remote, "workspace")
+    expect(differentlyNamedPlacement[0].workspace_name).toBe("Different placement name")
+    expect(model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ user_display_name: "Checkout retry", workspace_revision: 11 })]
+    }), local, "workspace")[0]).toMatchObject({
+      description: "Fix tests", user_display_name: "Checkout retry", workspace_revision: 11
+    })
+    expect(() => model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ workspace_id: "wrong-owner" })]
+    }), local, "workspace")).toThrow("unexpected Session Workspace identity")
+    expect(model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ occurrence_count: 0 })]
+    }), local, "workspace")[0]).toMatchObject({ occurrence_count: 0,
+      attentions: [], git_branch: null, latest_agent_name: null,
+      working_contexts: [], working_context_count: 0 })
+    const contextual = model.normalizeSessionList(envelope("session.list", {
+      sessions: [summary({ git_branch: "feat/session-radar", latest_agent_name: "silver-heron",
+        attentions: [{
+        agent_id: "agent", reason: "blocked", observation_revision: 7,
+        observed_at_ms: 250
+      }], working_contexts: [
+        { repository: "boomux", branch: "feat/session-radar", observed_at_ms: 260,
+          push_status: { status: "ahead", commit_count: 2 },
+          worktree_status: { staged: true, unstaged_or_untracked: true } },
+        { repository: "omarchy-boomux", branch: "feat/session-radar", observed_at_ms: 255,
+          push_status: { status: "unpublished" },
+          worktree_status: { staged: false, unstaged_or_untracked: true } }
+      ], working_context_count: 2 })]
+    }), local, "workspace")[0]
+    expect(contextual).toMatchObject({ git_branch: "feat/session-radar",
+      latest_agent_name: "silver-heron",
+      attentions: [{ agent_id: "agent", reason: "blocked",
+        observation_revision: 7, observed_at_ms: 250 }],
+      working_contexts: [
+        { repository: "boomux", branch: "feat/session-radar", observed_at_ms: 260,
+          push_status: { status: "ahead", commit_count: 2 },
+          worktree_status: { staged: true, unstaged_or_untracked: true } },
+        { repository: "omarchy-boomux", branch: "feat/session-radar", observed_at_ms: 255,
+          push_status: { status: "unpublished" },
+          worktree_status: { staged: false, unstaged_or_untracked: true } }
+      ], working_context_count: 2 })
+    expect(model.sessionPushStatusLabel(contextual.working_contexts[0])).toBe("↑2")
+    expect(model.sessionPushStatusLabel(contextual.working_contexts[1])).toBe("Unpublished")
+    expect(model.sessionWorkingContextStatusLabel(contextual.working_contexts[0]))
+      .toBe("Unstaged · Staged · ↑2")
+    expect(model.sessionWorkingContextStatusLabel(contextual.working_contexts[1]))
+      .toBe("Unstaged · Unpublished")
+    expect(model.sessionWorkingContextStatusLabel({
+      push_status: { status: "up_to_date" },
+      worktree_status: { staged: false, unstaged_or_untracked: false }
+    })).toBe("")
+    expect(model.sessionPushStatusLabel({ push_status: { status: "up_to_date" } }))
+      .toBe("")
+    expect(model.sessionPushStatusLabel({ push_status: null })).toBe("")
     expect(() => model.normalizeSessionList(envelope("session.inspect", {
       sessions: []
     }), local)).toThrow()
@@ -1103,7 +1201,30 @@ describe("Agent Sessions", () => {
       summary({ state: "surprising" }),
       summary({ last_at_ms: 1.5 }),
       summary({ last_at_ms: 1e100 }),
-      summary({ occurrence_count: 1.5 })
+      summary({ occurrence_count: 1.5 }),
+      summary({ git_branch: "" }),
+      summary({ latest_agent_name: "" }),
+      summary({ working_contexts: {} }),
+      summary({ working_contexts: [{ repository: "", branch: "main", observed_at_ms: 1 }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main", observed_at_ms: 1,
+        push_status: { status: "ahead", commit_count: 0 } }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main", observed_at_ms: 1,
+        push_status: { status: "unknown" } }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main", observed_at_ms: 1,
+        push_status: { status: "up_to_date", commit_count: 1 } }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main", observed_at_ms: 1,
+        worktree_status: { staged: "yes", unstaged_or_untracked: false } }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main", observed_at_ms: 1,
+        worktree_status: { staged: false } }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main", observed_at_ms: 1,
+        worktree_status: { staged: false, unstaged_or_untracked: false, extra: false } }] }),
+      summary({ working_contexts: [{ repository: "boomux", branch: "main",
+        observed_at_ms: 1 }], working_context_count: 0 }),
+      summary({ attentions: {} }),
+      summary({ attentions: [{ agent_id: "agent", reason: "unknown",
+        observation_revision: 1, observed_at_ms: 1 }] }),
+      summary({ attentions: [{ agent_id: "agent", reason: "blocked",
+        observation_revision: 0, observed_at_ms: 1 }] })
     ]) expect(() => model.normalizeSessionList(envelope("session.list", {
       sessions: [invalid]
     }), local)).toThrow()
@@ -1142,7 +1263,76 @@ describe("Agent Sessions", () => {
       .toEqual(["one"])
     expect(model.filterSessions(values, "historical build").map(value => value.id))
       .toEqual(["two"])
+    values[0].working_contexts = [
+      { repository: "boomux", branch: "feat/working-contexts", observed_at_ms: 300,
+        push_status: { status: "ahead", commit_count: 3 },
+        worktree_status: { staged: true, unstaged_or_untracked: true } }
+    ]
+    values[0].latest_agent_name = "silver-heron"
+    expect(model.filterSessions(values, "boomux working-contexts").map(value => value.id))
+      .toEqual(["one"])
+    expect(model.filterSessions(values, "silver-heron unstaged staged ↑3").map(value => value.id))
+      .toEqual(["one"])
     expect(model.filterSessions(values, "missing")).toEqual([])
+  })
+
+  test("groups attention, active, recent, and historical Sessions without hiding catalogs", () => {
+    const now = 20 * 24 * 60 * 60 * 1000
+    const values = [
+      summary({ id: "history", last_at_ms: now - 8 * 24 * 60 * 60 * 1000,
+        occurrence_count: 0 }),
+      summary({ id: "recent", last_at_ms: now - 2 * 24 * 60 * 60 * 1000 }),
+      summary({ id: "active", state: "working", state_is_current: true,
+        last_at_ms: now - 100 }),
+      summary({ id: "completed-attention", state: "done", last_at_ms: now - 200,
+        attentions: [{ agent_id: "done", reason: "completed", observation_revision: 2,
+          observed_at_ms: now - 50 }] }),
+      summary({ id: "blocked-attention", state: "blocked", state_is_current: true,
+        last_at_ms: now - 300, attentions: [{ agent_id: "blocked", reason: "blocked",
+          observation_revision: 4, observed_at_ms: now - 75 }] })
+    ]
+    const grouped = model.groupSessions(values, now)
+    expect(grouped.map(value => [value.id, value.session_group])).toEqual([
+      ["blocked-attention", "Needs Attention"],
+      ["completed-attention", "Needs Attention"],
+      ["active", "Active"],
+      ["recent", "Recent"],
+      ["history", "History"]
+    ])
+    expect(model.sessionGroupCount(grouped, "Needs Attention")).toBe(2)
+    expect(model.visibleGroupedSessions(grouped, { History: true }).map(value => value.id))
+      .toEqual(["blocked-attention", "completed-attention", "active", "recent"])
+    const collapsedRows = model.sessionListRows(grouped, { History: true })
+    expect(collapsedRows.map(value => value.id)).toEqual([
+      "blocked-attention", "completed-attention", "active", "recent", "history"
+    ])
+    expect(collapsedRows[4]).toMatchObject({ key: "session-group:History",
+      session_group: "History", session_placeholder: true })
+    expect(model.sessionListRows(grouped, {}).some(value => value.session_placeholder)).toBe(false)
+    expect(model.filterSessions(grouped, "feat/session-radar")).toEqual([])
+    grouped[3].git_branch = "feat/session-radar"
+    expect(model.filterSessions(grouped, "session-radar").map(value => value.id))
+      .toEqual(["recent"])
+  })
+
+  test("matches Session attention only to the exact current Agent revision", () => {
+    const session = Object.assign(summary(), { node_id: "node-a", attentions: [{
+      agent_id: "agent", reason: "blocked", observation_revision: 7, observed_at_ms: 100
+    }] })
+    const exact = { id: "agent", node_id: "node-a", workspace_id: "workspace",
+      attention: { reason: "blocked", observation: { revision: 7 } } }
+    expect(model.sessionAttentionAgents(session, [
+      Object.assign({}, exact, { node_id: "node-b" }),
+      Object.assign({}, exact, { workspace_id: "other" }),
+      Object.assign({}, exact, { attention: { reason: "completed",
+        observation: { revision: 7 } } }),
+      Object.assign({}, exact, { attention: { reason: "blocked",
+        observation: { revision: 8 } } }),
+      exact
+    ])).toEqual([exact])
+    expect(model.sessionAttentionAgents(session, [Object.assign({}, exact, {
+      attention: { reason: "blocked", observation: { revision: 8 } }
+    })])).toEqual([])
   })
 
   test("builds exact local and remote argv without shell interpolation", () => {
@@ -1153,6 +1343,13 @@ describe("Agent Sessions", () => {
     ])
     expect(model.sessionListCommand(remote)).toEqual([
       "boomux", "session", "list", "--json", "--node", "node;$(false)"
+    ])
+    expect(model.sessionListCommand(local, "owner;$(false)")).toEqual([
+      "boomux", "session", "list", "--workspace", "owner;$(false)", "--json"
+    ])
+    expect(model.sessionListCommand(remote, "owner;$(false)")).toEqual([
+      "boomux", "session", "list", "--workspace", "owner;$(false)", "--json",
+      "--node", "node;$(false)"
     ])
     expect(model.sessionInspectCommand(session)).toEqual([
       "boomux", "session", "inspect", "session;$(touch /tmp/no)", "--json",
@@ -1171,20 +1368,142 @@ describe("Agent Sessions", () => {
     ])
   })
 
-  test("reads only the exact current local Session run for preview", () => {
-    const session = { id: "session", node_local: true, occurrences: [
-      { shell_id: "old", run_id: "old-run", is_current: false },
-      { shell_id: "shell", run_id: "run", is_current: true }
+  test("discovers each exact active eligible coordinated placement lazily", () => {
+    const nodes = [
+      Object.assign({}, local, { node_id: "node-a" }),
+      Object.assign({}, remote, { node_id: "node-b", observed_capabilities: remoteFeatures }),
+      Object.assign({}, remote, { node_id: "node-c", stale: true }),
+      Object.assign({}, remote, { node_id: "node-d" })
+    ]
+    const workspace = { is_global: true, closing: false, placements: [
+      { node_id: "node-a", workspace_id: "same-owner", state: "active", available: true },
+      { node_id: "node-b", workspace_id: "same-owner", state: "active", available: true },
+      { node_id: "node-c", workspace_id: "stale-owner", state: "active", available: true },
+      { node_id: "node-d", workspace_id: "closing-owner", state: "close_pending", available: false }
     ] }
-    expect(model.sessionPreviewCommand(session)).toEqual([
-      "boomux", "read", "shell", "--lines", "40", "--json", "--run-id", "run",
-      "--after-revision", "0"
+    expect(model.workspaceSessionRequests(workspace, nodes, remoteFeatures)).toEqual([
+      { key: JSON.stringify(["node-a", "same-owner"]), nodeId: "node-a",
+        ownerWorkspaceId: "same-owner" },
+      { key: JSON.stringify(["node-b", "same-owner"]), nodeId: "node-b",
+        ownerWorkspaceId: "same-owner" }
     ])
-    expect(model.normalizeSessionPreview(envelope("read", {
-      shell_id: "shell", run_id: "run", output: "recent output", status: "running"
-    }), session)).toEqual({ available: true, output: "recent output", status: "running" })
-    expect(model.sessionPreviewCommand(Object.assign({}, session, { node_local: false })))
-      .toEqual([])
+    expect(model.workspaceSessionRequests(Object.assign({}, workspace, { closing: true }),
+      nodes, remoteFeatures)).toEqual([])
+    expect(model.workspaceSessionRequests({ is_global: false }, nodes, remoteFeatures)).toEqual([])
+
+    const firstWorkspace = Object.assign({ id: "global-a" }, workspace, {
+      placements: workspace.placements.map((placement, index) =>
+        Object.assign({ owner_revision: index + 1 }, placement))
+    })
+    const renamedWorkspace = Object.assign({ id: "global-a" }, workspace, {
+      name: "renamed",
+      placements: workspace.placements.map((placement, index) =>
+        Object.assign({ owner_revision: index + 1 }, placement))
+    })
+    const advancedWorkspace = Object.assign({ id: "global-a" }, workspace, {
+      placements: workspace.placements.map((placement, index) =>
+        Object.assign({ owner_revision: index === 0 ? 9 : index + 1 }, placement))
+    })
+    const identity = model.sessionSourceIdentity(firstWorkspace, nodes, remoteFeatures)
+    const freshness = model.sessionSourceFreshness(firstWorkspace, nodes, remoteFeatures)
+    expect(model.sessionSourceIdentity(renamedWorkspace, nodes, remoteFeatures)).toBe(identity)
+    expect(model.sessionSourceFreshness(renamedWorkspace, nodes, remoteFeatures)).toBe(freshness)
+    expect(model.sessionSourceIdentity(advancedWorkspace, nodes, remoteFeatures)).toBe(identity)
+    expect(model.sessionSourceFreshness(advancedWorkspace, nodes, remoteFeatures))
+      .not.toBe(freshness)
+    expect(model.sessionSourceIdentity(Object.assign({ id: "global-b" }, workspace),
+      nodes, remoteFeatures)).not.toBe(identity)
+    expect(model.sessionSourceIdentity(null, nodes, remoteFeatures))
+      .toBe(JSON.stringify({ source: "none" }))
+  })
+
+  test("requires exactly one advancing revision for fresh and replayed mutation success", () => {
+    const session = Object.assign(summary({ user_display_name: null, workspace_revision: 11 }), {
+      node_id: remote.node_id, node_local: false
+    })
+    expect(model.sessionRenameCommand(session, "Checkout $(safe)")).toEqual([
+      "boomux", "session", "rename", "session;$(false)", "Checkout $(safe)",
+      "--revision", "11", "--node", "node;$(false)", "--json"
+    ])
+    expect(model.sessionResetNameCommand(Object.assign({}, session,
+      { user_display_name: "Override", workspace_revision: 12 }))).toEqual([
+      "boomux", "session", "reset-name", "session;$(false)", "--revision", "12",
+      "--node", "node;$(false)", "--json"
+    ])
+    const localSession = Object.assign({}, session, { node_id: local.node_id, node_local: true })
+    expect(model.sessionRenameCommand(localSession, "Local name")).toEqual([
+      "boomux", "session", "rename", "session;$(false)", "Local name",
+      "--revision", "11", "--json"
+    ])
+    expect(model.sessionResetNameCommand(localSession)).toEqual([
+      "boomux", "session", "reset-name", "session;$(false)",
+      "--revision", "11", "--json"
+    ])
+    expect(model.sessionHideCommand(session)).toEqual([
+      "boomux", "session", "hide", "session;$(false)", "--workspace", "workspace",
+      "--node", "node;$(false)", "--json"
+    ])
+    expect(model.sessionHideCommand(localSession)).toEqual([
+      "boomux", "session", "hide", "session;$(false)", "--workspace", "workspace",
+      "--json"
+    ])
+    const result = (overrides = {}) => Object.assign({
+      session_id: session.id, workspace_id: session.workspace_id,
+      user_display_name: "Checkout $(safe)", workspace_revision: 12, changed: true
+    }, overrides)
+    const renamed = model.normalizeSessionNameMutation(envelope("session.rename", {
+      node_id: remote.node_id, result: result()
+    }), "session.rename", remote, session)
+    expect(renamed).toMatchObject({ id: session.id, workspace_id: session.workspace_id,
+      user_display_name: "Checkout $(safe)", workspace_revision: 12,
+      changed: true, node_id: remote.node_id })
+    expect(model.normalizeSessionNameMutation(envelope("session.reset-name", {
+      node_id: remote.node_id,
+      result: result({ user_display_name: null, workspace_revision: 13 })
+    }), "session.reset-name", remote, Object.assign({}, session,
+      { workspace_revision: 12 }))).toMatchObject({ user_display_name: null,
+        workspace_revision: 13, changed: true })
+    expect(model.normalizeSessionNameMutation(envelope("session.rename", {
+      result: result()
+    }), "session.rename", local, localSession)).toMatchObject({ node_local: true,
+      node_id: local.node_id })
+    for (const invalid of [
+      result({ session_id: "wrong" }), result({ workspace_id: "wrong" }),
+      result({ user_display_name: null }), result({ changed: "true" })
+    ]) expect(() => model.normalizeSessionNameMutation(envelope("session.rename", {
+      node_id: remote.node_id, result: invalid
+    }), "session.rename", remote, session)).toThrow()
+    for (const invalidRevision of [11, 13]) {
+      expect(() => model.normalizeSessionNameMutation(envelope("session.rename", {
+        node_id: remote.node_id, result: result({ workspace_revision: invalidRevision })
+      }), "session.rename", remote, session)).toThrow()
+    }
+    // Exact operation replay returns the original expected + 1 result.
+    expect(model.normalizeSessionNameMutation(envelope("session.rename", {
+      node_id: remote.node_id, result: result({ changed: true })
+    }), "session.rename", remote, session).workspace_revision).toBe(12)
+
+    const hidden = model.normalizeSessionHideMutation(envelope("session.hide", {
+      node_id: remote.node_id, result: { session_id: session.id,
+        workspace_id: session.workspace_id, workspace_revision: 12, changed: true }
+    }), remote, session)
+    expect(hidden).toMatchObject({ id: session.id, workspace_id: session.workspace_id,
+      workspace_revision: 12, changed: true, node_id: remote.node_id })
+    expect(model.normalizeSessionHideMutation(envelope("session.hide", {
+      result: { session_id: localSession.id, workspace_id: localSession.workspace_id,
+        workspace_revision: 11, changed: false }
+    }), local, localSession)).toMatchObject({ changed: false, workspace_revision: 11 })
+    for (const invalid of [
+      { session_id: "wrong", workspace_id: session.workspace_id,
+        workspace_revision: 12, changed: true },
+      { session_id: session.id, workspace_id: "wrong", workspace_revision: 12, changed: true },
+      { session_id: session.id, workspace_id: session.workspace_id,
+        workspace_revision: 11, changed: true },
+      { session_id: session.id, workspace_id: session.workspace_id,
+        workspace_revision: 12, changed: false }
+    ]) expect(() => model.normalizeSessionHideMutation(envelope("session.hide", {
+      node_id: remote.node_id, result: invalid
+    }), remote, session)).toThrow()
   })
 
   test("normalizes documented local occurrence fields", () => {
@@ -1192,12 +1511,18 @@ describe("Agent Sessions", () => {
       retained_shell_cwd: "/home/user/project", source_cwd: "/home/user/project",
       run_id: "run", started_at_ms: 100, ended_at_ms: null, is_current: true,
       observation }
+    const detailContexts = Array.from({ length: 5 }, (_, index) => ({
+      repository: "repository-" + index, branch: "main", observed_at_ms: index + 1
+    }))
     const detail = model.normalizeSessionInspect(envelope("session.inspect", {
-      session: Object.assign(summary(), { source_cwd: "/home/user/project",
+      session: Object.assign(summary({ working_contexts: detailContexts,
+        working_context_count: detailContexts.length }), { source_cwd: "/home/user/project",
         occurrences: [occurrence] })
     }), local, "session;$(false)")
     expect(detail.occurrences[0]).toMatchObject({ agent_id: "agent", is_current: true,
       remote_raw: false, retained_shell_name: "main" })
+    expect(detail.workspace_revision).toBe(0)
+    expect(detail.working_contexts).toHaveLength(5)
   })
 
   test("normalizes current remote raw Agent-instance occurrences for display only", () => {
@@ -1247,6 +1572,25 @@ describe("Agent Sessions", () => {
     expect(model.sessionNodeEligible(remote, ["typed_node_host_services"])).toBe(false)
     expect(model.sessionActionable({ state: "idle" }, true, true)).toBe(true)
     expect(model.sessionActionable({ state: "done" }, true, true)).toBe(false)
+    expect(model.sessionDisplayNameActionable({ node_local: true, workspace_revision: 4 },
+      true, true, [])).toBe(false)
+    expect(model.sessionDisplayNameActionable({ node_local: true, workspace_revision: 4 },
+      true, true, ["session_display_names"])).toBe(true)
+    expect(model.sessionDisplayNameActionable({ node_local: false, workspace_revision: 4 },
+      true, true, ["session_display_names"])).toBe(true)
+    expect(model.sessionDisplayNameActionable({ node_local: false, workspace_revision: 4 },
+      true, true, [])).toBe(false)
+    expect(model.sessionDisplayNameActionable({ node_local: true, workspace_revision: null },
+      true, true, [])).toBe(false)
+    expect(model.sessionDisplayNameActionable({ node_local: true, workspace_revision: 0 },
+      true, true, [])).toBe(false)
+    expect(model.sessionDisplayNameActionable({ node_local: true, workspace_revision: 4 },
+      false, true, [])).toBe(false)
+    expect(model.sessionHideActionable({ workspace_revision: 4 }, true, true,
+      ["workspace_session_hiding"])).toBe(true)
+    expect(model.sessionHideActionable({ workspace_revision: 4 }, true, true, [])).toBe(false)
+    expect(model.sessionHideActionable({ workspace_revision: 0 }, true, true,
+      ["workspace_session_hiding"])).toBe(false)
     const request = { generation: 7, nodeId: remote.node_id, cliFeatures: remoteFeatures }
     expect(model.sessionRequestCurrent(request, 7, true, "sessions", true, remote)).toBe(true)
     expect(model.sessionRequestCurrent(request, 8, true, "sessions", true, remote)).toBe(false)
@@ -1257,19 +1601,23 @@ describe("Agent Sessions", () => {
       .toEqual(["OpenCode", "Pi", "Claude Code", "Codex", "Kiro CLI"])
   })
 
-  test("integrates a full-width compact Session launcher browser", () => {
+  test("integrates one compact contextual Session rail", () => {
     const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
     const sidePane = fs.readFileSync(new URL("../SidePane.qml", import.meta.url), "utf8")
     expect(panel).toContain('var tabs = ["agents", "nodes"]')
-    expect(panel).toContain('id: openSessionsButton')
+    expect(panel).toContain('id: workspaceSessionsButton')
     expect(panel).toContain('text: "AGENTS"')
-    expect(panel).toContain('text: "Sessions  ›"\n                tooltipText: "Browse Agent Sessions"')
-    expect(panel).toContain('tooltipText: "Browse Agent Sessions"\n                bordered: false')
-    expect(panel).not.toContain('root.paneSessions.length + " Agent Sessions"')
+    expect(panel).not.toContain('text: "Sessions  ›"')
+    expect(panel).toContain('sessionRailOpen && sessionSourceWorkspaceId === workspaceId')
     expect(panel).toContain('data.json_commands.indexOf("session.list") >= 0')
+    expect(panel).toContain('data.json_commands.indexOf("session.inspect") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("projected_agent_sessions") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("exact_session_open") >= 0')
-    expect(panel).toContain('running: root.opened && root.activeTab === "sessions"')
+    expect(panel).not.toContain('id: sessionTtlTimer')
+    expect(panel).toContain('sessionPendingResults = Object.assign({}, sessionResults)')
+    expect(panel).toContain('Object.keys(sessionPendingResults)')
+    expect(panel).toContain('sessionResults = Object.assign({}, sessionPendingResults)')
+    expect(panel).toContain('root.sessionDiscoveryCompleted++')
     expect(panel).toContain('sessionExpiresAt = Date.now() + 10000')
     expect(panel).toContain('if (sessionExpiresAt === 0 || Date.now() >= sessionExpiresAt)')
     expect(panel).toContain('sessionResults = ({})')
@@ -1279,8 +1627,11 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('id: sessionListProcess')
     expect(panel).toContain('if (sessionListProcess.running)')
     expect(panel).toContain('WorkspaceModel.sessionRequestCurrent(request, root.sessionGeneration')
-    expect(panel).toContain('var nextResults = Object.assign({}, root.sessionResults)')
-    expect(panel).toContain('nextResults[request.nodeId] = WorkspaceModel.normalizeSessionList(')
+    expect(panel).toContain('var nextResults = Object.assign({}, root.sessionPendingResults)')
+    expect(panel).toContain('nextResults[request.key] = WorkspaceModel.normalizeSessionList(')
+    expect(panel).toContain('combined = combined.concat(sessionPendingResults[nodeId] || [])')
+    expect(panel).toContain('warnings.push(String(node.alias || node.node_id) + ": unavailable")')
+    expect(panel).toContain('sessionPendingWarnings = warnings.slice(-8)')
     expect(panel).toContain('clearSessionPrivacy()')
     const suspended = panel.slice(panel.indexOf('function suspendSessionActivity()'),
       panel.indexOf('function clearSessionPrivacy()'))
@@ -1289,8 +1640,9 @@ describe("Agent Sessions", () => {
     const cleared = panel.slice(panel.indexOf('function clearSessionPrivacy()'),
       panel.indexOf('function prepareSessionProcess(process)'))
     expect(cleared).toContain('sessions = []')
-    expect(panel).toContain('pendingWorkspacePositionKey = ""\n    settingsOpen = false\n'
-      + '    confirmationTarget = null\n    suspendSessionActivity()')
+    expect(panel).toContain('sessionRailOpen = false\n    sessionRailPendingWorkspaceId = ""')
+    expect(panel).toContain('if (returnFocusToPanel && opened) panel.enterKeyboardMode()')
+    expect(panel).toContain('sessionRail.exitKeyboardMode()\n    suspendSessionActivity()')
     expect(panel).toContain('stopAndClearSessionProcess(sessionOpenProcess)')
     expect(panel).toContain('id: sessionCollectorFactory')
     expect(panel).toContain('Qt.callLater(root.recoverStoppedSessionList)')
@@ -1301,57 +1653,226 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('Install Boomux 1.7.0 or newer to open exact Sessions')
     expect(panel).toContain('showActionFailure("Session unavailable", "Done Sessions cannot be opened")')
     expect(panel).toContain('showActionFailure("Session unavailable", "The owning Node is not currently available")')
-    expect(panel).toContain('else if (activeTab === "sessions") openSelectedSession()')
+    expect(panel).not.toContain('activeTab === "sessions"')
     expect(panel).toContain('id: sessionBrowser')
-    expect(panel).toContain('root.activeTab === "sessions" ? root.sessionBrowserWidth : root.paneWidth')
-    expect(panel).toContain('text: "‹ Boomux"')
-    expect(panel).toContain('width: parent.width\n              height: parent.height')
-    expect(panel).toContain('height: Style.space(46)')
-    expect(panel).toContain('text: modelData.description || "Untitled Session"')
-    expect(panel).toContain('+ root.sessionStatusLabel(modelData) + " · "')
-    expect(panel).toContain('WorkspaceModel.sessionHarnessLabel(modelData.integration) + " · "')
+    expect(panel).toContain('paneWidth: root.paneWidth')
+    expect(panel).toContain('paneWidth: root.sessionPaneWidth')
+    expect(panel).not.toContain('sessionPaneWidth: width')
+    expect(panel).not.toContain('sessionBrowserWidth')
+    expect(panel).toContain('side: root.paneSide\n    edgeOffset: Math.round(panel.effectivePaneWidth + Style.gapsOut)')
+    expect(panel).toContain('slideFromEdgeOffset: true')
+    expect(panel).toContain('reserveSpace: false')
+    expect(panel).toContain('namespace: "omarchy-boomux-session-rail"')
+    expect(panel).toContain('parent: sessionRail.contentContainer')
+    expect(panel).toContain('Math.max(Style.space(62), sessionCardContent.implicitHeight')
+    expect(panel).toContain('+ (modelData.description || "Untitled Session")')
+    expect(panel).toContain('property string expandedSessionKey: ""')
+    expect(panel).toContain('id: sessionCardExpandIndicator')
+    expect(panel).not.toContain('id: sessionCardExpandButton')
+    expect(panel).toContain('text: sessionBrowserRow.expanded ? "⌄" : "›"')
+    expect(panel).toContain('+ "View details"')
+    expect(panel).toContain('root.inspectSession(modelData)')
+    expect(browser).toContain('onClicked: {\n                        root.selectSession(modelData)\n'
+      + '                        root.toggleSessionExpanded(modelData)')
+    expect(panel).toContain('root.sessionCollapsedContextLabel(modelData)')
+    expect(panel).toContain('expandedSessionKey: expandedSessionKey')
+    expect(panel).toContain('expandedSessionKey = String(cached.expandedSessionKey || "")')
+    expect(panel).toContain('event.key === Qt.Key_Right || event.key === Qt.Key_L')
+    expect(panel).toContain('event.key === Qt.Key_Left || event.key === Qt.Key_H')
+    expect(panel).toContain('event.key === Qt.Key_Space')
+    expect(panel).toContain('section.property: "session_group"')
+    expect(panel).toContain('WorkspaceModel.groupSessions(sessions, clockNow)')
+    expect(panel).toContain('property var sessionCollapsedGroups: ({ "History": true })')
+    expect(panel).toContain('WorkspaceModel.visibleGroupedSessions(filteredPaneSessions, sessionCollapsedGroups)')
+    expect(panel).toContain('WorkspaceModel.sessionListRows(filteredPaneSessions, sessionCollapsedGroups)')
+    expect(panel).toContain('onClicked: root.toggleSessionGroup(parent.section)')
+    expect(panel).toContain('"LAUNCH BRANCH · "')
+    expect(panel).toContain('root.sessionWorkingContextsHeading(modelData)')
+    expect(panel).toContain('id: sessionContextRepositoryHeader')
+    expect(panel).toContain('id: sessionContextBranchHeader')
+    expect(panel.match(/text: String\(modelData\.repository\)/g)).toHaveLength(2)
+    expect(panel.match(/root\.sessionContextBranchLabel\(modelData\)/g)).toHaveLength(2)
+    expect(panel.match(/WorkspaceModel\.relativeTime\(modelData\.observed_at_ms, root\.clockNow\)/g))
+      .toHaveLength(2)
+    expect(panel).toContain('text: "SEEN"')
+    expect(panel).toContain('"Latest Agent: " + String(root.sessionDetail.latest_agent_name)')
+    expect(panel).toContain('root.sessionWorkingContextsOverflowLabel(modelData)')
+    expect(panel).toContain('text: "LAUNCH CONTEXT"')
+    expect(panel).toContain('"agent_working_context_observed"')
+    expect(panel).toContain('WorkspaceModel.sessionGroupCount(root.filteredPaneSessions, parent.section)')
+    expect(panel).toContain('root.sessionMetadataLabel(modelData)')
+    expect(panel).toContain('var values = [WorkspaceModel.relativeTime(session.last_at_ms, clockNow)]')
+    expect(panel).toContain('WorkspaceModel.sessionWorkingContextStatusLabel(context)')
+    expect(panel).toContain('String(session.latest_agent_name).toLowerCase() !== harness.toLowerCase()')
+    expect(panel).not.toContain('WorkspaceModel.sessionAgentInstancesLabel')
+    expect(panel).toContain('text: "Dismiss Attention"')
+    expect(panel).toContain('root.dismissSessionAttention(modelData)')
+    expect(panel).toContain('nodeArgs(activeAcknowledgement.nodeId, "persistent_agent_attention")')
+    expect(panel).not.toContain('text: "UPDATED"')
     expect(panel).toContain('function sessionStatusLabel(session)')
     expect(panel).toContain('function sessionActionLabel(session)')
     expect(panel).toContain('WorkspaceModel.sessionOpenCommand(session, targetWorkspaceId)')
     expect(panel).toContain('"Select where the Session terminal should open"')
     expect(panel).toContain('workspaceId: targetWorkspaceId')
-    expect(panel).toContain('sessionOpenProcess.running = true\n    closeSessionBrowser()')
-    expect(panel).toContain('text: "Sessions  ›"\n                tooltipText: "Browse Agent Sessions"')
-    expect(panel).toContain('text: "OPEN IN"')
-    expect(panel).toContain('name: "+ New Workspace"')
-    expect(panel).toContain('text: "Open Session"')
-    expect(panel).toContain('id: sessionDestinationButton')
-    expect(panel).toContain('bordered: true\n                focusable: true\n'
-      + '                foreground: root.foreground')
-    expect(panel).toContain('id: sessionDestinationChevron')
-    expect(panel).toContain('anchors.right: parent.right\n                  anchors.rightMargin: Style.space(12)')
-    expect(panel).toContain('id: sessionWorkspaceDropdown')
+    expect(panel).toContain('sessionOpenProcess.running = true')
+    expect(panel).toContain('id: sessionCardOpenButton')
+    expect(panel).toContain('iconText: root.sessionIsOpening(modelData) ? "↻" : ""')
+    expect(panel).toContain('iconSpinning: root.sessionIsOpening(modelData)')
+    const sessionCardActions = panel.slice(panel.indexOf('id: sessionCardActions'),
+      panel.indexOf('Popup {\n                        id: sessionCardMenu'))
+    expect(sessionCardActions.match(/bordered: false/g)).toHaveLength(2)
+    expect(panel).not.toContain('root.sessionIsOpening(modelData) ? "Opening..." : "Open"')
+    expect(panel).toContain('root.closeSessionRail()')
+    expect(panel).toContain('panel.enterKeyboardMode()')
+    expect(browser).not.toContain('id: sessionDestinationButton')
     expect(panel).toContain('id: sessionSearchField')
     expect(panel).toContain('WorkspaceModel.filterSessions(allPaneSessions, sessionQuery)')
-    expect(panel).toContain('enabled: !sessionOpenProcess.running')
-    expect(panel).toContain('function chooseSessionWorkspace() {\n    if (sessionWorkspaceDropdown.opened)')
-    expect(panel).toContain('if (!workspace) return\n    sessionCreateNewWorkspace = false\n'
-      + '    sessionTargetWorkspaceId = workspace.id')
-    expect(panel).toContain('function selectNewWorkspaceForSession() {')
-    const newWorkspaceSelection = panel.slice(
-      panel.indexOf('function selectNewWorkspaceForSession()'),
-      panel.indexOf('function openSelectedSession()'))
-    expect(newWorkspaceSelection).toContain('sessionCreateNewWorkspace = true')
-    expect(newWorkspaceSelection).not.toContain('requestGeneratedWorkspace')
-    expect(panel).toContain('if (sessionCreateNewWorkspace) createWorkspaceForSession()')
-    expect(panel).toContain('onClicked: root.openSelectedSession()')
-    expect(panel).toContain('if (modelData.create_new) root.selectNewWorkspaceForSession()')
-    expect(panel).toContain('parent: sessionDestinationButton')
     expect(panel).toContain('popupType: Popup.Item')
-    expect(panel).toContain('y: sessionDestinationButton.height + Style.space(4)')
-    expect(panel).toContain('margins: -1')
     expect(panel).toContain('closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside')
-    expect(panel).toContain('sessionTargetWorkspaceId = workspace.id')
-    expect(panel).toContain('else if (root.activeTab === "sessions") root.closeSessionBrowser()')
     expect(browser).not.toContain('tooltipText: "Close Boomux pane"')
-    expect(panel).toContain('onOutsideClicked: {')
     expect(sidePane).toContain('signal outsideClicked()')
     expect(panel).not.toContain('session", "resume"')
+    expect(panel).toContain('text: "Browse Sessions"')
+    expect(panel).toContain('WorkspaceModel.workspaceSessionRequests(source, nodes, cliFeatures)')
+    expect(panel).toContain('onActiveBoomuxWorkspaceIdChanged: {')
+    expect(panel).toContain('candidate.ownerWorkspaceId === request.ownerWorkspaceId')
+    expect(panel).toContain('function restoreSessionScroll(browserScrollY)')
+    expect(panel).toContain('restoreSessionScroll(browserScrollY)')
+    expect(panel).toContain('WorkspaceModel.sessionListCommand(node, request.ownerWorkspaceId)')
+    expect(panel).toContain('stdoutText, node, request.ownerWorkspaceId)')
+    expect(browser).not.toContain('text: "Inspect"')
+    expect(browser).not.toContain('text: "i"')
+    expect(browser).not.toContain('text: "↗"')
+    expect(browser).toContain('onDoubleClicked: root.activateSession(modelData)')
+    expect(panel).toContain('data.json_commands.indexOf("session.hide") >= 0')
+    expect(panel).toContain('cliFeatures.indexOf("workspace_session_hiding") >= 0')
+    expect(panel).toContain('text: "Hide"')
+    expect(panel).toContain('root.hideSession(modelData)')
+    expect(panel).not.toContain('kind: "session-hide"')
+    expect(panel).not.toContain('function requestSessionHide(session)')
+    expect(panel).toContain('WorkspaceModel.sessionHideCommand(session)')
+    expect(panel).toContain('id: sessionHideProcess')
+    expect(panel).toContain('data.json_commands.indexOf("session.rename") >= 0')
+    expect(panel).toContain('data.json_commands.indexOf("session.reset-name") >= 0')
+    expect(panel).toContain('cliFeatures.indexOf("session_display_names") >= 0')
+    expect(panel).toContain('WorkspaceModel.sessionRenameCommand(session, name)')
+    expect(panel).toContain('WorkspaceModel.sessionResetNameCommand(session)')
+    expect(panel).toContain('code === "revision_changed" || code === "revision_ahead"')
+    expect(panel).toContain('root.startSessionDiscovery(true)')
+    expect(panel).toContain('text: "Boomux display-name override"')
+    const inspectSession = panel.slice(panel.indexOf('function inspectSession(session)'),
+      panel.indexOf('function requestSessionRename(session)'))
+    expect(inspectSession).not.toContain('sessionDetail = null')
+    expect(inspectSession).not.toContain('sessionTargetWorkspaceId =')
+    expect(inspectSession).toContain('pendingSessionInspection = { key: session.key')
+    expect(panel).toContain('if (pendingSessionInspection) {')
+    expect(panel).toContain('inspectSession(sessions[index])')
+    expect(panel).toContain('actionMessage = "Opening Session details after refresh..."')
+    expect(panel).toContain('beginInlineSessionRename(request.session, request.requestedName')
+    const workspaceExpansion = panel.slice(panel.indexOf('function toggleWorkspaceExpansion'),
+      panel.indexOf('function activateWorkspaceRow'))
+    expect(workspaceExpansion).not.toContain('Session')
+    expect(workspaceExpansion).not.toContain('session')
+    expect(panel).toContain('tooltipText: "Session actions"')
+    expect(panel).not.toContain('text: "Reset Name"')
+    expect(panel).toContain('Present a coordinated Workspace to review its Sessions.')
+    expect(panel).not.toContain('id: sessionDetailColumn')
+  })
+
+  test("separates Session source identity from freshness and serializes refresh", () => {
+    const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+    expect(panel).toContain('WorkspaceModel.sessionSourceIdentity(source, nodes, cliFeatures)')
+    expect(panel).toContain('WorkspaceModel.sessionSourceFreshness(source, nodes, cliFeatures)')
+    expect(panel).toContain('invalidateSessionCacheForSource(sourceSignature, freshnessSignature)')
+    expect(panel).toContain('if (sessionCacheFreshnessSignature === freshnessSignature) return')
+    expect(panel).toContain('sessionExpiresAt = 0\n    sessionRefreshPending = true')
+    expect(panel).toContain('function continuePendingSessionRefresh()')
+    expect(panel).toContain('sourceSignature: sessionActiveSourceSignature')
+    expect(panel).toContain('freshnessSignature: sessionActiveFreshnessSignature')
+    expect(panel).toContain('function sessionPrimaryOperationBusy()')
+    expect(panel).toContain('sessionActiveRequest !== null || sessionListProcess.running'
+      + ' || sessionQueue.length > 0')
+    expect(panel).toContain('if (target.kind === "session" && sessionPrimaryOperationBusy()) return')
+    expect(panel).toContain('sessionSourceWorkspaceId === ""\n        || !online')
+    expect(panel).toContain('function toggleWorkspaceSessionRail(workspace)')
+    const toggle = panel.slice(panel.indexOf('function toggleWorkspaceSessionRail(workspace)'),
+      panel.indexOf('function revealSessionRailForWorkspace(workspace, focusKeyboard)'))
+    expect(toggle).toContain('if (sessionRailIsOpenForWorkspace(workspace))')
+    expect(toggle).toContain('closeSessionRail()')
+    expect(toggle).toContain('revealSessionRailForWorkspace(workspace, false)')
+    expect(panel).toContain('revealSessionRailForWorkspace(workspace, true)')
+    expect(panel).toContain('function revealSessionRailForWorkspace(workspace, focusKeyboard)')
+    const reveal = panel.slice(panel.indexOf('function revealSessionRailForWorkspace(workspace, focusKeyboard)'),
+      panel.indexOf('function syncSessionRailSource()'))
+    expect(reveal).toContain('sessionRailOpen = true')
+    expect(reveal).toContain('activateWorkspaceRow(workspace)')
+    expect(reveal.indexOf('activateWorkspaceRow(workspace)'))
+      .toBeGreaterThan(reveal.lastIndexOf('sessionRailOpen = true'))
+    expect(reveal).toContain('if (sessionRailOpen) closeSessionRail()')
+    expect(reveal).toContain('sessionRailPendingFocus = !!focusKeyboard')
+    expect(panel).toContain('activeBoomuxWorkspaceId === sessionRailPendingWorkspaceId')
+    expect(panel).toContain('if (focusKeyboard) focusSessionRail()\n      else releaseSessionRailFocus()')
+    expect(panel).toContain('sessionRailPendingWorkspaceId !== ""')
+    expect(panel).toContain('property var sessionCaches: ({})')
+    expect(panel).toContain('function saveSessionCache()')
+    expect(panel).toContain('nextCaches[sessionCacheSourceSignature] = {')
+    expect(panel).toContain('function restoreSessionCache(sourceSignature, freshnessSignature)')
+    expect(panel).toContain('restoreSessionCache(sessionCacheSourceSignature, sessionCacheFreshnessSignature)')
+
+    const suspended = panel.slice(panel.indexOf('function suspendSessionActivity()'),
+      panel.indexOf('function clearSessionPrivacy()'))
+    expect(suspended).not.toContain('sessionNameRequest = null')
+    expect(suspended).not.toContain('stopAndClearSessionProcess(sessionNameProcess)')
+    expect(suspended).not.toContain('sessionHideRequest = null')
+    expect(suspended).not.toContain('stopAndClearSessionProcess(sessionHideProcess)')
+    const mutationExit = panel.slice(panel.indexOf('id: sessionNameProcess'),
+      panel.indexOf('id: workspaceInspectProcess'))
+    expect(mutationExit).not.toContain('request.generation !== root.sessionGeneration')
+    expect(mutationExit).not.toContain('request.generation !== root.sessionGeneration')
+    expect(mutationExit).toContain('var node = request.node')
+    expect(mutationExit).toContain('request.sourceSignature === root.sessionCacheSourceSignature')
+    expect(mutationExit).toContain('WorkspaceModel.normalizeSessionHideMutation(')
+    expect(mutationExit).toContain('root.applySessionHide(request)')
+    const applyHide = panel.slice(panel.indexOf('function applySessionHide(request)'),
+      panel.indexOf('function beginInlineSessionRename(session'))
+    expect(applyHide).toContain('var browserScrollY = sessionBrowserList ? sessionBrowserList.contentY : 0')
+    expect(applyHide).toContain('syncSessionIndex()\n    restoreSessionScroll(browserScrollY)')
+
+    expect(panel).toContain('function activateSession(session)')
+    expect(panel).toContain('if (!session || sessionPrimaryOperationBusy()) return')
+    expect(panel).toContain('openSession(session)')
+
+    const applyMutation = panel.slice(panel.indexOf('function applySessionNameMutation(updated, command)'),
+      panel.indexOf('function loadSessionPreview(session)'))
+    expect(applyMutation).not.toContain('selectedSessionKey = updated.key')
+    expect(applyMutation).not.toContain('syncSessionIndex()')
+    expect(applyMutation).toContain('values.description = updated.user_display_name')
+    expect(panel).toContain('sessionRailKeyHandler.forceActiveFocus()')
+    expect(panel).not.toContain('event.key === Qt.Key_I && (event.modifiers & Qt.ControlModifier)')
+    expect(panel).toContain('onAccepted: root.submitInlineSessionRename(modelData, text)')
+    expect(panel).toContain('applySessionNameMutation({ node_id: session.node_id, id: session.id,')
+    expect(panel).toContain('root.restoreSessionAfterRename(request.session)')
+    expect(panel).toContain('onOutsideClicked: root.releaseSessionRailFocus()')
+    const releaseRailFocus = panel.slice(panel.indexOf('function releaseSessionRailFocus()'),
+      panel.indexOf('function sessionRailIsOpenForWorkspace(workspace)'))
+    expect(releaseRailFocus).toContain('panel.exitKeyboardMode()')
+    expect(releaseRailFocus).not.toContain('panel.enterKeyboardMode()')
+
+    expect(panel).toContain('root.sessionRenameDraft = {')
+    expect(panel).toContain('beginInlineSessionRename(detail, draft.name,')
+    const stoppedName = panel.slice(panel.indexOf('function recoverStoppedSessionName()'),
+      panel.indexOf('function sessionSourceWorkspace()'))
+    expect(stoppedName).toContain('name: request.requestedName')
+
+    const freshness = panel.slice(panel.indexOf('function validateSessionCacheFreshness()'),
+      panel.indexOf('function sessionPrimaryOperationBusy()'))
+    expect(freshness).not.toContain('sessions = []')
+    expect(freshness).not.toContain('selectedSessionKey = ""')
+    expect(panel).toContain('var browserScrollY = sessionBrowserList ? sessionBrowserList.contentY : 0')
+    expect(panel).toContain('sessionRailOpen = false\n    sessionRailPendingWorkspaceId = ""')
+    expect(panel).toContain('onKeyboardModeChanged: if (keyboardMode) sessionRail.exitKeyboardMode()')
+    expect(panel).toContain('onKeyboardModeChanged: if (keyboardMode) panel.exitKeyboardMode()')
+    expect(panel).toContain('function releaseFocus(): void {\n      sessionRail.exitKeyboardMode()\n      panel.exitKeyboardMode()')
   })
 })
 
@@ -1564,13 +2085,15 @@ describe("qualified commands and action gates", () => {
   })
 })
 
-test("wires the protocol-49 default path action without optimistic updates", () => {
+test("keeps protocol-49 default path plumbing out of the Workspace menu", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const actions = panel.slice(panel.indexOf("function actionMenuActionsFor"),
+    panel.indexOf("function moveActionMenu"))
   expect(panel).toContain('data.json_commands.indexOf("workspace.set-default-cwd") >= 0')
   expect(panel).toContain('cliFeatures.indexOf("workspace_placement_default_cwd") >= 0')
   expect(panel).toContain("daemonProtocolVersion >= 49")
-  expect(panel).toContain('text: "Shell Start Folder"')
-  expect(panel).toContain('root.runActionMenuAction("default-path")')
+  expect(panel).not.toContain('text: "Shell Start Folder"')
+  expect(actions).not.toContain('actions.push("default-path")')
   expect(panel).toContain("WorkspaceModel.workspaceDefaultCwdCommand(")
   expect(panel).toContain('root.parseEnvelope(defaultCwdStdout.text, "workspace.set-default-cwd")')
   expect(panel).toContain("WorkspaceModel.resolveWorkspaceDefaultCwd(pendingDefaultCwd, workspaces)")
@@ -1635,8 +2158,10 @@ test("keeps project discovery online, fresh, retryable, and local", () => {
   expect(panel).toContain("projectChooserRequested = true")
   expect(panel).toContain("openFreshProjectChooser()")
   expect(panel).toContain("visible: root.online && root.projectListSupported")
-  expect(panel).toContain("invalidateProjectDiscovery()\n    capabilitiesReady = false\n"
-    + "    if (!capabilityProcess.running)")
+  expect(panel).toContain("invalidateProjectDiscovery()\n    refreshAfterCapabilities = true\n"
+    + "    capabilitiesReady = false\n    if (!capabilityProcess.running)")
+  expect(panel).toContain("if (refreshAfterCapabilities) {")
+  expect(panel).toContain("Qt.callLater(refresh)")
 })
 
 test("documents that generated Workspace creation does not open a terminal", () => {

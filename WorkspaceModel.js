@@ -320,11 +320,85 @@ function normalizeSessionOccurrence(source) {
   }
 }
 
-function normalizeSessionSummary(source, nodeId, nodeAlias, local) {
+function normalizeSessionPushStatus(source) {
+  if (source === undefined || source === null) return null
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    throw new Error("invalid Session context push status")
+  var status = requiredEnum(source.status, "Session context push status",
+    ["up_to_date", "ahead", "unpublished"])
+  if (status === "ahead") {
+    return { status: status, commit_count: requiredBoundedInteger(source.commit_count,
+      "Session context commits to push", 1, Number.MAX_SAFE_INTEGER) }
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "commit_count"))
+    throw new Error("invalid Session context commits to push")
+  return { status: status }
+}
+
+function normalizeSessionWorktreeStatus(source) {
+  if (source === undefined || source === null) return null
+  if (!source || typeof source !== "object" || Array.isArray(source)
+      || Object.keys(source).length !== 2
+      || typeof source.staged !== "boolean"
+      || typeof source.unstaged_or_untracked !== "boolean")
+    throw new Error("invalid Session context worktree status")
+  return {
+    staged: source.staged,
+    unstaged_or_untracked: source.unstaged_or_untracked
+  }
+}
+
+function normalizeSessionSummary(source, nodeId, nodeAlias, local, maxWorkingContexts) {
   if (!source || typeof source !== "object") throw new Error("invalid Session summary")
   if (typeof source.state_is_current !== "boolean") throw new Error("invalid Session currentness")
   var occurrenceCount = requiredTimestamp(source.occurrence_count, "Session occurrence count")
   var id = requiredString(source.id, "Session ID", false)
+  var userDisplayName = Object.prototype.hasOwnProperty.call(source, "user_display_name")
+    ? optionalString(source.user_display_name, "Session user display name") : null
+  var workspaceRevision = Object.prototype.hasOwnProperty.call(source, "workspace_revision")
+    ? requiredBoundedInteger(source.workspace_revision, "Session Workspace revision", 0,
+      Number.MAX_SAFE_INTEGER) : 0
+  var gitBranch = Object.prototype.hasOwnProperty.call(source, "git_branch")
+    ? optionalString(source.git_branch, "Session git branch") : null
+  var latestAgentName = Object.prototype.hasOwnProperty.call(source, "latest_agent_name")
+    ? optionalString(source.latest_agent_name, "Session latest Agent name") : null
+  var workingContexts = Object.prototype.hasOwnProperty.call(source, "working_contexts")
+    ? source.working_contexts : []
+  var workingContextLimit = maxWorkingContexts === undefined ? 4 : maxWorkingContexts
+  if (!Array.isArray(workingContexts) || workingContexts.length > workingContextLimit)
+    throw new Error("invalid Session working contexts")
+  workingContexts = workingContexts.map(function(context) {
+    if (!context || typeof context !== "object")
+      throw new Error("invalid Session working context")
+    return {
+      repository: requiredString(context.repository, "Session context repository", false),
+      branch: requiredString(context.branch, "Session context branch", false),
+      observed_at_ms: requiredTimestamp(context.observed_at_ms,
+        "Session context observation timestamp"),
+      push_status: normalizeSessionPushStatus(context.push_status),
+      worktree_status: normalizeSessionWorktreeStatus(context.worktree_status)
+    }
+  })
+  var workingContextCount = Object.prototype.hasOwnProperty.call(source, "working_context_count")
+    ? requiredTimestamp(source.working_context_count, "Session working context count")
+    : workingContexts.length
+  if (workingContextCount < workingContexts.length)
+    throw new Error("invalid Session working context count")
+  var attentions = Object.prototype.hasOwnProperty.call(source, "attentions")
+    ? source.attentions : []
+  if (!Array.isArray(attentions)) throw new Error("invalid Session attentions")
+  attentions = attentions.map(function(attention) {
+    if (!attention || typeof attention !== "object")
+      throw new Error("invalid Session attention")
+    return {
+      agent_id: requiredString(attention.agent_id, "Session attention Agent ID", false),
+      reason: requiredEnum(attention.reason, "Session attention reason", ["blocked", "completed"]),
+      observation_revision: requiredBoundedInteger(attention.observation_revision,
+        "Session attention observation revision", 1, Number.MAX_SAFE_INTEGER),
+      observed_at_ms: requiredTimestamp(attention.observed_at_ms,
+        "Session attention timestamp")
+    }
+  })
   return {
     id: id,
     key: resourceKey(nodeId, id),
@@ -334,6 +408,8 @@ function normalizeSessionSummary(source, nodeId, nodeAlias, local) {
     workspace_id: requiredString(source.workspace_id, "Session Workspace ID", false),
     workspace_name: requiredString(source.workspace_name, "Session Workspace name", false),
     description: requiredString(source.description, "Session description", true),
+    user_display_name: userDisplayName,
+    workspace_revision: workspaceRevision,
     integration: requiredString(source.integration, "Session integration", false),
     external_session_id: optionalString(source.external_session_id, "external Session ID"),
     state: requiredEnum(source.state, "Session state",
@@ -341,7 +417,12 @@ function normalizeSessionSummary(source, nodeId, nodeAlias, local) {
     state_is_current: source.state_is_current,
     started_at_ms: requiredTimestamp(source.started_at_ms, "Session start timestamp"),
     last_at_ms: requiredTimestamp(source.last_at_ms, "Session activity timestamp"),
-    occurrence_count: occurrenceCount
+    occurrence_count: occurrenceCount,
+    attentions: attentions,
+    git_branch: gitBranch,
+    latest_agent_name: latestAgentName,
+    working_contexts: workingContexts,
+    working_context_count: workingContextCount
   }
 }
 
@@ -355,20 +436,28 @@ function normalizeSessionEnvelope(raw, command, node) {
   return data
 }
 
-function normalizeSessionList(raw, node) {
+function normalizeSessionList(raw, node, expectedWorkspaceId) {
   var data = normalizeSessionEnvelope(raw, "session.list", node)
   if (!Array.isArray(data.sessions)) throw new Error("missing Sessions")
   return data.sessions.map(function(session) {
-    return normalizeSessionSummary(session, String(node.node_id), String(node.alias || ""), !!node.local)
+    var normalized = normalizeSessionSummary(
+      session, String(node.node_id), String(node.alias || ""), !!node.local)
+    if (String(expectedWorkspaceId || "") !== ""
+        && normalized.workspace_id !== String(expectedWorkspaceId))
+      throw new Error("unexpected Session Workspace identity")
+    return normalized
   })
 }
 
-function normalizeSessionInspect(raw, node, expectedSessionId) {
+function normalizeSessionInspect(raw, node, expectedSessionId, expectedWorkspaceId) {
   var data = normalizeSessionEnvelope(raw, "session.inspect", node)
   var session = normalizeSessionSummary(data.session, String(node.node_id),
-    String(node.alias || ""), !!node.local)
+    String(node.alias || ""), !!node.local, 64)
   if (session.id !== String(expectedSessionId || ""))
     throw new Error("unexpected Session identity")
+  if (String(expectedWorkspaceId || "") !== ""
+      && session.workspace_id !== String(expectedWorkspaceId))
+    throw new Error("unexpected Session Workspace identity")
   var sourceCwd = optionalAbsolutePath(data.session.source_cwd, "Session source cwd")
   if (!Array.isArray(data.session.occurrences)) throw new Error("missing Session occurrences")
   session.source_cwd = sourceCwd
@@ -392,13 +481,133 @@ function sessionsNewestFirst(sessions) {
   })
 }
 
+function groupSessions(sessions, now) {
+  var currentTime = Number(now || Date.now())
+  var recentBoundary = currentTime - (7 * 24 * 60 * 60 * 1000)
+  function groupFor(session) {
+    if ((session.attentions || []).length > 0) return "Needs Attention"
+    if (session.state_is_current) return "Active"
+    return Number(session.last_at_ms || 0) >= recentBoundary ? "Recent" : "History"
+  }
+  function rank(group) {
+    return ["Needs Attention", "Active", "Recent", "History"].indexOf(group)
+  }
+  function attentionRank(session) {
+    var attentions = session.attentions || []
+    for (var i = 0; i < attentions.length; i++)
+      if (attentions[i].reason === "blocked") return 0
+    return 1
+  }
+  return sessions.map(function(session) {
+    return Object.assign({}, session, { session_group: groupFor(session) })
+  }).sort(function(left, right) {
+    var groupDifference = rank(left.session_group) - rank(right.session_group)
+    if (groupDifference !== 0) return groupDifference
+    if (left.session_group === "Needs Attention") {
+      var attentionDifference = attentionRank(left) - attentionRank(right)
+      if (attentionDifference !== 0) return attentionDifference
+      var leftAttention = Math.max.apply(null,
+        left.attentions.map(function(attention) { return attention.observed_at_ms }))
+      var rightAttention = Math.max.apply(null,
+        right.attentions.map(function(attention) { return attention.observed_at_ms }))
+      if (leftAttention !== rightAttention) return rightAttention - leftAttention
+    }
+    var activityDifference = Number(right.last_at_ms) - Number(left.last_at_ms)
+    if (activityDifference !== 0) return activityDifference
+    var leftKey = String(left.key || left.id || "")
+    var rightKey = String(right.key || right.id || "")
+    return leftKey < rightKey ? -1 : (leftKey > rightKey ? 1 : 0)
+  })
+}
+
+function sessionGroupCount(sessions, group) {
+  return sessions.filter(function(session) { return session.session_group === group }).length
+}
+
+function visibleGroupedSessions(sessions, collapsedGroups) {
+  return sessions.filter(function(session) {
+    return !(collapsedGroups || {})[String(session.session_group || "")]
+  })
+}
+
+function sessionListRows(sessions, collapsedGroups) {
+  var rows = []
+  var represented = {}
+  for (var i = 0; i < sessions.length; i++) {
+    var session = sessions[i]
+    var group = String(session.session_group || "")
+    if (!(collapsedGroups || {})[group]) {
+      rows.push(session)
+      continue
+    }
+    if (represented[group]) continue
+    represented[group] = true
+    rows.push(Object.assign({}, session, {
+      key: "session-group:" + group,
+      session_placeholder: true
+    }))
+  }
+  return rows
+}
+
+function sessionAttentionAgents(session, agents) {
+  if (!session) return []
+  var matches = []
+  for (var i = 0; i < (session.attentions || []).length; i++) {
+    var reference = session.attentions[i]
+    for (var j = 0; j < (agents || []).length; j++) {
+      var agent = agents[j]
+      var attention = agent && agent.attention
+      if (!agent || String(agent.node_id) !== String(session.node_id)
+          || String(agent.workspace_id) !== String(session.workspace_id)
+          || String(agent.id) !== String(reference.agent_id)
+          || !attention || String(attention.reason) !== String(reference.reason)
+          || !attention.observation
+          || Number(attention.observation.revision) !== Number(reference.observation_revision))
+        continue
+      matches.push(agent)
+      break
+    }
+  }
+  return matches
+}
+
+function sessionPushStatusLabel(context) {
+  var pushStatus = context ? context.push_status : null
+  if (!pushStatus) return ""
+  if (pushStatus.status === "ahead") {
+    var count = Number(pushStatus.commit_count)
+    return "↑" + count
+  }
+  if (pushStatus.status === "unpublished") return "Unpublished"
+  return ""
+}
+
+function sessionWorkingContextStatusLabel(context) {
+  var values = []
+  var worktreeStatus = context ? context.worktree_status : null
+  if (worktreeStatus && worktreeStatus.unstaged_or_untracked) values.push("Unstaged")
+  if (worktreeStatus && worktreeStatus.staged) values.push("Staged")
+  var pushStatus = sessionPushStatusLabel(context)
+  if (pushStatus !== "") values.push(pushStatus)
+  return values.join(" · ")
+}
+
 function filterSessions(sessions, query) {
   var terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return sessions
   return sessions.filter(function(session) {
+    var contexts = (session.working_contexts || []).map(function(context) {
+      return context.repository + " " + context.branch + " "
+        + sessionWorkingContextStatusLabel(context)
+    }).join(" ")
     var text = [session.description, session.workspace_name, session.integration,
       session.state, session.state_is_current ? "current" : "historical",
-      session.node_alias, session.external_session_id].map(function(value) {
+      session.node_alias, session.external_session_id, session.git_branch,
+      session.latest_agent_name, contexts, session.session_group,
+      (session.attentions || []).map(function(attention) {
+        return attention.reason
+      }).join(" ")].map(function(value) {
         return String(value || "").toLowerCase()
       }).join(" ")
     return terms.every(function(term) { return text.indexOf(term) >= 0 })
@@ -410,8 +619,10 @@ function sessionIdentityMatches(session, nodeId, sessionId) {
     && String(session.id) === String(sessionId)
 }
 
-function sessionListCommand(node) {
-  var argv = ["boomux", "session", "list", "--json"]
+function sessionListCommand(node, workspaceId) {
+  var argv = ["boomux", "session", "list"]
+  if (String(workspaceId || "") !== "") argv.push("--workspace", String(workspaceId))
+  argv.push("--json")
   if (node && !node.local) argv.push("--node", String(node.node_id))
   return argv
 }
@@ -429,24 +640,85 @@ function sessionOpenCommand(session, workspaceId) {
   return argv
 }
 
-function sessionPreviewCommand(session) {
-  if (!session || !session.node_local || !Array.isArray(session.occurrences)) return []
-  var current = session.occurrences.find(function(occurrence) { return occurrence.is_current })
-  if (!current) return []
-  return ["boomux", "read", String(current.shell_id), "--lines", "40", "--json",
-    "--run-id", String(current.run_id), "--after-revision", "0"]
+function sessionRenameCommand(session, name) {
+  var argv = ["boomux", "session", "rename", String(session.id), String(name),
+    "--revision", String(session.workspace_revision)]
+  if (!session.node_local) argv.push("--node", String(session.node_id))
+  argv.push("--json")
+  return argv
 }
 
-function normalizeSessionPreview(raw, session) {
-  var data = parseEnvelope(raw, "read")
-  var current = session && Array.isArray(session.occurrences)
-    ? session.occurrences.find(function(occurrence) { return occurrence.is_current }) : null
-  if (!current || String(data.shell_id || "") !== String(current.shell_id)
-      || String(data.run_id || "") !== String(current.run_id))
-    throw new Error("unexpected Session preview identity")
-  if (typeof data.output !== "string" || typeof data.status !== "string")
-    throw new Error("invalid Session preview")
-  return { available: true, output: data.output, status: data.status }
+function sessionResetNameCommand(session) {
+  var argv = ["boomux", "session", "reset-name", String(session.id),
+    "--revision", String(session.workspace_revision)]
+  if (!session.node_local) argv.push("--node", String(session.node_id))
+  argv.push("--json")
+  return argv
+}
+
+function sessionHideCommand(session) {
+  var argv = ["boomux", "session", "hide", String(session.id), "--workspace",
+    String(session.workspace_id)]
+  if (!session.node_local) argv.push("--node", String(session.node_id))
+  argv.push("--json")
+  return argv
+}
+
+function normalizeSessionNameMutation(raw, command, node, expected) {
+  var data = normalizeSessionEnvelope(raw, command, node)
+  var result = data.result
+  if (!result || !expected
+      || requiredString(result.session_id, "Session mutation ID", false) !== expected.id
+      || requiredString(result.workspace_id, "Session mutation Workspace ID", false)
+        !== expected.workspace_id
+      || requiredBoundedInteger(result.workspace_revision,
+        "Session mutation Workspace revision", 1, Number.MAX_SAFE_INTEGER)
+        !== Number(expected.workspace_revision) + 1
+      || typeof result.changed !== "boolean")
+    throw new Error("unexpected Session mutation identity")
+  var userDisplayName = optionalString(result.user_display_name,
+    "Session mutation user display name")
+  if (command === "session.rename" && userDisplayName === null)
+    throw new Error("unexpected Session display name")
+  if (command === "session.reset-name" && userDisplayName !== null)
+    throw new Error("unexpected Session display name")
+  return {
+    id: result.session_id,
+    key: resourceKey(node.node_id, result.session_id),
+    node_id: String(node.node_id),
+    node_alias: String(node.alias || (node.local ? "local" : node.node_id)),
+    node_local: !!node.local,
+    workspace_id: result.workspace_id,
+    user_display_name: userDisplayName,
+    workspace_revision: result.workspace_revision,
+    changed: result.changed
+  }
+}
+
+function normalizeSessionHideMutation(raw, node, expected) {
+  var data = normalizeSessionEnvelope(raw, "session.hide", node)
+  var result = data.result
+  if (!result || !expected
+      || requiredString(result.session_id, "Session hide ID", false) !== expected.id
+      || requiredString(result.workspace_id, "Session hide Workspace ID", false)
+        !== expected.workspace_id
+      || typeof result.changed !== "boolean")
+    throw new Error("unexpected Session hide identity")
+  var revision = requiredBoundedInteger(result.workspace_revision,
+    "Session hide Workspace revision", 1, Number.MAX_SAFE_INTEGER)
+  var expectedRevision = Number(expected.workspace_revision)
+  if (revision !== expectedRevision + (result.changed ? 1 : 0))
+    throw new Error("unexpected Session hide revision")
+  return {
+    id: result.session_id,
+    key: resourceKey(node.node_id, result.session_id),
+    node_id: String(node.node_id),
+    node_alias: String(node.alias || (node.local ? "local" : node.node_id)),
+    node_local: !!node.local,
+    workspace_id: result.workspace_id,
+    workspace_revision: revision,
+    changed: result.changed
+  }
 }
 
 function sessionNodeEligible(node, cliFeatures) {
@@ -457,6 +729,60 @@ function sessionNodeEligible(node, cliFeatures) {
   return required.every(function(feature) {
     return hasFeature(cliFeatures, feature) && hasFeature(node.observed_capabilities, feature)
   })
+}
+
+function workspaceSessionRequests(workspace, nodes, cliFeatures) {
+  if (!workspace || !workspace.is_global || workspace.closing) return []
+  var requests = []
+  for (var i = 0; i < (workspace.placements || []).length; i++) {
+    var placement = workspace.placements[i]
+    if (!placement || String(placement.state) !== "active" || !placement.available) continue
+    var node = nodeFor(nodes || [], String(placement.node_id || ""))
+    if (!sessionNodeEligible(node, cliFeatures)) continue
+    var ownerWorkspaceId = String(placement.workspace_id || "")
+    if (ownerWorkspaceId === "") continue
+    requests.push({
+      key: ownerKey(node.node_id, ownerWorkspaceId),
+      nodeId: String(node.node_id),
+      ownerWorkspaceId: ownerWorkspaceId
+    })
+  }
+  return requests
+}
+
+function sessionSourceIdentity(workspace, nodes, cliFeatures) {
+  if (!workspace) return JSON.stringify({ source: "none" })
+  var requests = workspaceSessionRequests(workspace, nodes, cliFeatures)
+  return JSON.stringify({ source: String(workspace.id || ""), placements: requests.map(
+    function(request) { return [request.nodeId, request.ownerWorkspaceId] }) })
+}
+
+function sessionSourceFreshness(workspace, nodes, cliFeatures) {
+  if (!workspace) return JSON.stringify({ source: "none" })
+  var requests = workspaceSessionRequests(workspace, nodes, cliFeatures)
+  var placements = requests.map(function(request) {
+    var revision = 0
+    for (var i = 0; i < (workspace.placements || []).length; i++) {
+      var placement = workspace.placements[i]
+      if (String(placement.node_id || "") === request.nodeId
+          && String(placement.workspace_id || "") === request.ownerWorkspaceId) {
+        revision = Number(placement.owner_revision || 0)
+        break
+      }
+    }
+    return [request.nodeId, request.ownerWorkspaceId, revision]
+  })
+  return JSON.stringify({ source: String(workspace.id || ""), placements: placements })
+}
+
+function sessionDisplayNameActionable(session, supported, nodeEligible, nodeCapabilities) {
+  if (!session || !supported || !nodeEligible || Number(session.workspace_revision) <= 0) return false
+  return hasFeature(nodeCapabilities, "session_display_names")
+}
+
+function sessionHideActionable(session, supported, nodeEligible, nodeCapabilities) {
+  if (!session || !supported || !nodeEligible || Number(session.workspace_revision) <= 0) return false
+  return hasFeature(nodeCapabilities, "workspace_session_hiding")
 }
 
 function sessionRequestCurrent(request, generation, opened, activeTab, online, node) {
@@ -1394,14 +1720,29 @@ if (typeof module !== "undefined") module.exports = {
   normalizeSessionInspect: normalizeSessionInspect,
   normalizeSessionOccurrence: normalizeSessionOccurrence,
   sessionsNewestFirst: sessionsNewestFirst,
+  groupSessions: groupSessions,
+  sessionGroupCount: sessionGroupCount,
+  visibleGroupedSessions: visibleGroupedSessions,
+  sessionListRows: sessionListRows,
+  sessionAttentionAgents: sessionAttentionAgents,
+  sessionPushStatusLabel: sessionPushStatusLabel,
+  sessionWorkingContextStatusLabel: sessionWorkingContextStatusLabel,
   filterSessions: filterSessions,
   sessionIdentityMatches: sessionIdentityMatches,
   sessionListCommand: sessionListCommand,
   sessionInspectCommand: sessionInspectCommand,
   sessionOpenCommand: sessionOpenCommand,
-  sessionPreviewCommand: sessionPreviewCommand,
-  normalizeSessionPreview: normalizeSessionPreview,
+  sessionRenameCommand: sessionRenameCommand,
+  sessionResetNameCommand: sessionResetNameCommand,
+  sessionHideCommand: sessionHideCommand,
+  normalizeSessionNameMutation: normalizeSessionNameMutation,
+  normalizeSessionHideMutation: normalizeSessionHideMutation,
   sessionNodeEligible: sessionNodeEligible,
+  workspaceSessionRequests: workspaceSessionRequests,
+  sessionSourceIdentity: sessionSourceIdentity,
+  sessionSourceFreshness: sessionSourceFreshness,
+  sessionDisplayNameActionable: sessionDisplayNameActionable,
+  sessionHideActionable: sessionHideActionable,
   sessionRequestCurrent: sessionRequestCurrent,
   sessionActionable: sessionActionable,
   sessionHarnessLabel: sessionHarnessLabel,

@@ -29,7 +29,13 @@ Panel {
     ? "right" : "left"
   readonly property int paneWidth: Math.max(Style.space(280),
     Math.min(Style.space(520), Number(setting("paneWidth", Style.space(360)))))
-  readonly property int sessionBrowserWidth: Math.max(paneWidth, Style.space(760))
+  readonly property int sessionPaneWidth: Style.space(520)
+
+  GlobalShortcut {
+    id: paneResizeShortcut
+    name: "boomux-pane-resize"
+    description: "Resize a Boomux pane"
+  }
 
   property var workspaces: []
   property var workspaceTreeWorkspaces: []
@@ -39,23 +45,46 @@ Panel {
   property var nodes: []
   property var sessions: []
   property var sessionResults: ({})
+  property var sessionPendingResults: ({})
+  property var sessionCaches: ({})
+  property var sessionCacheOrder: []
   property var sessionWarnings: []
+  property var sessionPendingWarnings: []
   property var sessionQueue: []
   property var sessionActiveRequest: null
+  property bool sessionDiscoveryActive: false
+  property int sessionDiscoveryCompleted: 0
+  property int sessionDiscoveryTotal: 0
   property int sessionGeneration: 0
   property double sessionExpiresAt: 0
   property bool sessionRefreshPending: false
   property bool sessionRefreshAfterSnapshot: false
   property bool sessionSnapshotRefreshQueued: false
   property string selectedSessionKey: ""
+  property string expandedSessionKey: ""
   property var sessionDetail: null
   property var sessionInspectRequest: null
-  property var sessionPreview: null
-  property var sessionPreviewRequest: null
+  property var pendingSessionInspection: null
   property var sessionOpenRequest: null
+  property var sessionNameRequest: null
+  property var sessionHideRequest: null
+  property var sessionRenameDraft: null
+  property string sessionEditingKey: ""
+  property string sessionEditingDraft: ""
+  property string sessionEditingError: ""
+  property bool sessionRailOpen: false
+  property string sessionRailPendingWorkspaceId: ""
+  property bool sessionRailPendingFocus: false
+  property string sessionSourceWorkspaceId: ""
+  property string sessionSourceWorkspaceName: ""
+  property string sessionCacheSourceSignature: ""
+  property string sessionCacheFreshnessSignature: ""
+  property string sessionActiveSourceSignature: ""
+  property string sessionActiveFreshnessSignature: ""
   property string sessionTargetWorkspaceId: ""
   property bool sessionCreateNewWorkspace: false
   property string sessionQuery: ""
+  property var sessionCollapsedGroups: ({ "History": true })
   property var pendingSessionWorkspaceCreation: null
   property var projects: []
   property var workspaceDetail: null
@@ -67,10 +96,12 @@ Panel {
   property string pendingWorkspacePositionKey: ""
   property int workspaceTreeHeight: Style.space(340)
   property int selectedIndex: 0
+  property int selectedSessionIndex: -1
   property bool online: false
   property bool refreshing: false
   property int refreshPending: 0
   property bool capabilitiesReady: false
+  property bool refreshAfterCapabilities: false
   property bool cliAvailable: false
   property string cliVersion: ""
   property var compatibilityRequirements: null
@@ -106,7 +137,11 @@ Panel {
   property bool focusEventsSupported: false
   property bool workspaceSelectionSupported: false
   property bool sessionCatalogSupported: false
+  property bool sessionInspectSupported: false
   property bool exactSessionOpenSupported: false
+  property bool sessionDisplayNamesSupported: false
+  property bool sessionPresentationContextSupported: false
+  property bool sessionHideSupported: false
   property bool webRunning: false
   property bool webTailscale: false
   property string webDashboardUrl: ""
@@ -138,6 +173,7 @@ Panel {
   property int selectedWorkspaceItemIndex: 0
   property var renameTarget: null
   property string renameError: ""
+  property bool renameReturnToSessionRail: false
   property string inspectRequestedKey: ""
   property string inspectActiveKey: ""
   property string error: ""
@@ -212,8 +248,13 @@ Panel {
         || attentionRevision(agent) > 0)
   }))
   readonly property var paneAgents: visibleAgents
-  readonly property var allPaneSessions: WorkspaceModel.sessionsNewestFirst(sessions)
-  readonly property var paneSessions: WorkspaceModel.filterSessions(allPaneSessions, sessionQuery)
+  readonly property var allPaneSessions: WorkspaceModel.groupSessions(sessions, clockNow)
+  readonly property var filteredPaneSessions:
+    WorkspaceModel.filterSessions(allPaneSessions, sessionQuery)
+  readonly property var paneSessions:
+    WorkspaceModel.visibleGroupedSessions(filteredPaneSessions, sessionCollapsedGroups)
+  readonly property var sessionListRows:
+    WorkspaceModel.sessionListRows(filteredPaneSessions, sessionCollapsedGroups)
   readonly property var cursorWorkspace: selectedWorkspaceIndex >= 0
     && selectedWorkspaceIndex < workspaceTreeWorkspaces.length
     ? workspaceTreeWorkspaces[selectedWorkspaceIndex] : null
@@ -271,12 +312,15 @@ Panel {
     && selectedProjectIndex < visibleProjects.length ? visibleProjects[selectedProjectIndex] : null
   readonly property bool directoryPickerCanGoUp: directoryPickerPath !== ""
     && directoryPickerPath !== "/"
-  readonly property int itemCount: activeTab === "agents" ? paneAgents.length
-    : (activeTab === "sessions" ? paneSessions.length : visibleNodes.length)
+  readonly property int itemCount: activeTab === "agents" ? paneAgents.length : visibleNodes.length
   readonly property var selectedItem: {
-    var model = activeTab === "agents" ? paneAgents
-      : (activeTab === "sessions" ? paneSessions : visibleNodes)
+    var model = activeTab === "agents" ? paneAgents : visibleNodes
     return selectedIndex >= 0 && selectedIndex < model.length ? model[selectedIndex] : null
+  }
+  readonly property var selectedSession: {
+    for (var i = 0; i < paneSessions.length; i++)
+      if (paneSessions[i].key === selectedSessionKey) return paneSessions[i]
+    return null
   }
   readonly property var sessionTargetWorkspace: {
     for (var i = 0; i < visibleWorkspaces.length; i++) {
@@ -307,6 +351,19 @@ Panel {
 
   onSessionQueryChanged: syncSessionIndex()
 
+  onActiveBoomuxWorkspaceIdChanged: {
+    if (sessionRailPendingWorkspaceId !== ""
+        && activeBoomuxWorkspaceId === sessionRailPendingWorkspaceId) {
+      var focusKeyboard = sessionRailPendingFocus
+      sessionRailPendingWorkspaceId = ""
+      sessionRailPendingFocus = false
+      sessionRailOpen = true
+      syncSessionRailSource()
+      if (focusKeyboard) focusSessionRail()
+      else releaseSessionRailFocus()
+    } else if (sessionRailOpen) syncSessionRailSource()
+  }
+
   onAgentHostNameChanged: if (agentHostDropdown)
     agentHostDropdown.value = agentHostName
 
@@ -318,10 +375,19 @@ Panel {
   onRenameTargetChanged: Qt.callLater(function() {
     if (renameTarget) {
       renameField.text = renameTarget.kind === "workspace"
-        ? String(renameTarget.workspace.name) : String(renameTarget.name)
+        ? String(renameTarget.workspace.name)
+        : (renameTarget.kind === "session"
+          ? String(renameTarget.nameDraft || renameTarget.session.user_display_name
+            || renameTarget.session.description || "")
+          : String(renameTarget.name))
       renameField.selectAll()
       renameField.forceActiveFocus()
-    } else if (opened) keyCatcher.forceActiveFocus()
+    } else if (opened) {
+      if (renameReturnToSessionRail && sessionRailOpen) {
+        renameReturnToSessionRail = false
+        focusSessionRail()
+      } else keyCatcher.forceActiveFocus()
+    }
   })
 
   visible: true
@@ -574,13 +640,13 @@ Panel {
 
   function refreshInstalledState() {
     invalidateProjectDiscovery()
+    refreshAfterCapabilities = true
     capabilitiesReady = false
     if (!capabilityProcess.running) capabilityProcess.running = true
-    refresh()
   }
 
   function requestExplicitRefresh() {
-    var refreshSessions = opened && activeTab === "sessions" && sessionCatalogSupported
+    var refreshSessions = opened && sessionRailOpen && sessionCatalogSupported
     sessionRefreshAfterSnapshot = refreshSessions && !nodeSnapshotProcess.running
     sessionSnapshotRefreshQueued = refreshSessions && nodeSnapshotProcess.running
     refreshInstalledState()
@@ -714,7 +780,15 @@ Panel {
         && cliFeatures.indexOf("create_and_open_shell") >= 0
       sessionCatalogSupported = data.json_commands.indexOf("session.list") >= 0
         && cliFeatures.indexOf("projected_agent_sessions") >= 0
+      sessionInspectSupported = data.json_commands.indexOf("session.inspect") >= 0
+        && cliFeatures.indexOf("projected_agent_sessions") >= 0
       exactSessionOpenSupported = cliFeatures.indexOf("exact_session_open") >= 0
+      sessionDisplayNamesSupported = cliFeatures.indexOf("session_display_names") >= 0
+        && data.json_commands.indexOf("session.rename") >= 0
+        && data.json_commands.indexOf("session.reset-name") >= 0
+      sessionPresentationContextSupported = cliFeatures.indexOf("session_presentation_context") >= 0
+      sessionHideSupported = cliFeatures.indexOf("workspace_session_hiding") >= 0
+        && data.json_commands.indexOf("session.hide") >= 0
       federationSupported = data.json_commands.indexOf("node.snapshot") >= 0
         && cliFeatures.indexOf("combined_node_snapshot") >= 0
         && cliFeatures.indexOf("node_qualified_dashboard") >= 0
@@ -742,7 +816,11 @@ Panel {
       focusEventsSupported = false
       workspaceSelectionSupported = false
       sessionCatalogSupported = false
+      sessionInspectSupported = false
       exactSessionOpenSupported = false
+      sessionDisplayNamesSupported = false
+      sessionPresentationContextSupported = false
+      sessionHideSupported = false
       webRunning = false
       webTailscale = false
       webDashboardUrl = ""
@@ -753,6 +831,10 @@ Panel {
       console.warn("io.github.gardnmi.boomux:", exception)
     }
     capabilitiesReady = true
+    if (refreshAfterCapabilities) {
+      refreshAfterCapabilities = false
+      Qt.callLater(refresh)
+    }
   }
 
   function normalizeAgent(source, node, workspaceName) {
@@ -777,6 +859,7 @@ Panel {
       applyAgentSnapshot(snapshot.agents)
       online = true
       preserveSelections()
+      if (sessionRailOpen) syncSessionRailSource()
       if (workspaceModelChanged) restoreWorkspaceTreeScroll(treeScrollY)
       openPendingShellIfPresent()
       resolvePendingWorkspaceCreation()
@@ -896,7 +979,12 @@ Panel {
     for (var i = 0; i < data.events.length; i++) {
       if (data.events[i] && data.events[i].event === "focused_terminal_presentation_changed") {
         requestFocusedTerminalRefresh()
-        break
+      } else if (data.events[i]
+          && ["agent_session_display_name_changed", "agent_working_context_observed",
+            "node_projection_changed"].indexOf(data.events[i].event) >= 0
+          && opened && sessionRailOpen) {
+        sessionExpiresAt = 0
+        ensureSessionDiscovery()
       }
     }
   }
@@ -939,6 +1027,7 @@ Panel {
       })
       var workspaceModelChanged = applyWorkspaceSnapshot(nextWorkspaces)
       online = true
+      if (sessionRailOpen) syncSessionRailSource()
 
       if (!selectedWorkspace || selectedWorkspaceKey === "")
         selectedWorkspaceKey = workspaces.length > 0 ? workspaces[0].key : ""
@@ -1552,33 +1641,105 @@ Panel {
 
   function selectTab(tab) {
     if (tab === "workspaces") tab = "agents"
+    if (tab !== "agents" && tab !== "nodes") return
     if (activeTab === tab) return
-    if (tab !== "sessions") sessionDetail = null
     activeTab = tab
     focusSection = "lower"
     if (tab === "nodes") syncNodeIndex()
-    else if (tab === "sessions") {
-      syncSessionIndex()
-      ensureSessionDiscovery()
-    } else syncAgentIndex()
+    else syncAgentIndex()
     cancelForm()
   }
 
-  function openSessionBrowser() {
-    sessionCreateNewWorkspace = false
-    sessionTargetWorkspaceId = activeBoomuxWorkspaceId
-    sessionSearchField.text = ""
-    selectTab("sessions")
-    panel.enterKeyboardMode()
-    Qt.callLater(function() { sessionSearchField.forceActiveFocus() })
+  function toggle() {
+    if (opened) {
+      close()
+      return
+    }
+    open()
   }
 
-  function closeSessionBrowser() {
-    sessionWorkspaceDropdown.close()
-    sessionCreateNewWorkspace = false
-    sessionSearchField.text = ""
-    selectTab("agents")
+  function closeSessionRail() {
+    var returnFocusToPanel = sessionRail.keyboardMode
+    saveSessionCache()
+    sessionRail.exitKeyboardMode()
+    sessionRailOpen = false
+    sessionRailPendingWorkspaceId = ""
+    sessionRailPendingFocus = false
+    suspendSessionActivity()
+    if (returnFocusToPanel && opened) panel.enterKeyboardMode()
+  }
+
+  function focusSessionRail() {
+    if (!sessionRailOpen) return
     panel.exitKeyboardMode()
+    sessionRail.enterKeyboardMode()
+    Qt.callLater(function() {
+      if (root.sessionRailOpen) sessionSearchField.forceActiveFocus()
+    })
+  }
+
+  function releaseSessionRailFocus() {
+    sessionRail.exitKeyboardMode()
+    panel.exitKeyboardMode()
+  }
+
+  function sessionRailIsOpenForWorkspace(workspace) {
+    if (!workspace) return false
+    var workspaceId = String(workspace.id)
+    return sessionRailPendingWorkspaceId === workspaceId
+      || (sessionRailOpen && sessionSourceWorkspaceId === workspaceId)
+  }
+
+  function toggleWorkspaceSessionRail(workspace) {
+    if (sessionRailIsOpenForWorkspace(workspace)) {
+      closeSessionRail()
+      return
+    }
+    revealSessionRailForWorkspace(workspace, false)
+  }
+
+  function revealSessionRailForWorkspace(workspace, focusKeyboard) {
+    if (!workspace || !workspace.is_global || workspace.closing) return
+    if (workspace.id === activeBoomuxWorkspaceId) {
+      sessionRailPendingWorkspaceId = ""
+      sessionRailPendingFocus = false
+      sessionRailOpen = true
+      syncSessionRailSource()
+      if (focusKeyboard) focusSessionRail()
+      else releaseSessionRailFocus()
+      return
+    }
+    if (sessionRailOpen) closeSessionRail()
+    sessionRailPendingWorkspaceId = String(workspace.id)
+    sessionRailPendingFocus = !!focusKeyboard
+    activateWorkspaceRow(workspace)
+  }
+
+  function syncSessionRailSource() {
+    if (!sessionRailOpen) return
+    var targetId = String(activeBoomuxWorkspaceId || "")
+    if (sessionRailPendingWorkspaceId !== "") {
+      if (targetId === sessionRailPendingWorkspaceId) sessionRailPendingWorkspaceId = ""
+      else targetId = ""
+    }
+    var source = null
+    for (var i = 0; i < workspaces.length; i++) {
+      if (workspaces[i].is_global && !workspaces[i].closing && workspaces[i].id === targetId) {
+        source = workspaces[i]
+        break
+      }
+    }
+    var nextSourceId = source ? String(source.id) : ""
+    var sourceChanged = nextSourceId !== sessionSourceWorkspaceId
+    sessionSourceWorkspaceId = nextSourceId
+    sessionSourceWorkspaceName = source ? String(source.name) : ""
+    if (sourceChanged) {
+      invalidateSessionCacheForSource(currentSessionSourceSignature(),
+        currentSessionFreshnessSignature())
+    } else {
+      validateSessionCacheFreshness()
+    }
+    ensureSessionDiscovery()
   }
 
   function cycleTab(direction) {
@@ -1640,8 +1801,7 @@ Panel {
     Qt.callLater(function() {
       if (root.focusSection === "workspaces") root.revealContentItem(workspaceTreeColumn)
       else if (root.focusSection === "lower") root.revealContentItem(
-        root.activeTab === "agents" ? agentColumn
-          : (root.activeTab === "sessions" ? sessionColumn : nodeColumn))
+        root.activeTab === "agents" ? agentColumn : nodeColumn)
       else root.revealContentItem(workspaceTreeList)
     })
   }
@@ -1719,9 +1879,6 @@ Panel {
     if (activeTab === "agents") {
       selectedAgentKey = paneAgents[selectedIndex].key
       agentList.positionViewAtIndex(selectedIndex, ListView.Contain)
-    } else if (activeTab === "sessions") {
-      selectedSessionKey = paneSessions[selectedIndex].key
-      sessionList.positionViewAtIndex(selectedIndex, ListView.Contain)
     } else {
       selectedNodeId = visibleNodes[selectedIndex].node_id
       nodeList.positionViewAtIndex(selectedIndex, ListView.Contain)
@@ -1730,7 +1887,6 @@ Panel {
 
   function activateSelected() {
     if (activeTab === "agents") openAgent(selectedItem)
-    else if (activeTab === "sessions") openSelectedSession()
     else if (activeTab === "nodes" && selectedItem) showCursorActionMenu()
   }
 
@@ -1890,15 +2046,71 @@ Panel {
   }
 
   function syncSessionIndex() {
-    if (activeTab !== "sessions") return
     for (var i = 0; i < paneSessions.length; i++) {
       if (paneSessions[i].key === selectedSessionKey) {
-        selectedIndex = i
+        selectedSessionIndex = i
         return
       }
     }
-    selectedIndex = paneSessions.length > 0 ? 0 : -1
+    selectedSessionIndex = paneSessions.length > 0 ? 0 : -1
     selectedSessionKey = paneSessions.length > 0 ? paneSessions[0].key : ""
+  }
+
+  function moveSessionSelection(offset) {
+    if (paneSessions.length === 0) return
+    selectedSessionIndex = Math.max(0,
+      Math.min((selectedSessionIndex < 0 ? 0 : selectedSessionIndex) + offset,
+        paneSessions.length - 1))
+    selectedSessionKey = paneSessions[selectedSessionIndex].key
+    sessionBrowserList.positionViewAtIndex(sessionListIndex(selectedSessionKey), ListView.Contain)
+  }
+
+  function sessionListIndex(key) {
+    for (var i = 0; i < sessionListRows.length; i++)
+      if (sessionListRows[i].key === key) return i
+    return -1
+  }
+
+  function selectSession(session) {
+    if (!session || session.session_placeholder) return
+    selectedSessionKey = session.key
+    syncSessionIndex()
+  }
+
+  function setSessionExpanded(session, expanded) {
+    if (!session || session.session_placeholder) return
+    selectSession(session)
+    expandedSessionKey = expanded ? session.key : ""
+    Qt.callLater(function() {
+      sessionBrowserList.positionViewAtIndex(sessionListIndex(session.key), ListView.Contain)
+    })
+  }
+
+  function toggleSessionExpanded(session) {
+    if (session) setSessionExpanded(session, expandedSessionKey !== session.key)
+  }
+
+  function expandSelectedSession() {
+    if (selectedSession) setSessionExpanded(selectedSession, true)
+  }
+
+  function collapseSelectedSession() {
+    if (selectedSession && expandedSessionKey === selectedSession.key)
+      setSessionExpanded(selectedSession, false)
+  }
+
+  function sessionGroupCollapsed(group) {
+    return !!sessionCollapsedGroups[String(group || "")]
+  }
+
+  function toggleSessionGroup(group) {
+    var key = String(group || "")
+    if (key === "") return
+    var next = Object.assign({}, sessionCollapsedGroups)
+    next[key] = !next[key]
+    sessionCollapsedGroups = next
+    syncSessionIndex()
+    saveSessionCache()
   }
 
   function suspendSessionActivity() {
@@ -1906,18 +2118,21 @@ Panel {
     sessionWorkspaceDropdown.close()
     sessionQueue = []
     sessionActiveRequest = null
+    sessionPendingResults = ({})
+    sessionPendingWarnings = []
+    sessionDiscoveryActive = false
+    sessionDiscoveryCompleted = 0
+    sessionDiscoveryTotal = 0
     sessionRefreshPending = false
     sessionRefreshAfterSnapshot = false
     sessionSnapshotRefreshQueued = false
     sessionDetail = null
     sessionInspectRequest = null
-    sessionPreview = null
-    sessionPreviewRequest = null
+    pendingSessionInspection = null
     sessionOpenRequest = null
     pendingSessionWorkspaceCreation = null
     stopAndClearSessionProcess(sessionListProcess)
     stopAndClearSessionProcess(sessionInspectProcess)
-    stopAndClearSessionProcess(sessionPreviewProcess)
     stopAndClearSessionProcess(sessionOpenProcess)
   }
 
@@ -1925,9 +2140,20 @@ Panel {
     suspendSessionActivity()
     sessions = []
     sessionResults = ({})
+    sessionPendingResults = ({})
+    sessionCaches = ({})
+    sessionCacheOrder = []
     sessionWarnings = []
     sessionExpiresAt = 0
     selectedSessionKey = ""
+    expandedSessionKey = ""
+    sessionQuery = ""
+    sessionCollapsedGroups = ({ "History": true })
+    if (sessionSearchField) sessionSearchField.text = ""
+    sessionCacheSourceSignature = ""
+    sessionCacheFreshnessSignature = ""
+    sessionActiveSourceSignature = ""
+    sessionActiveFreshnessSignature = ""
   }
 
   function prepareSessionProcess(process) {
@@ -1962,15 +2188,15 @@ Panel {
     if (!request || sessionListProcess.running) return
     sessionActiveRequest = null
     var node = nodeFor(request.nodeId)
-    if (WorkspaceModel.sessionRequestCurrent(request, sessionGeneration,
-        opened, activeTab, online, node)) {
-      var warnings = sessionWarnings.slice()
+    if (sessionRequestIsCurrent(request, node)) {
+      var warnings = sessionPendingWarnings.slice()
       warnings.push(String(node.alias || node.node_id) + ": unavailable")
-      sessionWarnings = warnings.slice(-8)
+      sessionPendingWarnings = warnings.slice(-8)
     }
+    sessionDiscoveryCompleted++
     sessionListProcess.command = []
     clearSessionProcessOutput(sessionListProcess)
-    if (opened && activeTab === "sessions" && online) startNextSessionList()
+    if (opened && sessionRailOpen && online) startNextSessionList()
   }
 
   function recoverStoppedSessionInspect() {
@@ -1981,21 +2207,10 @@ Panel {
     showActionFailure("Session inspection failed", "Could not start Session inspection")
   }
 
-  function recoverStoppedSessionPreview() {
-    if (!sessionPreviewRequest || sessionPreviewProcess.running) return
-    sessionPreviewRequest = null
-    sessionPreviewProcess.command = []
-    clearSessionProcessOutput(sessionPreviewProcess)
-    sessionPreview = { available: false, message: "Could not load recent terminal output." }
-  }
-
   function closeSessionInspection() {
     sessionDetail = null
     sessionInspectRequest = null
-    sessionPreview = null
-    sessionPreviewRequest = null
     stopAndClearSessionProcess(sessionInspectProcess)
-    stopAndClearSessionProcess(sessionPreviewProcess)
   }
 
   function recoverStoppedSessionOpen() {
@@ -2006,36 +2221,205 @@ Panel {
     showActionFailure("Session open failed", "Could not start exact Session opening")
   }
 
-  function sessionDiscoveryNodes() {
-    return nodes.filter(function(node) {
-      return WorkspaceModel.sessionNodeEligible(node, cliFeatures)
+  function recoverStoppedSessionName() {
+    if (!sessionNameRequest || sessionNameProcess.running) return
+    var request = sessionNameRequest
+    sessionNameRequest = null
+    sessionNameProcess.command = []
+    clearSessionProcessOutput(sessionNameProcess)
+    showActionFailure("Session name change failed", "Could not start the Session name change")
+    if (request.command === "session.rename") {
+      restoreSessionAfterRename(request.session)
+      if (opened && sessionRailOpen
+          && request.sourceSignature === currentSessionSourceSignature()) {
+        beginInlineSessionRename(request.session, request.requestedName,
+          "Could not start the Session name change")
+      } else sessionRenameDraft = { nodeId: request.nodeId,
+        sessionId: request.sessionId, sourceSignature: request.sourceSignature,
+        name: request.requestedName }
+    }
+  }
+
+  function recoverStoppedSessionHide() {
+    if (!sessionHideRequest || sessionHideProcess.running) return
+    sessionHideRequest = null
+    sessionHideProcess.command = []
+    clearSessionProcessOutput(sessionHideProcess)
+    showActionFailure("Session hide failed", "Could not start hiding the Session")
+  }
+
+  function sessionSourceWorkspace() {
+    if (sessionSourceWorkspaceId === "") return null
+    for (var i = 0; i < workspaces.length; i++) {
+      var workspace = workspaces[i]
+      if (workspace.is_global && workspace.id === sessionSourceWorkspaceId) return workspace
+    }
+    return null
+  }
+
+  function sessionDiscoveryRequests() {
+    var source = sessionSourceWorkspace()
+    return source ? WorkspaceModel.workspaceSessionRequests(source, nodes, cliFeatures) : []
+  }
+
+  function currentSessionSourceSignature() {
+    var source = sessionSourceWorkspace()
+    if (sessionSourceWorkspaceId !== "" && !source)
+      source = { id: sessionSourceWorkspaceId, is_global: true, placements: [] }
+    return WorkspaceModel.sessionSourceIdentity(source, nodes, cliFeatures)
+  }
+
+  function currentSessionFreshnessSignature() {
+    var source = sessionSourceWorkspace()
+    if (sessionSourceWorkspaceId !== "" && !source)
+      source = { id: sessionSourceWorkspaceId, is_global: true, placements: [] }
+    return WorkspaceModel.sessionSourceFreshness(source, nodes, cliFeatures)
+  }
+
+  function invalidateSessionCacheForSource(sourceSignature, freshnessSignature) {
+    saveSessionCache()
+    sessionGeneration++
+    sessionQueue = []
+    sessionActiveRequest = null
+    sessionPendingResults = ({})
+    sessionPendingWarnings = []
+    sessionDiscoveryActive = false
+    sessionDiscoveryCompleted = 0
+    sessionDiscoveryTotal = 0
+    sessionRefreshPending = false
+    sessionResults = ({})
+    sessionWarnings = []
+    sessions = []
+    sessionExpiresAt = 0
+    selectedSessionKey = ""
+    expandedSessionKey = ""
+    sessionQuery = ""
+    sessionCollapsedGroups = ({ "History": true })
+    if (sessionSearchField) sessionSearchField.text = ""
+    stopAndClearSessionProcess(sessionListProcess)
+    sessionCacheSourceSignature = String(sourceSignature || "")
+    sessionCacheFreshnessSignature = String(freshnessSignature || "")
+    sessionActiveSourceSignature = ""
+    sessionActiveFreshnessSignature = ""
+    restoreSessionCache(sessionCacheSourceSignature, sessionCacheFreshnessSignature)
+  }
+
+  function saveSessionCache() {
+    if (sessionCacheSourceSignature === "") return
+    var nextCaches = Object.assign({}, sessionCaches)
+    nextCaches[sessionCacheSourceSignature] = {
+      freshnessSignature: sessionCacheFreshnessSignature,
+      sessions: sessions.slice(),
+      results: Object.assign({}, sessionResults),
+      warnings: sessionWarnings.slice(),
+      selectedSessionKey: selectedSessionKey,
+      expandedSessionKey: expandedSessionKey,
+      query: sessionQuery,
+      collapsedGroups: Object.assign({}, sessionCollapsedGroups),
+      expiresAt: sessionExpiresAt
+    }
+    var order = sessionCacheOrder.filter(function(signature) {
+      return signature !== sessionCacheSourceSignature
+    })
+    order.push(sessionCacheSourceSignature)
+    while (order.length > 8) delete nextCaches[order.shift()]
+    sessionCacheOrder = order
+    sessionCaches = nextCaches
+  }
+
+  function restoreSessionCache(sourceSignature, freshnessSignature) {
+    var cached = sessionCaches[String(sourceSignature || "")]
+    if (!cached || cached.freshnessSignature !== String(freshnessSignature || "")) return false
+    sessions = cached.sessions.slice()
+    sessionResults = Object.assign({}, cached.results || {})
+    sessionWarnings = cached.warnings.slice()
+    selectedSessionKey = String(cached.selectedSessionKey || "")
+    expandedSessionKey = String(cached.expandedSessionKey || "")
+    sessionQuery = String(cached.query || "")
+    sessionCollapsedGroups = Object.assign({ "History": true }, cached.collapsedGroups || {})
+    sessionCacheOrder = sessionCacheOrder.filter(function(signature) {
+      return signature !== String(sourceSignature || "")
+    }).concat([String(sourceSignature || "")])
+    if (sessionSearchField) sessionSearchField.text = sessionQuery
+    sessionExpiresAt = Number(cached.expiresAt || 0)
+    syncSessionIndex()
+    return true
+  }
+
+  function validateSessionCacheFreshness() {
+    if (!opened || !sessionRailOpen) return
+    var sourceSignature = currentSessionSourceSignature()
+    var freshnessSignature = currentSessionFreshnessSignature()
+    if (sessionCacheSourceSignature !== sourceSignature) {
+      invalidateSessionCacheForSource(sourceSignature, freshnessSignature)
+      Qt.callLater(ensureSessionDiscovery)
+      return
+    }
+    if (sessionCacheFreshnessSignature === freshnessSignature) return
+    sessionCacheFreshnessSignature = freshnessSignature
+    sessionExpiresAt = 0
+    sessionRefreshPending = true
+    Qt.callLater(continuePendingSessionRefresh)
+  }
+
+  function sessionPrimaryOperationBusy() {
+    return sessionActiveRequest !== null || sessionListProcess.running || sessionQueue.length > 0
+      || sessionInspectRequest !== null || sessionInspectProcess.running
+      || sessionOpenRequest !== null || sessionOpenProcess.running
+      || sessionNameRequest !== null || sessionNameProcess.running
+      || sessionHideRequest !== null || sessionHideProcess.running
+      || pendingSessionWorkspaceCreation !== null
+  }
+
+  function sessionRequestIsCurrent(request, node) {
+    if (!WorkspaceModel.sessionRequestCurrent(request, sessionGeneration,
+        opened && sessionRailOpen, "sessions", online, node)) return false
+    if (request.sourceSignature !== currentSessionSourceSignature()
+        || request.freshnessSignature !== currentSessionFreshnessSignature()) return false
+    return sessionDiscoveryRequests().some(function(candidate) {
+      return candidate.key === request.key && candidate.nodeId === request.nodeId
+        && candidate.ownerWorkspaceId === request.ownerWorkspaceId
     })
   }
 
   function ensureSessionDiscovery() {
-    if (!opened || activeTab !== "sessions" || !online || !sessionCatalogSupported) return
+    if (!opened || !sessionRailOpen || sessionSourceWorkspaceId === ""
+        || !online || !sessionCatalogSupported) return
     if (sessionExpiresAt === 0 || Date.now() >= sessionExpiresAt) startSessionDiscovery(false)
   }
 
   function startSessionDiscovery(force) {
-    if (!opened || activeTab !== "sessions" || !online || !sessionCatalogSupported) return
+    if (!opened || !sessionRailOpen || sessionSourceWorkspaceId === ""
+        || !online || !sessionCatalogSupported) return
+    if (sessionPrimaryOperationBusy()) {
+      sessionRefreshPending = true
+      return
+    }
     if (sessionListProcess.running) {
       sessionRefreshPending = sessionRefreshPending || force
       return
     }
     if (!force && sessionExpiresAt > 0 && Date.now() < sessionExpiresAt) return
     sessionGeneration++
-    sessionResults = ({})
-    sessionWarnings = []
-    sessionQueue = sessionDiscoveryNodes().map(function(node) {
-      return { generation: sessionGeneration, nodeId: String(node.node_id),
+    sessionActiveSourceSignature = currentSessionSourceSignature()
+    sessionActiveFreshnessSignature = currentSessionFreshnessSignature()
+    sessionPendingWarnings = []
+    sessionPendingResults = Object.assign({}, sessionResults)
+    sessionQueue = sessionDiscoveryRequests().map(function(discovery) {
+      return { generation: sessionGeneration, key: discovery.key,
+        nodeId: discovery.nodeId, ownerWorkspaceId: discovery.ownerWorkspaceId,
+        sourceSignature: sessionActiveSourceSignature,
+        freshnessSignature: sessionActiveFreshnessSignature,
         cliFeatures: cliFeatures.slice() }
     })
+    sessionDiscoveryCompleted = 0
+    sessionDiscoveryTotal = sessionQueue.length
+    sessionDiscoveryActive = true
     startNextSessionList()
   }
 
   function startNextSessionList() {
-    if (!opened || activeTab !== "sessions" || !online) return
+    if (!opened || !sessionRailOpen || !online) return
     if (sessionQueue.length === 0) {
       finishSessionDiscovery()
       return
@@ -2044,34 +2428,68 @@ Panel {
     var request = queue.shift()
     sessionQueue = queue
     var node = nodeFor(request.nodeId)
-    if (!WorkspaceModel.sessionRequestCurrent(request, sessionGeneration, opened,
-        activeTab, online, node)) {
+    if (!sessionRequestIsCurrent(request, node)) {
       Qt.callLater(startNextSessionList)
       return
     }
     sessionActiveRequest = request
     prepareSessionProcess(sessionListProcess)
-    sessionListProcess.command = WorkspaceModel.sessionListCommand(node)
+    sessionListProcess.command = WorkspaceModel.sessionListCommand(node, request.ownerWorkspaceId)
     sessionListProcess.running = true
   }
 
   function finishSessionDiscovery() {
-    if (!opened || activeTab !== "sessions" || !online) return
+    if (!opened || !sessionRailOpen || !online) return
+    if (sessionActiveSourceSignature !== currentSessionSourceSignature()
+        || sessionActiveFreshnessSignature !== currentSessionFreshnessSignature()) return
+    var browserScrollY = sessionBrowserList ? sessionBrowserList.contentY : 0
     var combined = []
-    Object.keys(sessionResults).forEach(function(nodeId) {
-      combined = combined.concat(sessionResults[nodeId] || [])
+    Object.keys(sessionPendingResults).forEach(function(nodeId) {
+      combined = combined.concat(sessionPendingResults[nodeId] || [])
     })
     sessions = WorkspaceModel.sessionsNewestFirst(combined)
+    sessionResults = Object.assign({}, sessionPendingResults)
+    sessionWarnings = sessionPendingWarnings.slice()
+    sessionDiscoveryActive = false
+    sessionCacheSourceSignature = sessionActiveSourceSignature
+    sessionCacheFreshnessSignature = sessionActiveFreshnessSignature
     sessionExpiresAt = Date.now() + 10000
     syncSessionIndex()
     clampSelection()
+    restoreSessionScroll(browserScrollY)
+    saveSessionCache()
     if (sessionWarnings.length > 0)
       actionMessage = "Some Sessions could not be refreshed · "
         + WorkspaceModel.boundedSessionWarnings(sessionWarnings, 3)
-    if (sessionRefreshPending) {
-      sessionRefreshPending = false
-      Qt.callLater(function() { startSessionDiscovery(true) })
+    if (pendingSessionInspection || sessionRefreshPending)
+      Qt.callLater(continuePendingSessionRefresh)
+  }
+
+  function restoreSessionScroll(browserScrollY) {
+    Qt.callLater(function() {
+      if (sessionBrowserList) sessionBrowserList.contentY = Math.max(0, Math.min(
+        Number(browserScrollY || 0), sessionBrowserList.contentHeight - sessionBrowserList.height))
+    })
+  }
+
+  function continuePendingSessionRefresh() {
+    if (sessionPrimaryOperationBusy()) return
+    if (pendingSessionInspection) {
+      var pending = pendingSessionInspection
+      pendingSessionInspection = null
+      if (pending.sourceSignature !== currentSessionSourceSignature()
+          || pending.freshnessSignature !== currentSessionFreshnessSignature()) return
+      for (var index = 0; index < sessions.length; index++) {
+        if (sessions[index].key === pending.key) {
+          inspectSession(sessions[index])
+          return
+        }
+      }
+      return
     }
+    if (!sessionRefreshPending) return
+    sessionRefreshPending = false
+    startSessionDiscovery(true)
   }
 
   function sessionNodeIsEligible(session) {
@@ -2081,6 +2499,83 @@ Panel {
   function sessionCanOpen(session) {
     return WorkspaceModel.sessionActionable(session, exactSessionOpenSupported,
       sessionNodeIsEligible(session))
+  }
+
+  function sessionCanChangeDisplayName(session) {
+    var node = session ? nodeFor(session.node_id) : null
+    return WorkspaceModel.sessionDisplayNameActionable(session,
+      sessionDisplayNamesSupported, sessionNodeIsEligible(session),
+      node ? node.observed_capabilities : [])
+  }
+
+  function sessionCanHide(session) {
+    var node = session ? nodeFor(session.node_id) : null
+    return WorkspaceModel.sessionHideActionable(session,
+      sessionHideSupported, sessionNodeIsEligible(session),
+      node ? node.observed_capabilities : [])
+  }
+
+  function sessionAttentionAgents(session) {
+    return WorkspaceModel.sessionAttentionAgents(session, agents)
+  }
+
+  function sessionCanDismissAttention(session) {
+    var matches = sessionAttentionAgents(session)
+    return matches.length > 0 && matches.length === (session.attentions || []).length
+      && matches.every(function(agent) { return agentCanAcknowledge(agent) })
+  }
+
+  function dismissSessionAttention(session) {
+    if (!sessionCanDismissAttention(session)) return
+    var matches = sessionAttentionAgents(session)
+    for (var i = 0; i < matches.length; i++) dismissAgent(matches[i])
+  }
+
+  function sessionMetadataLabel(session) {
+    if (!session) return ""
+    var values = [WorkspaceModel.relativeTime(session.last_at_ms, clockNow)]
+    values.push(String(session.state || "unknown").split("_").join(" "))
+    var harness = WorkspaceModel.sessionHarnessLabel(session.integration)
+    values.push(harness)
+    if (session.latest_agent_name
+        && String(session.latest_agent_name).toLowerCase() !== harness.toLowerCase())
+      values.push("Agent: " + session.latest_agent_name)
+    return values.join(" · ")
+  }
+
+  function sessionContextBranchLabel(context) {
+    if (!context) return ""
+    var status = WorkspaceModel.sessionWorkingContextStatusLabel(context)
+    return String(context.branch || "") + (status === "" ? "" : " · " + status)
+  }
+
+  function sessionWorkingContextCount(session) {
+    if (!session) return 0
+    var contexts = session.working_contexts || []
+    return Math.max(contexts.length, Number(session.working_context_count || 0))
+  }
+
+  function sessionWorkingContextsHeading(session) {
+    if (!session) return "OBSERVED WORK"
+    var count = sessionWorkingContextCount(session)
+    return "OBSERVED WORK · " + count + (count === 1 ? " CONTEXT" : " CONTEXTS")
+  }
+
+  function sessionCollapsedContextLabel(session) {
+    if (!session) return ""
+    var values = []
+    if (session.git_branch) values.push("Launch: " + String(session.git_branch))
+    var count = sessionWorkingContextCount(session)
+    if (count > 0) values.push("Observed: " + count + (count === 1 ? " context" : " contexts"))
+    return values.join(" · ")
+  }
+
+  function sessionWorkingContextsOverflowLabel(session) {
+    if (!session) return ""
+    var contexts = session.working_contexts || []
+    var hidden = Math.max(0, Number(session.working_context_count || 0) - contexts.length)
+    return hidden > 0 ? "+" + hidden + " more "
+      + (hidden === 1 ? "context" : "contexts") : ""
   }
 
   function sessionStatusLabel(session) {
@@ -2098,8 +2593,14 @@ Panel {
       : "Opens an exact owner-routed historical resume"
   }
 
+  function sessionIsOpening(session) {
+    return !!session && !!sessionOpenRequest
+      && WorkspaceModel.sessionIdentityMatches(session,
+        sessionOpenRequest.nodeId, sessionOpenRequest.sessionId)
+  }
+
   function openSession(session, workspaceId) {
-    if (!session || sessionOpenProcess.running) return
+    if (!session || sessionPrimaryOperationBusy()) return
     if (session.state === "done") {
       showActionFailure("Session unavailable", "Done Sessions cannot be opened")
       return
@@ -2114,12 +2615,13 @@ Panel {
       return
     }
     var targetWorkspaceId = workspaceId === undefined
-      ? activeBoomuxWorkspaceId : String(workspaceId || "")
+      ? sessionSourceWorkspaceId : String(workspaceId || "")
     if (targetWorkspaceId === "") {
       showActionFailure("Choose a Workspace",
         "Select where the Session terminal should open")
       return
     }
+    sessionRail.exitKeyboardMode()
     panel.exitKeyboardMode()
     sessionOpenRequest = { generation: sessionGeneration, nodeId: session.node_id,
       sessionId: session.id, title: session.description, workspaceId: targetWorkspaceId }
@@ -2127,7 +2629,6 @@ Panel {
     prepareSessionProcess(sessionOpenProcess)
     sessionOpenProcess.command = WorkspaceModel.sessionOpenCommand(session, targetWorkspaceId)
     sessionOpenProcess.running = true
-    closeSessionBrowser()
   }
 
   function chooseSessionWorkspace() {
@@ -2149,52 +2650,210 @@ Panel {
   }
 
   function openSelectedSession() {
-    if (!selectedItem) return
-    if (sessionCreateNewWorkspace) createWorkspaceForSession()
-    else openSession(selectedItem, sessionTargetWorkspaceId)
+    if (!selectedSession) return
+    activateSession(selectedSession)
   }
 
-  function createWorkspaceForSession() {
-    if (!selectedItem) return
+  function activateSession(session) {
+    if (!session || sessionPrimaryOperationBusy()) return
+    openSession(session)
+  }
+
+  function createWorkspaceForSession(session) {
+    if (!session) return
     if (workspaceMutationBusy()) return
     if (!atomicWorkspaceCreationSupported) {
       showActionFailure("Workspace creation unavailable",
         "This Boomux CLI does not support atomic Workspace and Shell creation")
       return
     }
-    pendingSessionWorkspaceCreation = selectedItem
+    pendingSessionWorkspaceCreation = session
     sessionWorkspaceDropdown.close()
     requestGeneratedWorkspace(home)
   }
 
   function inspectSession(session) {
-    if (!session || !sessionNodeIsEligible(session) || sessionInspectProcess.running) return
-    sessionDetail = null
-    sessionPreview = null
-    sessionPreviewRequest = null
-    stopAndClearSessionProcess(sessionPreviewProcess)
+    if (!session) return
+    if (!sessionInspectSupported) {
+      showActionFailure("Session inspection unavailable",
+        "This Boomux CLI does not advertise exact Session inspection")
+      return
+    }
+    if (!sessionNodeIsEligible(session)) return
+    if (sessionPrimaryOperationBusy()) {
+      pendingSessionInspection = { key: session.key,
+        sourceSignature: currentSessionSourceSignature(),
+        freshnessSignature: currentSessionFreshnessSignature() }
+      actionMessage = "Opening Session details after refresh..."
+      return
+    }
+    pendingSessionInspection = null
     sessionInspectRequest = { generation: sessionGeneration, nodeId: session.node_id,
-      sessionId: session.id, title: session.description, cliFeatures: cliFeatures.slice() }
+      sessionId: session.id, workspaceId: session.workspace_id,
+      title: session.description, sourceSignature: currentSessionSourceSignature(),
+      freshnessSignature: currentSessionFreshnessSignature(),
+      cliFeatures: cliFeatures.slice() }
     prepareSessionProcess(sessionInspectProcess)
     sessionInspectProcess.command = WorkspaceModel.sessionInspectCommand(session)
     sessionInspectProcess.running = true
   }
 
-  function loadSessionPreview(session) {
-    sessionPreview = null
-    var command = WorkspaceModel.sessionPreviewCommand(session)
-    if (command.length === 0) {
-      sessionPreview = { available: false,
-        message: session && !session.node_local
-          ? "Recent terminal output is not available for remote Sessions yet."
-          : "This Session has no current retained terminal output." }
+  function requestSessionRename(session) {
+    if (!sessionCanChangeDisplayName(session) || sessionPrimaryOperationBusy()) return
+    beginInlineSessionRename(session,
+      session.user_display_name || session.description || "", "")
+  }
+
+  function hideSession(session) {
+    if (!sessionCanHide(session) || sessionPrimaryOperationBusy()) return
+    var node = nodeFor(session.node_id)
+    sessionHideRequest = { session: session, node: node, nodeId: session.node_id,
+      sessionId: session.id, sourceSignature: currentSessionSourceSignature(),
+      freshnessSignature: currentSessionFreshnessSignature() }
+    actionMessage = "Hiding " + (session.description || "Session") + "..."
+    prepareSessionProcess(sessionHideProcess)
+    sessionHideProcess.command = WorkspaceModel.sessionHideCommand(session)
+    sessionHideProcess.running = true
+  }
+
+  function applySessionHide(request) {
+    if (request.sourceSignature !== currentSessionSourceSignature()) {
+      var otherCaches = Object.assign({}, sessionCaches)
+      delete otherCaches[request.sourceSignature]
+      sessionCaches = otherCaches
       return
     }
-    sessionPreviewRequest = { generation: sessionGeneration, nodeId: session.node_id,
-      sessionId: session.id }
-    prepareSessionProcess(sessionPreviewProcess)
-    sessionPreviewProcess.command = command
-    sessionPreviewProcess.running = true
+    var browserScrollY = sessionBrowserList ? sessionBrowserList.contentY : 0
+    function retained(session) {
+      return !WorkspaceModel.sessionIdentityMatches(
+        session, request.nodeId, request.sessionId)
+    }
+    sessions = sessions.filter(retained)
+    var nextResults = Object.assign({}, sessionResults)
+    Object.keys(nextResults).forEach(function(key) {
+      nextResults[key] = (nextResults[key] || []).filter(retained)
+    })
+    sessionResults = nextResults
+    if (selectedSessionKey === request.session.key) selectedSessionKey = ""
+    if (expandedSessionKey === request.session.key) expandedSessionKey = ""
+    if (sessionDetail && WorkspaceModel.sessionIdentityMatches(
+        sessionDetail, request.nodeId, request.sessionId)) closeSessionInspection()
+    syncSessionIndex()
+    restoreSessionScroll(browserScrollY)
+
+    sessionExpiresAt = 0
+    sessionRefreshPending = true
+    saveSessionCache()
+  }
+
+  function beginInlineSessionRename(session, draft, error) {
+    if (!session) return
+    selectedSessionKey = session.key
+    for (var i = 0; i < paneSessions.length; i++) {
+      if (paneSessions[i].key === session.key) {
+        selectedSessionIndex = i
+        sessionBrowserList.positionViewAtIndex(sessionListIndex(session.key), ListView.Contain)
+        break
+      }
+    }
+    sessionEditingDraft = String(draft || "")
+    sessionEditingError = String(error || "")
+    sessionEditingKey = session.key
+    focusSessionRail()
+    Qt.callLater(function() {
+      var item = sessionBrowserList.itemAtIndex(root.selectedSessionIndex)
+      if (item && item.focusRename) item.focusRename()
+    })
+  }
+
+  function cancelInlineSessionRename() {
+    sessionEditingKey = ""
+    sessionEditingDraft = ""
+    sessionEditingError = ""
+    sessionRailKeyHandler.forceActiveFocus()
+  }
+
+  function submitInlineSessionRename(session, draft) {
+    var name = String(draft || "").trim()
+    if (!session || name === "" || sessionPrimaryOperationBusy()) return
+    if (name === String(session.user_display_name || session.description || "")) {
+      cancelInlineSessionRename()
+      return
+    }
+    cancelInlineSessionRename()
+    startSessionRename(session, name)
+  }
+
+  function resetSessionName(session) {
+    if (!sessionCanChangeDisplayName(session) || session.user_display_name === null
+        || sessionPrimaryOperationBusy()) return
+    var node = nodeFor(session.node_id)
+    sessionNameRequest = { command: "session.reset-name", session: session,
+      node: node, nodeId: session.node_id, sessionId: session.id,
+      sourceSignature: currentSessionSourceSignature(),
+      freshnessSignature: currentSessionFreshnessSignature() }
+    actionMessage = "Resetting Session display name..."
+    prepareSessionProcess(sessionNameProcess)
+    sessionNameProcess.command = WorkspaceModel.sessionResetNameCommand(session)
+    sessionNameProcess.running = true
+  }
+
+  function startSessionRename(session, name) {
+    if (sessionPrimaryOperationBusy()) return
+    var node = nodeFor(session.node_id)
+    sessionNameRequest = { command: "session.rename", session: session,
+      requestedName: name, node: node, nodeId: session.node_id, sessionId: session.id,
+      sourceSignature: currentSessionSourceSignature(),
+      freshnessSignature: currentSessionFreshnessSignature() }
+    applySessionNameMutation({ node_id: session.node_id, id: session.id,
+      user_display_name: name, workspace_revision: session.workspace_revision }, "session.rename")
+    actionMessage = "Renaming Session..."
+    prepareSessionProcess(sessionNameProcess)
+    sessionNameProcess.command = WorkspaceModel.sessionRenameCommand(session, name)
+    sessionNameProcess.running = true
+  }
+
+  function applySessionNameMutation(updated, command) {
+    var browserScrollY = sessionBrowserList ? sessionBrowserList.contentY : 0
+    function merged(session) {
+      if (!WorkspaceModel.sessionIdentityMatches(session, updated.node_id, updated.id))
+        return session
+      var values = { user_display_name: updated.user_display_name,
+        workspace_revision: updated.workspace_revision }
+      if (command === "session.rename")
+        values.description = updated.user_display_name
+      return Object.assign({}, session, values)
+    }
+    sessions = sessions.map(function(session) {
+      return merged(session)
+    })
+    var nextResults = Object.assign({}, sessionResults)
+    Object.keys(nextResults).forEach(function(key) {
+      nextResults[key] = (nextResults[key] || []).map(function(session) {
+        return merged(session)
+      })
+    })
+    sessionResults = nextResults
+    if (sessionDetail && WorkspaceModel.sessionIdentityMatches(
+        sessionDetail, updated.node_id, updated.id))
+      sessionDetail = merged(sessionDetail)
+    saveSessionCache()
+    restoreSessionScroll(browserScrollY)
+  }
+
+  function restoreSessionAfterRename(original) {
+    if (!original) return
+    function restored(session) {
+      return WorkspaceModel.sessionIdentityMatches(session, original.node_id, original.id)
+        ? original : session
+    }
+    sessions = sessions.map(restored)
+    var nextResults = Object.assign({}, sessionResults)
+    Object.keys(nextResults).forEach(function(key) {
+      nextResults[key] = (nextResults[key] || []).map(restored)
+    })
+    sessionResults = nextResults
+    saveSessionCache()
   }
 
   function compactPath(path) {
@@ -2358,9 +3017,10 @@ Panel {
     var actions = []
     if (target.kind === "workspace") {
       if (workspaceMutationBusy()) return actions
+      if (target.workspace.is_global && !target.workspace.closing
+          && sessionCatalogSupported) actions.push("sessions")
       if (workspaceCreationReason(target.workspace) === "" && !actionProcess.running
           && !openProcess.running) actions.push("shell")
-      if (workspaceCanChangeDefaultPath(target.workspace)) actions.push("default-path")
       if (workspaceCanRename(target.workspace)) actions.push("rename")
       if (workspaceCanRemove(target.workspace)) actions.push("remove")
       return actions
@@ -2414,6 +3074,7 @@ Panel {
     if (!allowed) return
     panel.enterKeyboardMode()
     renameError = ""
+    renameReturnToSessionRail = false
     renameTarget = target
   }
 
@@ -2425,18 +3086,27 @@ Panel {
   function confirmRename() {
     var target = renameTarget
     var name = renameField.text.trim()
-    if (!target || actionProcess.running) return
+    if (!target || actionProcess.running || sessionNameProcess.running) return
+    if (target.kind === "session" && sessionPrimaryOperationBusy()) return
     if (name === "") {
       renameError = "Name is required"
       return
     }
-    var currentName = target.kind === "workspace"
-      ? String(target.workspace.name) : String(target.name)
-    if (name === currentName) {
+    var currentName = target.kind === "workspace" ? String(target.workspace.name)
+      : (target.kind === "session" ? String(target.session.user_display_name || "")
+        : String(target.name))
+    if ((target.kind !== "session" || target.session.user_display_name !== null)
+        && name === currentName) {
       cancelRename()
       return
     }
-    if (target.kind === "workspace") {
+    if (target.kind === "session") {
+      if (!sessionCanChangeDisplayName(target.session)) return
+      renameTarget = null
+      renameError = ""
+      startSessionRename(target.session, name)
+      return
+    } else if (target.kind === "workspace") {
       if (!workspaceCanRename(target.workspace)) return
       pendingAction = { kind: "rename-workspace", key: target.workspace.key }
       actionProcess.command = ["boomux", "workspace", "rename",
@@ -2465,7 +3135,8 @@ Panel {
     if (!target) return
     if (target.kind === "workspace") {
       var workspace = target.workspace
-      if (action === "shell") showWorkspaceForm(workspace, "shell")
+      if (action === "sessions") revealSessionRailForWorkspace(workspace, true)
+      else if (action === "shell") showWorkspaceForm(workspace, "shell")
       else if (action === "default-path") requestWorkspaceDefaultPath(workspace)
       else if (action === "rename") requestRename(target)
       else if (action === "remove") requestRemoveWorkspace(workspace)
@@ -2758,8 +3429,7 @@ Panel {
   }
 
   function agentCanAcknowledge(agent) {
-    var node = agent ? nodeFor(agent.node_id) : null
-    return !!node && node.local && nodeIsActionable(agent.node_id, "")
+    return !!agent && nodeIsActionable(agent.node_id, "persistent_agent_attention")
   }
 
   function acknowledgeAgent(agent, dismissed, automatic) {
@@ -2800,7 +3470,8 @@ Panel {
     activeAcknowledgement = acknowledgeQueue[0]
     acknowledgeProcess.command = ["boomux", "attention", "acknowledge",
       activeAcknowledgement.agentId, "--observation-revision",
-      String(activeAcknowledgement.revision), "--json"]
+      String(activeAcknowledgement.revision), "--json"].concat(
+        nodeArgs(activeAcknowledgement.nodeId, "persistent_agent_attention") || [])
     acknowledgeProcess.running = true
   }
 
@@ -3133,6 +3804,7 @@ Panel {
       return
     }
     if (!opened) open()
+    sessionRail.exitKeyboardMode()
     Qt.callLater(function() {
       if (root.opened) panel.enterKeyboardMode()
     })
@@ -3151,16 +3823,12 @@ Panel {
     pendingWorkspacePositionKey = ""
     settingsOpen = false
     confirmationTarget = null
+    sessionRailOpen = false
+    sessionRailPendingWorkspaceId = ""
+    sessionRailPendingFocus = false
+    sessionRail.exitKeyboardMode()
     suspendSessionActivity()
     cancelForm()
-  }
-
-  Timer {
-    id: sessionTtlTimer
-    interval: 1000
-    repeat: true
-    running: root.opened && root.activeTab === "sessions"
-    onTriggered: root.ensureSessionDiscovery()
   }
 
   Timer {
@@ -3190,7 +3858,10 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function releaseFocus(): void { panel.exitKeyboardMode() }
+    function releaseFocus(): void {
+      sessionRail.exitKeyboardMode()
+      panel.exitKeyboardMode()
+    }
   }
 
   Connections {
@@ -3313,6 +3984,7 @@ Panel {
     onExited: function(exitCode) {
       if (exitCode === 0) root.parseCapabilities(capabilityStdout.text)
       else {
+        root.refreshAfterCapabilities = false
         root.cliAvailable = false
         root.cliVersion = ""
         root.compatibilityError = ""
@@ -3602,27 +4274,27 @@ Panel {
       var request = root.sessionActiveRequest
       root.sessionActiveRequest = null
       var node = request ? root.nodeFor(request.nodeId) : null
-      var current = WorkspaceModel.sessionRequestCurrent(request, root.sessionGeneration,
-        root.opened, root.activeTab, root.online, node)
+      var current = root.sessionRequestIsCurrent(request, node)
       if (current && exitCode === 0) {
         try {
-          var nextResults = Object.assign({}, root.sessionResults)
-          nextResults[request.nodeId] = WorkspaceModel.normalizeSessionList(
-            stdoutText, node)
-          root.sessionResults = nextResults
+          var nextResults = Object.assign({}, root.sessionPendingResults)
+          nextResults[request.key] = WorkspaceModel.normalizeSessionList(
+            stdoutText, node, request.ownerWorkspaceId)
+          root.sessionPendingResults = nextResults
         } catch (exception) {
-          var invalidWarnings = root.sessionWarnings.slice()
+          var invalidWarnings = root.sessionPendingWarnings.slice()
           invalidWarnings.push(String(node.alias || node.node_id) + ": invalid response")
-          root.sessionWarnings = invalidWarnings.slice(-8)
+          root.sessionPendingWarnings = invalidWarnings.slice(-8)
         }
       } else if (current) {
-        var warnings = root.sessionWarnings.slice()
+        var warnings = root.sessionPendingWarnings.slice()
         warnings.push(String(node.alias || node.node_id) + ": unavailable")
-        root.sessionWarnings = warnings.slice(-8)
+        root.sessionPendingWarnings = warnings.slice(-8)
       }
+      root.sessionDiscoveryCompleted++
       sessionListProcess.command = []
       root.clearSessionProcessOutput(sessionListProcess)
-      if (root.opened && root.activeTab === "sessions" && root.online)
+      if (root.opened && root.sessionRailOpen && root.online)
         Qt.callLater(root.startNextSessionList)
     }
   }
@@ -3637,52 +4309,40 @@ Panel {
       root.sessionInspectRequest = null
       var node = request ? root.nodeFor(request.nodeId) : null
       var current = WorkspaceModel.sessionRequestCurrent(request, root.sessionGeneration,
-        root.opened, root.activeTab, root.online, node)
+        root.opened && root.sessionRailOpen, "sessions", root.online, node)
+        && request.sourceSignature === root.currentSessionSourceSignature()
+        && request.freshnessSignature === root.currentSessionFreshnessSignature()
       sessionInspectProcess.command = []
       root.clearSessionProcessOutput(sessionInspectProcess)
-      if (!current) return
+      if (!current) {
+        Qt.callLater(root.continuePendingSessionRefresh)
+        return
+      }
       if (exitCode !== 0) {
         root.showActionFailure("Session inspection failed", root.processError(
           stderrText || stdoutText,
           "Could not inspect the exact Session"))
+        Qt.callLater(root.continuePendingSessionRefresh)
         return
       }
       try {
         var detail = WorkspaceModel.normalizeSessionInspect(
-          stdoutText, node, request.sessionId)
+          stdoutText, node, request.sessionId, request.workspaceId)
         root.sessionDetail = detail
-        root.loadSessionPreview(detail)
+        if (root.sessionRenameDraft
+            && root.sessionRenameDraft.sourceSignature === request.sourceSignature
+            && root.sessionRenameDraft.nodeId === detail.node_id
+            && root.sessionRenameDraft.sessionId === detail.id) {
+          var draft = root.sessionRenameDraft
+          root.sessionRenameDraft = null
+          root.beginInlineSessionRename(detail, draft.name,
+            "Workspace revision changed; review and submit again")
+        }
       } catch (exception) {
         root.showActionFailure("Session inspection failed",
           "Boomux returned a different or invalid Session identity")
       }
-    }
-  }
-
-  Process {
-    id: sessionPreviewProcess
-    onRunningChanged: if (!running) Qt.callLater(root.recoverStoppedSessionPreview)
-    onExited: function(exitCode) {
-      var stdoutText = root.sessionProcessText(sessionPreviewProcess.stdout)
-      var stderrText = root.sessionProcessText(sessionPreviewProcess.stderr)
-      var request = root.sessionPreviewRequest
-      root.sessionPreviewRequest = null
-      sessionPreviewProcess.command = []
-      root.clearSessionProcessOutput(sessionPreviewProcess)
-      if (!request || request.generation !== root.sessionGeneration || !root.sessionDetail
-          || request.sessionId !== root.sessionDetail.id) return
-      if (exitCode !== 0) {
-        root.sessionPreview = { available: false,
-          message: root.processError(stderrText || stdoutText,
-            "Recent terminal output is unavailable.") }
-        return
-      }
-      try {
-        root.sessionPreview = WorkspaceModel.normalizeSessionPreview(stdoutText, root.sessionDetail)
-      } catch (exception) {
-        root.sessionPreview = { available: false,
-          message: "Boomux returned invalid recent terminal output." }
-      }
+      Qt.callLater(root.continuePendingSessionRefresh)
     }
   }
 
@@ -3701,11 +4361,128 @@ Panel {
         root.actionMessage = "Session terminal opened"
         root.showNotice("Session terminal opened", request.title || "Exact Agent Session",
           root.currentNoticeScreen(), false)
+        root.closeSessionInspection()
+        root.sessionExpiresAt = 0
+        root.sessionRefreshPending = true
       } else {
         root.showActionFailure("Session open failed", root.processError(
           stderrText || stdoutText,
           "Boomux could not revalidate and open the exact Session"))
+        panel.enterKeyboardMode()
       }
+      Qt.callLater(root.continuePendingSessionRefresh)
+    }
+  }
+
+  Process {
+    id: sessionNameProcess
+    onRunningChanged: if (!running) Qt.callLater(root.recoverStoppedSessionName)
+    onExited: function(exitCode) {
+      var stdoutText = root.sessionProcessText(sessionNameProcess.stdout)
+      var stderrText = root.sessionProcessText(sessionNameProcess.stderr)
+      var request = root.sessionNameRequest
+      root.sessionNameRequest = null
+      sessionNameProcess.command = []
+      root.clearSessionProcessOutput(sessionNameProcess)
+      if (!request) return
+      var node = request.node
+      if (exitCode !== 0) {
+        if (request.command === "session.rename")
+          root.restoreSessionAfterRename(request.session)
+        var code = ""
+        try {
+          var failure
+          try { failure = JSON.parse(stdoutText) }
+          catch (stdoutException) { failure = JSON.parse(stderrText) }
+          code = failure && failure.error ? String(failure.error.code || "") : ""
+        } catch (exception) {
+        }
+        if (code === "revision_changed" || code === "revision_ahead") {
+          if (request.command === "session.rename") root.sessionRenameDraft = {
+            nodeId: request.nodeId, sessionId: request.sessionId,
+            sourceSignature: request.sourceSignature, name: request.requestedName
+          }
+          root.showActionFailure("Session name changed elsewhere",
+            "The Session was not changed; refreshing its current Workspace revision")
+          if (root.opened && root.sessionRailOpen
+              && request.sourceSignature === root.currentSessionSourceSignature()) {
+            root.beginInlineSessionRename(request.session, request.requestedName,
+              "The Session name changed elsewhere; try again")
+            Qt.callLater(function() {
+              root.startSessionDiscovery(true)
+            })
+          } else {
+            root.sessionCacheFreshnessSignature = ""
+          }
+        } else {
+          root.showActionFailure("Session name change failed", root.processError(
+            stderrText || stdoutText, "Could not change the exact Session display name"))
+          if (request.command === "session.rename") {
+            var renameFailure = root.processError(stderrText || stdoutText,
+              "Could not change the Session display name")
+            if (root.opened && root.sessionRailOpen
+                && request.sourceSignature === root.currentSessionSourceSignature()) {
+              root.beginInlineSessionRename(request.session, request.requestedName, renameFailure)
+            } else root.sessionRenameDraft = { nodeId: request.nodeId,
+              sessionId: request.sessionId, sourceSignature: request.sourceSignature,
+              name: request.requestedName }
+          }
+        }
+        return
+      }
+      try {
+        var expected = Object.assign({}, request.session,
+          { requested_name: request.requestedName })
+        var updated = WorkspaceModel.normalizeSessionNameMutation(
+          stdoutText, request.command, node, expected)
+        if (request.sourceSignature === root.currentSessionSourceSignature()
+            && request.sourceSignature === root.sessionCacheSourceSignature)
+          root.applySessionNameMutation(updated, request.command)
+        else root.sessionExpiresAt = 0
+        root.actionMessage = request.command === "session.rename"
+          ? "Session display name changed" : "Session display name reset"
+        if (!root.opened || !root.sessionRailOpen)
+          root.sessionCacheFreshnessSignature = ""
+      } catch (exception) {
+        root.showActionFailure("Session name change failed",
+          "Boomux returned a different or invalid Session identity")
+      }
+      Qt.callLater(root.continuePendingSessionRefresh)
+    }
+  }
+
+  Process {
+    id: sessionHideProcess
+    onRunningChanged: if (!running) Qt.callLater(root.recoverStoppedSessionHide)
+    onExited: function(exitCode) {
+      var stdoutText = root.sessionProcessText(sessionHideProcess.stdout)
+      var stderrText = root.sessionProcessText(sessionHideProcess.stderr)
+      var request = root.sessionHideRequest
+      root.sessionHideRequest = null
+      sessionHideProcess.command = []
+      root.clearSessionProcessOutput(sessionHideProcess)
+      if (!request) return
+      if (exitCode !== 0) {
+        var message = root.processError(stderrText || stdoutText,
+          "Could not hide the exact Session")
+        root.showActionFailure("Session hide failed", message)
+        if (request.sourceSignature === root.currentSessionSourceSignature()) {
+          root.sessionExpiresAt = 0
+          root.sessionRefreshPending = true
+        }
+        Qt.callLater(root.continuePendingSessionRefresh)
+        return
+      }
+      try {
+        WorkspaceModel.normalizeSessionHideMutation(
+          stdoutText, request.node, request.session)
+        root.applySessionHide(request)
+        root.actionMessage = "Session hidden from Boomux"
+      } catch (exception) {
+        root.showActionFailure("Session hide failed",
+          "Boomux returned a different or invalid Session identity")
+      }
+      Qt.callLater(root.continuePendingSessionRefresh)
     }
   }
 
@@ -3913,6 +4690,11 @@ Panel {
       var action = pending ? pending.kind : ""
       root.pendingAction = null
       if (exitCode !== 0) {
+        if ((action === "open-workspace" || action === "show-workspace") && pending
+            && String(pending.id || "") === root.sessionRailPendingWorkspaceId) {
+          root.sessionRailPendingWorkspaceId = ""
+          root.sessionRailPendingFocus = false
+        }
         root.pendingShell = null
         root.actionMessage = root.processError(actionStderr.text || actionStdout.text,
           action === "open-workspace" || action === "show-workspace"
@@ -4244,14 +5026,16 @@ Panel {
     bar: root.bar
     open: root.opened
     side: root.paneSide
-    paneWidth: root.activeTab === "sessions" ? root.sessionBrowserWidth : root.paneWidth
+    paneWidth: root.paneWidth
     reservationWidth: root.paneWidth
+    resizeShortcutActive: paneResizeShortcut.pressed
+    onPaneWidthCommitted: function(width) {
+      if (width !== root.paneWidth) root.persistPaneSettings({ paneWidth: width })
+    }
     focusColor: root.urgent
     focusTarget: keyCatcher
-    onOutsideClicked: {
-      if (root.activeTab === "sessions") root.closeSessionBrowser()
-      else panel.exitKeyboardMode()
-    }
+    onKeyboardModeChanged: if (keyboardMode) sessionRail.exitKeyboardMode()
+    onOutsideClicked: panel.exitKeyboardMode()
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -4273,10 +5057,7 @@ Panel {
       onCloseRequested: {
         if (root.confirmationTarget) root.cancelConfirmation()
         else if (root.actionMenuTarget) root.closeActionMenu()
-        else if (sessionWorkspaceDropdown.opened) sessionWorkspaceDropdown.close()
-        else if (root.sessionDetail || root.sessionInspectRequest) root.closeSessionInspection()
         else if (root.settingsOpen) root.hideSettings()
-        else if (root.activeTab === "sessions") root.closeSessionBrowser()
         else root.close()
       }
       onTabRequested: function(direction) {
@@ -4291,8 +5072,6 @@ Panel {
         if (text === "r" || text === "R") root.requestExplicitRefresh()
         else if (text === "1") root.selectTab("agents")
         else if (text === "2") root.selectTab("nodes")
-        else if ((text === "s" || text === "S") && root.activeTab !== "sessions")
-          root.openSessionBrowser()
         else if (text === "m" || text === "M") root.showCursorActionMenu()
         else if ((text === "a" || text === "A") && root.activeTab === "nodes"
             && root.federationAvailable) root.createNode()
@@ -4383,7 +5162,7 @@ Panel {
 
         PanelSectionHeader {
           width: parent.width
-          text: "PANE WIDTH"
+          text: "MAIN PANE WIDTH"
           foreground: root.foreground
           fontFamily: root.fontFamily
         }
@@ -5432,6 +6211,29 @@ Panel {
                   anchors.verticalCenter: expansionTarget.verticalCenter
                   width: visible ? implicitWidth : 0
                   Button {
+                    id: workspaceSessionsButton
+                    visible: modelData.is_global && !modelData.closing
+                      && root.sessionCatalogSupported
+                    width: visible ? Style.space(32) : 0
+                    height: Style.space(32)
+                    iconText: ""
+                    tooltipText: "Browse Sessions for " + String(modelData.name)
+                    bordered: false
+                    active: root.sessionRailIsOpenForWorkspace(modelData)
+                    enabled: !root.workspaceMutationBusy()
+                      && (workspaceTreeDelegate.workspaceActive
+                        || root.workspaceCanOpen(modelData))
+                    foreground: root.foreground
+                    iconSize: Style.font.body
+                    horizontalPadding: Style.space(1)
+                    verticalPadding: 0
+                    onClicked: {
+                      root.focusSection = "workspaces"
+                      root.selectedWorkspaceIndex = workspaceTreeDelegate.index
+                      root.toggleWorkspaceSessionRail(modelData)
+                    }
+                  }
+                  Button {
                     id: workspaceMenuButton
                     width: Style.space(32)
                     height: Style.space(32)
@@ -5676,156 +6478,6 @@ Panel {
         }
 
         Item {
-          visible: root.backendReady && root.activeTab === "sessions" && !root.editing
-          width: parent.width
-          implicitHeight: sessionColumn.implicitHeight
-
-          Column {
-            id: sessionColumn
-            width: parent.width
-            spacing: Style.space(6)
-
-            PanelSectionHeader {
-              width: parent.width
-              text: "SESSIONS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              visible: !root.sessionCatalogSupported || root.paneSessions.length === 0
-              width: parent.width
-              text: !root.sessionCatalogSupported
-                ? "Sessions require projected Agent Session support"
-                : (sessionListProcess.running ? "Discovering Sessions..." : "No Boomux Sessions")
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              horizontalAlignment: Text.AlignHCenter
-              wrapMode: Text.Wrap
-              topPadding: Style.space(20)
-              bottomPadding: Style.space(20)
-            }
-
-            Text {
-              visible: root.sessionWarnings.length > 0
-              width: parent.width
-              text: "Partial refresh · "
-                + WorkspaceModel.boundedSessionWarnings(root.sessionWarnings, 3)
-              color: root.urgent
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.Wrap
-              maximumLineCount: 2
-              elide: Text.ElideRight
-            }
-
-            ListView {
-              id: sessionList
-              visible: root.paneSessions.length > 0
-              width: parent.width
-              implicitHeight: Math.min(contentHeight, Style.space(320))
-              model: root.paneSessions
-              spacing: Style.space(4)
-              clip: true
-              boundsBehavior: Flickable.StopAtBounds
-              currentIndex: root.activeTab === "sessions" ? root.selectedIndex : -1
-              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              delegate: Rectangle {
-                id: sessionRow
-                required property var modelData
-                required property int index
-                readonly property bool selected: modelData.key === root.selectedSessionKey
-                readonly property bool actionable: root.sessionCanOpen(modelData)
-                width: ListView.view.width
-                height: Style.space(46)
-                radius: Style.cornerRadius
-                color: selected ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (sessionMouse.containsMouse ? root.keyboardCursorFill : "transparent")
-                opacity: root.sessionNodeIsEligible(modelData) ? 1 : 0.58
-
-                Column {
-                  anchors.left: parent.left
-                  anchors.right: sessionStateBadge.left
-                  anchors.leftMargin: Style.space(9)
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(1)
-                  Text {
-                    width: parent.width
-                    text: modelData.description || "Untitled Session"
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    elide: Text.ElideRight
-                  }
-                  Text {
-                    width: parent.width
-                    text: String(modelData.workspace_name) + " · "
-                      + WorkspaceModel.sessionHarnessLabel(modelData.integration) + " · "
-                      + WorkspaceModel.relativeTime(modelData.last_at_ms, root.clockNow)
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                }
-                Rectangle {
-                  id: sessionStateBadge
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(9)
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: sessionStateText.implicitWidth + Style.space(12)
-                  height: Style.space(20)
-                  radius: height / 2
-                  color: Util.alpha(modelData.state === "blocked" ? root.urgent
-                    : (modelData.state === "working" ? Color.accent : root.foreground), 0.12)
-                  border.width: 1
-                  border.color: Util.alpha(modelData.state === "blocked" ? root.urgent
-                    : (modelData.state === "working" ? Color.accent : root.dim), 0.45)
-
-                  Text {
-                    id: sessionStateText
-                    anchors.centerIn: parent
-                    text: root.sessionStatusLabel(modelData).toUpperCase()
-                    color: modelData.state === "blocked" ? root.urgent
-                      : (modelData.state === "working" ? Color.accent : root.dim)
-                    font.family: root.fontFamily
-                    font.pixelSize: Math.max(8, Style.font.caption - 1)
-                    font.bold: true
-                  }
-                }
-                MouseArea {
-                  id: sessionMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: {
-                    root.focusSection = "lower"
-                    root.selectedSessionKey = modelData.key
-                    root.selectedIndex = index
-                    root.openSession(modelData)
-                  }
-                }
-              }
-            }
-
-            Text {
-              visible: root.paneSessions.length > 0
-              width: parent.width
-              text: root.exactSessionOpenSupported
-                ? "Click/Enter opens · i inspects"
-                : "Boomux 1.7.0+ required to open · i inspects"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignHCenter
-            }
-          }
-        }
-
-        Item {
           visible: root.backendReady && root.activeTab === "agents" && !root.editing
           width: parent.width
           implicitHeight: agentColumn.implicitHeight
@@ -5893,30 +6545,11 @@ Panel {
             PanelSeparator {
               foreground: root.foreground
             }
-            Row {
+            PanelSectionHeader {
               width: parent.width
-              height: Style.space(28)
-              spacing: Style.space(5)
-              PanelSectionHeader {
-                width: parent.width - openSessionsButton.width - parent.spacing
-                anchors.verticalCenter: parent.verticalCenter
-                text: "AGENTS"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-              Button {
-                id: openSessionsButton
-                width: Style.space(88)
-                height: Style.space(24)
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Sessions  ›"
-                tooltipText: "Browse Agent Sessions"
-                bordered: false
-                foreground: root.foreground
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(4)
-                onClicked: root.openSessionBrowser()
-              }
+              text: "AGENTS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
             }
             Text {
               visible: root.paneAgents.length === 0
@@ -6220,8 +6853,9 @@ Panel {
 
       Item {
         id: sessionBrowser
+        parent: sessionRail.contentContainer
         anchors.fill: parent
-        visible: !root.settingsOpen && root.activeTab === "sessions"
+        visible: root.sessionRailOpen
 
         Column {
           anchors.fill: parent
@@ -6233,17 +6867,17 @@ Panel {
             spacing: Style.space(8)
 
             Button {
-              width: Style.space(92)
+              width: Style.space(34)
               height: Style.space(32)
               anchors.verticalCenter: parent.verticalCenter
-              text: "‹ Boomux"
-              tooltipText: "Return to the compact Boomux pane"
+              text: "×"
+              tooltipText: "Hide Session rail"
               bordered: true
               foreground: root.foreground
-              onClicked: root.closeSessionBrowser()
+              onClicked: root.closeSessionRail()
             }
             Column {
-              width: parent.width - sessionBrowserActions.width - Style.space(100)
+              width: parent.width - sessionBrowserActions.width - Style.space(42)
               anchors.verticalCenter: parent.verticalCenter
               spacing: 0
               Text {
@@ -6257,10 +6891,18 @@ Panel {
               }
               Text {
                 width: parent.width
-                text: (root.sessionQuery === "" ? root.paneSessions.length
-                  : root.paneSessions.length + " of " + root.allPaneSessions.length)
-                  + " across " + root.sessionDiscoveryNodes().length
-                  + " Node" + (root.sessionDiscoveryNodes().length === 1 ? "" : "s")
+                text: root.sessionDiscoveryActive && root.allPaneSessions.length === 0
+                  ? root.sessionSourceWorkspaceName + " · Loading Sessions "
+                    + root.sessionDiscoveryCompleted + "/" + root.sessionDiscoveryTotal
+                  : (root.sessionSourceWorkspaceId !== ""
+                  ? root.sessionSourceWorkspaceName + " · " : "No presented Workspace · ")
+                  + WorkspaceModel.sessionGroupCount(root.allPaneSessions, "Needs Attention")
+                  + " attention · "
+                  + WorkspaceModel.sessionGroupCount(root.allPaneSessions, "Active")
+                  + " active · " + (root.sessionQuery === "" ? root.filteredPaneSessions.length
+                  : root.filteredPaneSessions.length + " of " + root.allPaneSessions.length)
+                  + " total" + (root.sessionDiscoveryActive ? " · Refreshing "
+                    + root.sessionDiscoveryCompleted + "/" + root.sessionDiscoveryTotal : "")
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -6277,7 +6919,7 @@ Panel {
                 text: "↻"
                 tooltipText: "Refresh Sessions"
                 bordered: true
-                enabled: !sessionListProcess.running
+                enabled: !sessionListProcess.running && !root.sessionPrimaryOperationBusy()
                 foreground: root.foreground
                 onClicked: root.requestExplicitRefresh()
               }
@@ -6293,103 +6935,25 @@ Panel {
             placeholderText: "Search Sessions"
             foreground: root.foreground
             onTextChanged: root.sessionQuery = text
-            onAccepted: root.activatePanelCursor()
+            onAccepted: root.activateSession(root.selectedSession)
             Keys.onDownPressed: function(event) {
-              root.movePanelCursor(0, 1)
+              root.moveSessionSelection(1)
+              sessionRailKeyHandler.forceActiveFocus()
               event.accepted = true
             }
             Keys.onUpPressed: function(event) {
-              root.movePanelCursor(0, -1)
+              root.moveSessionSelection(-1)
+              sessionRailKeyHandler.forceActiveFocus()
               event.accepted = true
             }
             Keys.onTabPressed: function(event) {
-              sessionDestinationButton.forceActiveFocus()
+              sessionRailKeyHandler.forceActiveFocus()
               event.accepted = true
             }
             Keys.onEscapePressed: function(event) {
               if (text !== "") text = ""
-              else root.closeSessionBrowser()
+              else root.releaseSessionRailFocus()
               event.accepted = true
-            }
-          }
-
-          Rectangle {
-            width: parent.width
-            height: Style.space(48)
-            radius: Style.cornerRadius
-            color: Util.alpha(root.foreground, 0.035)
-            border.width: 1
-            border.color: Util.alpha(root.foreground, 0.12)
-
-            Row {
-              anchors.fill: parent
-              anchors.margins: Style.space(6)
-              spacing: Style.space(6)
-
-              Text {
-                width: Style.space(58)
-                height: parent.height
-                text: "OPEN IN"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Math.max(8, Style.font.caption - 1)
-                font.bold: true
-                verticalAlignment: Text.AlignVCenter
-              }
-              Button {
-                id: sessionDestinationButton
-                width: Math.min(Style.space(240), parent.width - Style.space(58)
-                  - openSelectedSessionButton.width - parent.spacing * 2)
-                height: parent.height
-                text: ""
-                tooltipText: "Choose where to present the selected Session terminal"
-                bordered: true
-                focusable: true
-                foreground: root.foreground
-                enabled: !sessionOpenProcess.running
-                onClicked: root.chooseSessionWorkspace()
-
-                Text {
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(12)
-                  anchors.right: sessionDestinationChevron.left
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.sessionCreateNewWorkspace ? "+ New Workspace"
-                    : (root.sessionTargetWorkspace
-                      ? String(root.sessionTargetWorkspace.name) : "Choose Workspace")
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  elide: Text.ElideRight
-                }
-                Text {
-                  id: sessionDestinationChevron
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(12)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "▾"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-              Button {
-                id: openSelectedSessionButton
-                width: Style.space(136)
-                height: parent.height
-                text: "Open Session"
-                tooltipText: "Open the selected Session in the chosen Workspace"
-                bordered: true
-                active: true
-                foreground: root.foreground
-                enabled: root.selectedItem !== null
-                  && (root.sessionCreateNewWorkspace
-                    ? root.atomicWorkspaceCreationSupported && !root.workspaceMutationBusy()
-                    : root.sessionTargetWorkspace !== null)
-                  && !sessionOpenProcess.running
-                onClicked: root.openSelectedSession()
-              }
             }
           }
 
@@ -6400,42 +6964,29 @@ Panel {
 
             Item {
               id: sessionBrowserListPane
-              width: parent.width
+              visible: root.sessionDetail === null && root.sessionInspectRequest === null
+              width: visible ? parent.width : 0
               height: parent.height
 
               Column {
                 anchors.fill: parent
                 spacing: Style.space(6)
 
-                Row {
-                  width: parent.width
-                  PanelSectionHeader {
-                    width: parent.width - sessionBrowserUpdated.width
-                    text: "RECENT"
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                  }
-                  Text {
-                    id: sessionBrowserUpdated
-                    width: Style.space(64)
-                    text: "UPDATED"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                    horizontalAlignment: Text.AlignRight
-                  }
-                }
-
                 Text {
-                  visible: !root.sessionCatalogSupported || root.paneSessions.length === 0
+                  visible: root.sessionSourceWorkspaceId === ""
+                    || !root.sessionCatalogSupported || root.filteredPaneSessions.length === 0
                   width: parent.width
-                  text: !root.sessionCatalogSupported
+                  text: root.sessionSourceWorkspaceId === ""
+                    ? (root.sessionRailPendingWorkspaceId !== ""
+                      ? "Presenting the selected Workspace..."
+                      : "Present a coordinated Workspace to review its Sessions.")
+                    : (!root.sessionCatalogSupported
                     ? "Sessions require projected Agent Session support"
-                    : (sessionListProcess.running && root.allPaneSessions.length === 0
-                      ? "Discovering Sessions..."
+                    : (root.sessionDiscoveryActive && root.allPaneSessions.length === 0
+                      ? "Discovering Sessions " + root.sessionDiscoveryCompleted + "/"
+                        + root.sessionDiscoveryTotal + "..."
                       : (root.sessionQuery !== "" && root.allPaneSessions.length > 0
-                        ? "No Sessions match your search" : "No Boomux Sessions"))
+                        ? "No Sessions match your search" : "No Boomux Sessions")))
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -6459,53 +7010,267 @@ Panel {
 
                 ListView {
                   id: sessionBrowserList
-                  visible: root.paneSessions.length > 0
+                  visible: root.sessionListRows.length > 0 && root.sessionDetail === null
+                    && root.sessionInspectRequest === null
                   width: parent.width
                   height: parent.height - y
-                  model: root.paneSessions
+                  model: root.sessionListRows
                   spacing: Style.space(5)
                   clip: true
                   boundsBehavior: Flickable.StopAtBounds
-                  currentIndex: root.selectedIndex
+                  currentIndex: root.sessionListIndex(root.selectedSessionKey)
                   ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                  section.property: "session_group"
+                  section.criteria: ViewSection.FullString
+                  section.delegate: Item {
+                    required property string section
+                    width: ListView.view.width
+                    height: Style.space(30)
+                    Text {
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.bottom: parent.bottom
+                      anchors.bottomMargin: Style.space(4)
+                      text: (root.sessionGroupCollapsed(parent.section) ? "› " : "⌄ ")
+                        + parent.section.toUpperCase() + " · "
+                        + WorkspaceModel.sessionGroupCount(root.filteredPaneSessions, parent.section)
+                      color: parent.section === "Needs Attention" ? root.urgent
+                        : (parent.section === "Active" ? Color.accent : root.dim)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.toggleSessionGroup(parent.section)
+                    }
+                  }
 
                   delegate: Rectangle {
                     id: sessionBrowserRow
                     required property var modelData
                     required property int index
                     readonly property bool selected: modelData.key === root.selectedSessionKey
+                    readonly property bool editing: modelData.key === root.sessionEditingKey
+                    readonly property bool expanded: modelData.key === root.expandedSessionKey
+                    readonly property var workingContexts: modelData.working_contexts || []
+                    readonly property bool hasWorkingContexts: workingContexts.length > 0
+                    function focusRename() {
+                      sessionRenameField.forceActiveFocus()
+                      sessionRenameField.selectAll()
+                    }
                     width: ListView.view.width
-                    height: Style.space(46)
+                    height: modelData.session_placeholder ? 0
+                      : Math.max(Style.space(62), sessionCardContent.implicitHeight
+                        + Style.space(20))
+                    visible: !modelData.session_placeholder
                     radius: Style.cornerRadius
                     color: selected ? Style.selectedFillFor(root.foreground, Color.accent)
                       : (sessionBrowserMouse.containsMouse
                         ? Util.alpha(root.foreground, 0.045) : "transparent")
                     opacity: root.sessionNodeIsEligible(modelData) ? 1 : 0.58
+                    border.width: 1
+                    border.color: selected ? Util.alpha(Color.accent, 0.5)
+                      : Util.alpha(root.foreground, 0.1)
 
                     Column {
+                      id: sessionCardContent
+                      z: 1
                       anchors.left: parent.left
                       anchors.right: parent.right
-                      anchors.leftMargin: Style.space(10)
-                      anchors.rightMargin: Style.space(10)
+                      anchors.margins: Style.space(10)
                       anchors.verticalCenter: parent.verticalCenter
                       spacing: Style.space(2)
+                      Item {
+                        width: parent.width - sessionCardActions.width - Style.space(8)
+                        height: Style.space(28)
+                        Text {
+                          id: sessionCardExpandIndicator
+                          visible: !sessionBrowserRow.editing
+                          width: Style.space(22)
+                          height: parent.height
+                          text: sessionBrowserRow.expanded ? "⌄" : "›"
+                          color: sessionBrowserRow.expanded ? Color.accent : root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          horizontalAlignment: Text.AlignHCenter
+                          verticalAlignment: Text.AlignVCenter
+                        }
+                        Text {
+                          anchors.left: sessionCardExpandIndicator.right
+                          anchors.right: parent.right
+                          anchors.top: parent.top
+                          anchors.bottom: parent.bottom
+                          visible: !sessionBrowserRow.editing
+                          text: ((modelData.attentions || []).length > 0 ? "● " : "")
+                            + (modelData.user_display_name !== null ? "◆ " : "")
+                            + (modelData.description || "Untitled Session")
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                          elide: Text.ElideRight
+                          verticalAlignment: Text.AlignVCenter
+                        }
+                        TextField {
+                          id: sessionRenameField
+                          z: 3
+                          anchors.fill: parent
+                          visible: sessionBrowserRow.editing
+                          foreground: root.foreground
+                          onVisibleChanged: if (visible) {
+                            text = root.sessionEditingDraft
+                            Qt.callLater(sessionBrowserRow.focusRename)
+                          }
+                          onTextEdited: {
+                            root.sessionEditingDraft = text
+                            root.sessionEditingError = ""
+                          }
+                          onAccepted: root.submitInlineSessionRename(modelData, text)
+                          Keys.onEscapePressed: function(event) {
+                            root.cancelInlineSessionRename()
+                            event.accepted = true
+                          }
+                        }
+                      }
                       Text {
+                        visible: !sessionBrowserRow.editing && !sessionBrowserRow.expanded
+                          && root.sessionCollapsedContextLabel(modelData) !== ""
                         width: parent.width
-                        text: modelData.description || "Untitled Session"
-                        color: root.foreground
+                        leftPadding: Style.space(22)
+                        text: root.sessionCollapsedContextLabel(modelData)
+                        color: root.dim
                         font.family: root.fontFamily
-                        font.pixelSize: Style.font.body
-                        font.bold: true
+                        font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
                       }
                       Text {
+                        visible: sessionBrowserRow.expanded && !sessionBrowserRow.editing
+                          && (modelData.git_branch || sessionBrowserRow.hasWorkingContexts)
                         width: parent.width
-                        text: String(modelData.workspace_name) + " · "
-                          + WorkspaceModel.sessionHarnessLabel(modelData.integration) + " · "
-                          + root.sessionStatusLabel(modelData) + " · "
-                          + String(modelData.node_alias) + " · "
-                          + WorkspaceModel.relativeTime(modelData.last_at_ms, root.clockNow)
+                        text: "LAUNCH BRANCH · "
+                          + (modelData.git_branch ? String(modelData.git_branch) : "unavailable")
                         color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        wrapMode: Text.WrapAnywhere
+                      }
+                      Text {
+                        visible: sessionBrowserRow.expanded && sessionBrowserRow.hasWorkingContexts
+                          && !sessionBrowserRow.editing
+                        width: parent.width
+                        text: root.sessionWorkingContextsHeading(modelData)
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                      Item {
+                        visible: sessionBrowserRow.expanded && sessionBrowserRow.hasWorkingContexts
+                          && !sessionBrowserRow.editing
+                        width: parent.width
+                        height: visible ? Math.max(sessionContextRepositoryHeader.implicitHeight,
+                          Math.max(sessionContextBranchHeader.implicitHeight,
+                            sessionContextSeenHeader.implicitHeight)) : 0
+                        Text {
+                          id: sessionContextRepositoryHeader
+                          width: parent.width * 0.31
+                          text: "REPOSITORY"
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                        }
+                        Text {
+                          id: sessionContextBranchHeader
+                          x: parent.width * 0.31 + Style.space(8)
+                          width: parent.width - x - sessionContextSeenHeader.width - Style.space(8)
+                          text: "BRANCH"
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                        }
+                        Text {
+                          id: sessionContextSeenHeader
+                          anchors.right: parent.right
+                          width: Style.space(58)
+                          text: "SEEN"
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                          horizontalAlignment: Text.AlignRight
+                        }
+                      }
+                      Repeater {
+                        model: sessionBrowserRow.editing || !sessionBrowserRow.expanded
+                          ? [] : sessionBrowserRow.workingContexts
+                        delegate: Item {
+                          required property var modelData
+                          width: sessionCardContent.width
+                          height: Math.max(sessionContextRepository.implicitHeight,
+                            Math.max(sessionContextBranch.implicitHeight,
+                              sessionContextSeen.implicitHeight))
+                          Text {
+                            id: sessionContextRepository
+                            width: parent.width * 0.31
+                            text: String(modelData.repository)
+                            color: root.foreground
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            wrapMode: Text.WrapAnywhere
+                          }
+                          Text {
+                            id: sessionContextBranch
+                            x: parent.width * 0.31 + Style.space(8)
+                            width: parent.width - x - sessionContextSeen.width - Style.space(8)
+                            text: root.sessionContextBranchLabel(modelData)
+                            color: Color.accent
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            wrapMode: Text.WrapAnywhere
+                          }
+                          Text {
+                            id: sessionContextSeen
+                            anchors.right: parent.right
+                            width: Style.space(58)
+                            text: WorkspaceModel.relativeTime(modelData.observed_at_ms, root.clockNow)
+                            color: root.dim
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                          }
+                        }
+                      }
+                      Button {
+                        visible: sessionBrowserRow.expanded && !sessionBrowserRow.editing
+                        width: parent.width
+                        text: (root.sessionWorkingContextsOverflowLabel(modelData) !== ""
+                          ? root.sessionWorkingContextsOverflowLabel(modelData) + " · " : "")
+                          + "View details"
+                        tooltipText: "Inspect complete Session details"
+                        bordered: false
+                        leftAlign: true
+                        foreground: Color.accent
+                        enabled: root.sessionInspectSupported && root.sessionNodeIsEligible(modelData)
+                        onClicked: {
+                          root.selectSession(modelData)
+                          root.inspectSession(modelData)
+                        }
+                      }
+                      Text {
+                        width: parent.width
+                        leftPadding: Style.space(22)
+                        text: sessionBrowserRow.editing && root.sessionEditingError !== ""
+                          ? root.sessionEditingError
+                          : root.sessionMetadataLabel(modelData)
+                        color: sessionBrowserRow.editing && root.sessionEditingError !== ""
+                          ? root.urgent : root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
@@ -6515,11 +7280,104 @@ Panel {
                       id: sessionBrowserMouse
                       anchors.fill: parent
                       hoverEnabled: true
+                      enabled: !sessionBrowserRow.editing
                       cursorShape: Qt.PointingHandCursor
                       onClicked: {
-                        root.focusSection = "lower"
-                        root.selectedSessionKey = modelData.key
-                        root.selectedIndex = index
+                        root.selectSession(modelData)
+                        root.toggleSessionExpanded(modelData)
+                      }
+                      onDoubleClicked: root.activateSession(modelData)
+                    }
+                    Row {
+                      id: sessionCardActions
+                      z: 2
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(7)
+                      anchors.top: parent.top
+                      anchors.topMargin: Style.space(8)
+                      spacing: Style.space(3)
+                      Button {
+                        id: sessionCardOpenButton
+                        width: Style.space(30)
+                        height: Style.space(30)
+                        iconText: root.sessionIsOpening(modelData) ? "↻" : ""
+                        iconSpinning: root.sessionIsOpening(modelData)
+                        tooltipText: root.sessionIsOpening(modelData)
+                          ? "Opening Session..." : root.sessionActionLabel(modelData)
+                        bordered: false
+                        foreground: Color.accent
+                        enabled: root.sessionCanOpen(modelData)
+                          && !root.sessionPrimaryOperationBusy()
+                        onClicked: {
+                          root.selectSession(modelData)
+                          root.activateSession(modelData)
+                        }
+                      }
+                      Button {
+                        id: sessionCardMenuButton
+                        width: Style.space(30)
+                        height: Style.space(30)
+                        text: "⋮"
+                        tooltipText: "Session actions"
+                        bordered: false
+                        foreground: root.foreground
+                        onClicked: sessionCardMenu.open()
+                      }
+                      Popup {
+                        id: sessionCardMenu
+                        parent: sessionCardMenuButton
+                        popupType: Popup.Item
+                        x: sessionCardMenuButton.width - width
+                        y: sessionCardMenuButton.height + Style.space(3)
+                        width: Style.space(170)
+                        padding: Style.space(4)
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                        background: Rectangle {
+                          color: Color.background
+                          radius: Style.cornerRadius
+                          border.width: 1
+                          border.color: Util.alpha(root.foreground, 0.2)
+                        }
+                        contentItem: Column {
+                          spacing: Style.space(2)
+                          Button {
+                            width: parent.width
+                            text: "Rename"
+                            bordered: false
+                            leftAlign: true
+                            enabled: root.sessionCanChangeDisplayName(modelData)
+                              && !root.sessionPrimaryOperationBusy()
+                            foreground: root.foreground
+                            onClicked: { sessionCardMenu.close(); root.requestSessionRename(modelData) }
+                          }
+                          Button {
+                            visible: (modelData.attentions || []).length > 0
+                            width: parent.width
+                            text: "Dismiss Attention"
+                            bordered: false
+                            leftAlign: true
+                            enabled: root.sessionCanDismissAttention(modelData)
+                              && !root.sessionPrimaryOperationBusy()
+                            foreground: root.foreground
+                            onClicked: {
+                              sessionCardMenu.close()
+                              root.dismissSessionAttention(modelData)
+                            }
+                          }
+                          Button {
+                            width: parent.width
+                            text: "Hide"
+                            bordered: false
+                            leftAlign: true
+                            enabled: root.sessionCanHide(modelData)
+                              && !root.sessionPrimaryOperationBusy()
+                            foreground: root.foreground
+                            onClicked: {
+                              sessionCardMenu.close()
+                              root.hideSession(modelData)
+                            }
+                          }
+                        }
                       }
                     }
                   }
@@ -6536,8 +7394,8 @@ Panel {
             }
 
             BorderSurface {
-              visible: false
-              width: 0
+              visible: root.sessionDetail !== null || root.sessionInspectRequest !== null
+              width: visible ? parent.width : 0
               height: parent.height
               color: Util.alpha(root.foreground, 0.025)
               borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
@@ -6547,7 +7405,7 @@ Panel {
                 anchors.centerIn: parent
                 width: parent.width - Style.space(48)
                 visible: root.sessionDetail === null && root.sessionInspectRequest === null
-                text: "Select a Session to inspect its lifecycle and recent terminal output."
+                text: "Select a Session to inspect its lifecycle, contexts, and occurrences."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -6579,7 +7437,7 @@ Panel {
               Flickable {
                 anchors.fill: parent
                 anchors.margins: Style.space(14)
-                visible: root.sessionDetail !== null
+                visible: root.sessionDetail !== null && root.sessionInspectRequest === null
                 contentHeight: sessionBrowserDetailColumn.implicitHeight
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
@@ -6625,10 +7483,28 @@ Panel {
                     wrapMode: Text.Wrap
                   }
                   Text {
+                    visible: root.sessionDetail && root.sessionDetail.user_display_name !== null
+                    width: parent.width
+                    text: "Boomux display-name override"
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
                     width: parent.width
                     text: root.sessionDetail ? "Workspace: "
                       + String(root.sessionDetail.workspace_name) + " · Node: "
                       + String(root.sessionDetail.node_alias) : ""
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                  }
+                  Text {
+                    visible: root.sessionDetail && root.sessionDetail.latest_agent_name
+                    width: parent.width
+                    text: root.sessionDetail
+                      ? "Latest Agent: " + String(root.sessionDetail.latest_agent_name) : ""
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -6654,15 +7530,135 @@ Panel {
                     font.pixelSize: Style.font.caption
                     wrapMode: Text.Wrap
                   }
-                  Text {
+                  Column {
                     width: parent.width
-                    text: root.sessionDetail ? "Source: "
-                      + (root.sessionDetail.source_cwd
-                        ? root.compactPath(root.sessionDetail.source_cwd) : "unavailable") : ""
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideMiddle
+                    spacing: Style.space(2)
+                    Text {
+                      width: parent.width
+                      text: "LAUNCH CONTEXT"
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                    Text {
+                      width: parent.width
+                      text: root.sessionDetail ? "Directory · "
+                        + (root.sessionDetail.source_cwd
+                          ? root.compactPath(root.sessionDetail.source_cwd) : "unavailable") : ""
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      wrapMode: Text.WrapAnywhere
+                    }
+                    Text {
+                      visible: root.sessionDetail && root.sessionDetail.git_branch
+                      width: parent.width
+                      text: root.sessionDetail ? "Branch · " + root.sessionDetail.git_branch : ""
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      wrapMode: Text.WrapAnywhere
+                    }
+                  }
+                  Column {
+                    visible: root.sessionDetail
+                      && (root.sessionDetail.working_contexts || []).length > 0
+                    width: parent.width
+                    spacing: Style.space(2)
+                    Text {
+                      width: parent.width
+                      text: root.sessionWorkingContextsHeading(root.sessionDetail)
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                    Item {
+                      width: parent.width
+                      height: Math.max(sessionDetailRepositoryHeader.implicitHeight,
+                        Math.max(sessionDetailBranchHeader.implicitHeight,
+                          sessionDetailSeenHeader.implicitHeight))
+                      Text {
+                        id: sessionDetailRepositoryHeader
+                        width: parent.width * 0.31
+                        text: "REPOSITORY"
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                      Text {
+                        id: sessionDetailBranchHeader
+                        x: parent.width * 0.31 + Style.space(8)
+                        width: parent.width - x - sessionDetailSeenHeader.width - Style.space(8)
+                        text: "BRANCH"
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                      Text {
+                        id: sessionDetailSeenHeader
+                        anchors.right: parent.right
+                        width: Style.space(58)
+                        text: "SEEN"
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        horizontalAlignment: Text.AlignRight
+                      }
+                    }
+                    Repeater {
+                      model: root.sessionDetail ? root.sessionDetail.working_contexts || [] : []
+                      delegate: Item {
+                        required property var modelData
+                        width: sessionBrowserDetailColumn.width
+                        height: Math.max(sessionDetailRepository.implicitHeight,
+                          Math.max(sessionDetailBranch.implicitHeight,
+                            sessionDetailSeen.implicitHeight))
+                        Text {
+                          id: sessionDetailRepository
+                          width: parent.width * 0.31
+                          text: String(modelData.repository)
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          wrapMode: Text.WrapAnywhere
+                        }
+                        Text {
+                          id: sessionDetailBranch
+                          x: parent.width * 0.31 + Style.space(8)
+                          width: parent.width - x - sessionDetailSeen.width - Style.space(8)
+                          text: root.sessionContextBranchLabel(modelData)
+                          color: Color.accent
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          wrapMode: Text.WrapAnywhere
+                        }
+                        Text {
+                          id: sessionDetailSeen
+                          anchors.right: parent.right
+                          width: Style.space(58)
+                          text: WorkspaceModel.relativeTime(modelData.observed_at_ms, root.clockNow)
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          horizontalAlignment: Text.AlignRight
+                          elide: Text.ElideRight
+                        }
+                      }
+                    }
+                    Text {
+                      visible: root.sessionWorkingContextsOverflowLabel(root.sessionDetail) !== ""
+                      width: parent.width
+                      leftPadding: Style.space(8)
+                      text: root.sessionWorkingContextsOverflowLabel(root.sessionDetail)
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
                   }
                   Text {
                     width: parent.width
@@ -6675,56 +7671,17 @@ Panel {
                   }
                   Button {
                     width: parent.width
-                    text: root.sessionDetail && root.sessionDetail.state_is_current
-                      ? "Open current Session" : "Resume exact Session"
+                    text: root.sessionIsOpening(root.sessionDetail) ? "Opening..."
+                      : (root.sessionDetail && root.sessionDetail.state_is_current
+                        ? "Open current Session" : "Resume exact Session")
                     bordered: true
                     foreground: root.foreground
                     enabled: root.sessionDetail && root.sessionCanOpen(root.sessionDetail)
-                      && !sessionOpenProcess.running
-                    onClicked: root.openSession(root.sessionDetail)
-                  }
-                  PanelSeparator { width: parent.width; foreground: root.foreground }
-                  Text {
-                    width: parent.width
-                    text: "RECENT TERMINAL"
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                  }
-                  Rectangle {
-                    width: parent.width
-                    height: Math.max(Style.space(110), sessionPreviewText.implicitHeight
-                      + Style.space(20))
-                    radius: Style.cornerRadius
-                    color: Util.alpha(Color.background, 0.52)
-                    border.width: 1
-                    border.color: Util.alpha(root.foreground, 0.12)
-
-                    BusyIndicator {
-                      anchors.centerIn: parent
-                      visible: root.sessionPreviewRequest !== null
-                      running: visible
-                    }
-                    Text {
-                      id: sessionPreviewText
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.top: parent.top
-                      anchors.margins: Style.space(10)
-                      visible: root.sessionPreviewRequest === null
-                      text: !root.sessionPreview ? "Waiting for terminal output..."
-                        : (root.sessionPreview.available
-                          ? (root.sessionPreview.output || "The retained terminal is empty.")
-                          : root.sessionPreview.message)
-                      color: root.sessionPreview && root.sessionPreview.available
-                        ? root.foreground : root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      wrapMode: Text.WrapAnywhere
-                      maximumLineCount: 40
-                      elide: Text.ElideLeft
-                    }
+                      && (root.sessionCreateNewWorkspace
+                        ? root.atomicWorkspaceCreationSupported && !root.workspaceMutationBusy()
+                        : root.sessionTargetWorkspace !== null)
+                      && !root.sessionPrimaryOperationBusy()
+                    onClicked: root.activateSession(root.sessionDetail)
                   }
                 }
               }
@@ -6733,54 +7690,11 @@ Panel {
         }
       }
 
-      Popup {
+      QtObject {
         id: sessionWorkspaceDropdown
-        parent: sessionDestinationButton
-        popupType: Popup.Item
-        x: 0
-        y: sessionDestinationButton.height + Style.space(4)
-        z: 20
-        width: sessionDestinationButton.width
-        height: Math.min(Style.space(260), sessionWorkspaceDropdownList.contentHeight
-          + Style.space(8))
-        padding: Style.space(4)
-        margins: -1
-        modal: false
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-          color: Color.background
-          radius: Style.cornerRadius
-          border.width: 1
-          border.color: Util.alpha(root.foreground, 0.22)
-        }
-
-        contentItem: ListView {
-          id: sessionWorkspaceDropdownList
-          spacing: Style.space(3)
-          clip: true
-          boundsBehavior: Flickable.StopAtBounds
-          model: root.visibleWorkspaces.filter(function(workspace) {
-            return workspace.is_global && !workspace.closing
-          }).concat([{ create_new: true, id: "", name: "+ New Workspace" }])
-          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-          delegate: Button {
-            required property var modelData
-            width: ListView.view.width
-            height: Style.space(36)
-            text: modelData.create_new ? String(modelData.name)
-              : String(modelData.name)
-                + (modelData.id === root.activeBoomuxWorkspaceId ? " · active" : "")
-            bordered: false
-            leftAlign: true
-            foreground: modelData.create_new ? Color.accent : root.foreground
-            enabled: !modelData.create_new || root.atomicWorkspaceCreationSupported
-            onClicked: {
-              if (modelData.create_new) root.selectNewWorkspaceForSession()
-              else root.openSessionInWorkspace(modelData)
-            }
-          }
-        }
+        readonly property bool opened: false
+        function open() {}
+        function close() {}
       }
 
       Item {
@@ -6814,6 +7728,23 @@ Panel {
 
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
+                && root.actionMenuTarget.workspace.is_global
+                && !root.actionMenuTarget.workspace.closing
+                && root.sessionCatalogSupported
+              width: parent.width
+              text: "Browse Sessions"
+              tooltipText: "Load Sessions from this coordinated Workspace's active placements"
+              bordered: false
+              hasCursor: root.currentActionMenuAction === "sessions"
+              leftAlign: true
+              foreground: root.foreground
+              enabled: visible
+              onClicked: root.runActionMenuAction("sessions")
+              onHovered: function(hovered) { if (hovered)
+                root.actionMenuIndex = root.currentActionMenuActions.indexOf("sessions") }
+            }
+            Button {
+              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
               width: parent.width
               text: "Create Shell"
               tooltipText: root.actionMenuTarget
@@ -6826,21 +7757,6 @@ Panel {
               onClicked: root.runActionMenuAction("shell")
               onHovered: function(hovered) { if (hovered)
                 root.actionMenuIndex = root.currentActionMenuActions.indexOf("shell") }
-            }
-            Button {
-              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
-                && root.workspaceCanChangeDefaultPath(root.actionMenuTarget.workspace)
-              width: parent.width
-              text: "Shell Start Folder"
-              tooltipText: "Choose where new Shells in this Workspace start"
-              bordered: false
-              hasCursor: root.currentActionMenuAction === "default-path"
-              leftAlign: true
-              foreground: root.foreground
-              enabled: visible
-              onClicked: root.runActionMenuAction("default-path")
-              onHovered: function(hovered) { if (hovered)
-                root.actionMenuIndex = root.currentActionMenuActions.indexOf("default-path") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"
@@ -6966,209 +7882,7 @@ Panel {
 
       Rectangle {
         anchors.fill: parent
-        visible: false
-        z: 9
-        color: Util.alpha(Color.background, 0.78)
-
-        MouseArea { anchors.fill: parent }
-
-        BorderSurface {
-          anchors.centerIn: parent
-          width: Math.min(parent.width - Style.space(24), Style.space(360))
-          height: Math.min(parent.height - Style.space(28), sessionDetailColumn.implicitHeight
-            + Style.space(24))
-          color: Color.background
-          borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
-          radius: Style.cornerRadius
-
-          Flickable {
-            anchors.fill: parent
-            anchors.margins: Style.space(12)
-            contentHeight: sessionDetailColumn.implicitHeight
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-            Column {
-              id: sessionDetailColumn
-              width: parent.width
-              spacing: Style.space(7)
-
-              BusyIndicator {
-                anchors.horizontalCenter: parent.horizontalCenter
-                visible: root.sessionInspectRequest !== null
-                running: visible
-              }
-
-              Text {
-                width: parent.width
-                visible: root.sessionInspectRequest !== null
-                text: root.sessionInspectRequest
-                  ? "Inspecting " + (root.sessionInspectRequest.title || "Session") + "..." : ""
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-              }
-
-              Row {
-                visible: root.sessionDetail !== null
-                width: parent.width
-                Text {
-                  width: parent.width - closeSessionDetailButton.width
-                  text: root.sessionDetail
-                    ? WorkspaceModel.sessionHarnessLabel(root.sessionDetail.integration)
-                      + " SESSION" : "SESSION"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.title
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-                Button {
-                  id: closeSessionDetailButton
-                  width: Style.space(32)
-                  height: Style.space(28)
-                  text: "×"
-                  tooltipText: "Close Session details"
-                  bordered: true
-                  foreground: root.foreground
-                  onClicked: root.closeSessionInspection()
-                }
-              }
-              Text {
-                visible: root.sessionDetail !== null
-                width: parent.width
-                text: root.sessionDetail ? (root.sessionDetail.description || "Untitled Session") : ""
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-                wrapMode: Text.Wrap
-              }
-              Text {
-                width: parent.width
-                text: root.sessionDetail ? "Node: " + String(root.sessionDetail.node_alias)
-                  + " · Workspace: " + String(root.sessionDetail.workspace_name) : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.Wrap
-              }
-              Text {
-                width: parent.width
-                text: root.sessionDetail ? "Harness: "
-                  + WorkspaceModel.sessionHarnessLabel(root.sessionDetail.integration)
-                  + " · " + root.sessionStatusLabel(root.sessionDetail) : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.Wrap
-              }
-              Text {
-                width: parent.width
-                text: root.sessionDetail ? "Started: "
-                  + root.formatTimestamp(root.sessionDetail.started_at_ms) + " · Last activity: "
-                  + root.formatTimestamp(root.sessionDetail.last_at_ms) : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.Wrap
-              }
-              Text {
-                width: parent.width
-                text: root.sessionDetail ? "Source: "
-                  + (root.sessionDetail.source_cwd
-                    ? root.compactPath(root.sessionDetail.source_cwd) : "unavailable") : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideMiddle
-              }
-              Text {
-                width: parent.width
-                text: root.sessionDetail ? root.sessionActionLabel(root.sessionDetail) : ""
-                color: root.sessionDetail && root.sessionCanOpen(root.sessionDetail)
-                  ? Color.accent : root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              PanelSeparator { width: parent.width; foreground: root.foreground }
-              Text {
-                width: parent.width
-                text: root.sessionDetail ? "OCCURRENCES · "
-                  + root.sessionDetail.occurrences.length : "OCCURRENCES"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              Repeater {
-                model: root.sessionDetail ? root.sessionDetail.occurrences : []
-                delegate: Rectangle {
-                  required property var modelData
-                  required property int index
-                  width: sessionDetailColumn.width
-                  height: occurrenceColumn.implicitHeight + Style.space(14)
-                  radius: Style.cornerRadius
-                  color: Util.alpha(root.foreground, 0.04)
-                  Column {
-                    id: occurrenceColumn
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.margins: Style.space(7)
-                    spacing: Style.space(2)
-                    Text {
-                      width: parent.width
-                      text: "#" + (index + 1) + " · "
-                        + String(modelData.observation.state).split("_").join(" ")
-                        + (modelData.is_current ? " · current" : " · historical")
-                      color: modelData.is_current ? Color.accent : root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
-                    Text {
-                      width: parent.width
-                      text: root.formatTimestamp(modelData.started_at_ms) + " → "
-                        + (modelData.ended_at_ms === null ? "now"
-                          : root.formatTimestamp(modelData.ended_at_ms))
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                    Text {
-                      width: parent.width
-                      text: "Agent " + String(modelData.agent_id) + " · Shell "
-                        + String(modelData.shell_id) + " · Run " + String(modelData.run_id)
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Math.max(8, Style.font.caption - 1)
-                      elide: Text.ElideMiddle
-                    }
-                    Text {
-                      visible: !!modelData.source_cwd || !!modelData.retained_shell_cwd
-                      width: parent.width
-                      text: root.compactPath(modelData.source_cwd || modelData.retained_shell_cwd)
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Math.max(8, Style.font.caption - 1)
-                      elide: Text.ElideMiddle
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      Rectangle {
-        anchors.fill: parent
-        visible: root.renameTarget !== null
+        visible: root.renameTarget !== null && root.renameTarget.kind !== "session"
         z: 9
         color: Util.alpha(Color.background, 0.72)
 
@@ -7195,7 +7909,8 @@ Panel {
               width: parent.width
               text: "Rename " + (root.renameTarget && root.renameTarget.kind === "workspace"
                 ? "Workspace" : (root.renameTarget && root.renameTarget.kind === "launcher"
-                  ? "Launcher" : "Shell"))
+                  ? "Launcher" : (root.renameTarget && root.renameTarget.kind === "session"
+                    ? "Session Display Name" : "Shell")))
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -7244,6 +7959,8 @@ Panel {
                 KeyNavigation.backtab: renameCancelButton
                 foreground: Color.accent
                 enabled: renameField.text.trim() !== "" && !actionProcess.running
+                  && (!root.renameTarget || root.renameTarget.kind !== "session"
+                    || !root.sessionPrimaryOperationBusy())
                 Keys.onEscapePressed: root.cancelRename()
                 onClicked: root.confirmRename()
               }
@@ -7281,6 +7998,50 @@ Panel {
           else confirmationDialog.handleKey(event)
           event.accepted = true
         }
+      }
+    }
+  }
+
+  SidePane {
+    id: sessionRail
+    anchorItem: button
+    bar: root.bar
+    open: root.opened && root.sessionRailOpen
+    side: root.paneSide
+    edgeOffset: Math.round(panel.effectivePaneWidth + Style.gapsOut)
+    slideFromEdgeOffset: true
+    reserveSpace: false
+    paneWidth: root.sessionPaneWidth
+    namespace: "omarchy-boomux-session-rail"
+    focusColor: Color.accent
+    focusTarget: sessionSearchField
+    onKeyboardModeChanged: if (keyboardMode) panel.exitKeyboardMode()
+    onOutsideClicked: root.releaseSessionRailFocus()
+
+    Item {
+      id: sessionRailKeyHandler
+      z: 30
+      width: 1
+      height: 1
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Down || event.key === Qt.Key_J)
+          root.moveSessionSelection(1)
+        else if (event.key === Qt.Key_Up || event.key === Qt.Key_K)
+          root.moveSessionSelection(-1)
+        else if (event.key === Qt.Key_Right || event.key === Qt.Key_L)
+          root.expandSelectedSession()
+        else if (event.key === Qt.Key_Left || event.key === Qt.Key_H)
+          root.collapseSelectedSession()
+        else if (event.key === Qt.Key_Space)
+          root.toggleSessionExpanded(root.selectedSession)
+        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+          root.activateSession(root.selectedSession)
+        else if (event.key === Qt.Key_Escape) {
+          if (root.sessionDetail || root.sessionInspectRequest) root.closeSessionInspection()
+          else root.releaseSessionRailFocus()
+        } else if (event.key === Qt.Key_S) root.closeSessionRail()
+        else return
+        event.accepted = true
       }
     }
   }
