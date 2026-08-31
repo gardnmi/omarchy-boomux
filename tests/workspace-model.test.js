@@ -2085,13 +2085,15 @@ describe("qualified commands and action gates", () => {
   })
 })
 
-test("wires the protocol-49 default path action without optimistic updates", () => {
+test("keeps protocol-49 default path plumbing out of the Workspace menu", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+  const actions = panel.slice(panel.indexOf("function actionMenuActionsFor"),
+    panel.indexOf("function moveActionMenu"))
   expect(panel).toContain('data.json_commands.indexOf("workspace.set-default-cwd") >= 0')
   expect(panel).toContain('cliFeatures.indexOf("workspace_placement_default_cwd") >= 0')
   expect(panel).toContain("daemonProtocolVersion >= 49")
-  expect(panel).toContain('text: "Shell Start Folder"')
-  expect(panel).toContain('root.runActionMenuAction("default-path")')
+  expect(panel).not.toContain('text: "Shell Start Folder"')
+  expect(actions).not.toContain('actions.push("default-path")')
   expect(panel).toContain("WorkspaceModel.workspaceDefaultCwdCommand(")
   expect(panel).toContain('root.parseEnvelope(defaultCwdStdout.text, "workspace.set-default-cwd")')
   expect(panel).toContain("WorkspaceModel.resolveWorkspaceDefaultCwd(pendingDefaultCwd, workspaces)")

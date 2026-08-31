@@ -3021,7 +3021,6 @@ Panel {
           && sessionCatalogSupported) actions.push("sessions")
       if (workspaceCreationReason(target.workspace) === "" && !actionProcess.running
           && !openProcess.running) actions.push("shell")
-      if (workspaceCanChangeDefaultPath(target.workspace)) actions.push("default-path")
       if (workspaceCanRename(target.workspace)) actions.push("rename")
       if (workspaceCanRemove(target.workspace)) actions.push("remove")
       return actions
@@ -7758,21 +7757,6 @@ Panel {
               onClicked: root.runActionMenuAction("shell")
               onHovered: function(hovered) { if (hovered)
                 root.actionMenuIndex = root.currentActionMenuActions.indexOf("shell") }
-            }
-            Button {
-              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
-                && root.workspaceCanChangeDefaultPath(root.actionMenuTarget.workspace)
-              width: parent.width
-              text: "Shell Start Folder"
-              tooltipText: "Choose where new Shells in this Workspace start"
-              bordered: false
-              hasCursor: root.currentActionMenuAction === "default-path"
-              leftAlign: true
-              foreground: root.foreground
-              enabled: visible
-              onClicked: root.runActionMenuAction("default-path")
-              onHovered: function(hovered) { if (hovered)
-                root.actionMenuIndex = root.currentActionMenuActions.indexOf("default-path") }
             }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "node"

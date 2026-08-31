@@ -270,9 +270,9 @@ or lifecycle observation.
 
 - Keep immediate generated Workspace creation and the project-folder action at
   Workspace-tree scope. Do not restore Workspace name or arbitrary-path forms.
-- Gate **Change Default Path** on protocol 49, `workspace.set-default-cwd`, and
-  `workspace_placement_default_cwd`, and expose it only for an active local
-  coordinated placement. Existing Shells must not be restarted.
+- Do not expose **Change Default Path** in the Workspace action menu. If another
+  surface reintroduces it, gate it on protocol 49, `workspace.set-default-cwd`,
+  and `workspace_placement_default_cwd`; existing Shells must not be restarted.
 - Keep Workspace expansion separate from activation. The chevron changes only
   local pane state; the row persists the default and performs explicit open
   without dismissing the pane, and makes that opened Workspace the expanded row.

@@ -31,8 +31,8 @@ terminals and Agent Sessions, monitoring Agents, and checking Nodes.
 - Confirms available plugin updates in the pane, then delegates fetching,
   validation, rollback, and reload to Omarchy's plugin updater.
 - Provides three-dot action menus for Workspaces, items, and Nodes, including
-  Shell creation, Shell start-folder changes, rename, guided recovery, and
-  confirmed removal actions when supported.
+  Shell creation, rename, guided recovery, and confirmed removal actions when
+  supported.
 - Creates a generated coordinated Workspace and its first generated Shell from
   `+` or `N`, always on the exact eligible local Node at `$HOME`, without opening
   a terminal.
@@ -101,7 +101,7 @@ releases install it to `~/.local/bin`.
 | Launcher row | Invoke the detached launcher; no managed terminal or retained output is created |
 | `+` or `N` | Immediately create a generated Workspace and first Shell at `$HOME` |
 | Project folder icon | Choose a configured project and create a same-named Workspace and generated Shell at its canonical path |
-| Workspace three-dot menu | Browse Sessions for a coordinated Workspace, create a Shell, change its local **Shell Start Folder**, rename, or remove when supported |
+| Workspace three-dot menu | Browse Sessions for a coordinated Workspace, create a Shell, rename, or remove when supported |
 | `Tab` / `Shift-Tab` | Move between Workspaces, expanded items, and the lower view |
 | Arrow keys or `H` / `J` / `K` / `L` | Move within the focused section; expand or collapse Workspaces |
 | `Enter` or `Space` | Activate the focused row or menu action |
@@ -388,9 +388,9 @@ must provide TLS, authentication, and authorization.
   Explicit `+`/`N` creation can also start Boomux when needed, refresh its
   protocol and Node snapshot, resolve exactly one eligible local Node, and only
   then build the atomic command once.
-- Workspace creation and Shell start-folder changes use exact argv and returned
-  IDs. The pane does not reissue a mutation after completion or an unknown
-  outcome, optimistically update the model, or fall back to a remote Node.
+- Workspace creation uses exact argv and returned IDs. The pane does not reissue
+  a mutation after completion or an unknown outcome, optimistically update the
+  model, or fall back to a remote Node.
 - Every creation intent performs a fresh daemon status check and fresh Node
   snapshot before constructing argv. After a successful mutation, snapshot
   confirmation is bounded; a timeout reports that the operation completed but
