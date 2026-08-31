@@ -17,8 +17,8 @@ terminals and Agent Sessions, monitoring Agents, and checking Nodes.
 - Shows the installed Boomux CLI version in the pane header.
 - Lists current Agents and outstanding blocked or completed attention by latest
   authoritative update.
-- Opens a compact contextual Session rail on the edge opposite the main pane,
-  with its own persisted width and a dedicated icon on each coordinated Workspace row.
+- Opens a compact contextual Session drawer from the main pane's inward edge,
+  at a fixed full width with a dedicated icon on each coordinated Workspace row.
 - Browses one coordinated Workspace's Session history from its exact active
   Node placements without loading private host catalogs during tree expansion.
 - Shows bounded owner-observed repository/branch contexts without replacing a
@@ -40,8 +40,8 @@ terminals and Agent Sessions, monitoring Agents, and checking Nodes.
   each discovered project name and canonical path without an editing form.
 - Reserves the left or right screen edge so Hyprland tiles applications beside
   the pane instead of covering them.
-- Reserves each open pane on its own edge so Hyprland tiles remain beside both
-  the main pane and the optional Session rail.
+- Keeps the main pane's edge reservation stable while the optional Session
+  drawer overlays the adjacent desktop area.
 - Presents coordinated Workspaces immediately through Boomux's Hyprland desktop
   integration.
 - Shows the active Workspace, focused managed terminal, Agent attention, and
@@ -176,10 +176,9 @@ Omarchy plugins open.
 ## Sessions
 
 Each coordinated Workspace row has a Session icon that opens or closes its Session
-rail without taking keyboard focus.
-The rail always appears opposite the configured main pane:
-main-left uses a right Session rail and main-right uses a left Session rail. It
-follows only the currently Hyprland-presented coordinated Workspace. A Workspace
+drawer without taking keyboard focus. The drawer slides from the main pane's
+inward edge toward the center of the screen and mirrors with the configured pane
+side. It follows only the currently Hyprland-presented coordinated Workspace. A Workspace
 change keeps the rail open, clears data from the old source identity, defaults
 the destination to the new source, and discovers the new exact placements. With
 no presented coordinated Workspace, the rail shows an empty prompt and runs no
@@ -191,10 +190,17 @@ Hyprland reports that exact Workspace active, the rail shows a
 transition state and does not query the previously active Workspace. Merely
 expanding a Workspace never loads Session history. Discovery sends one query for
 each exact active eligible `(Node ID, owner Workspace ID)` placement and
-keeps `(node_id, session_id)` as the identity, refreshes after ten seconds while
-visible, rejects responses for a different owner Workspace, and retains
-successful placement results when another placement fails. An explicit
-`R` waits for a fresh Boomux snapshot before reloading Sessions.
+keeps `(node_id, session_id)` as the identity, rejects responses for a different
+owner Workspace, and retains successful placement results when another placement
+fails. Cold and stale rail entry, relevant owner changes, and explicit refresh
+start discovery; merely leaving the rail open does not poll host catalogs. An
+explicit `R` waits for a fresh Boomux snapshot before reloading Sessions.
+
+Discovery stages every placement separately from the visible catalog. A cold load
+shows continuous placement progress without presenting zero as a completed total.
+A refresh keeps the prior complete catalog visible and searchable, then replaces
+all placement results once after the transaction settles. No title, row, group,
+or ordering change is published incrementally.
 
 The header summarizes outstanding attention, active work, and total loaded
 Sessions. Cards are grouped as **Needs Attention**, **Active**, **Recent**, and
@@ -219,14 +225,15 @@ checkout such as `io.github.gardnmi.boomux` is not confused with the Boomux
 repository. The launch root is omitted from
 the observed table because launch is already presented separately; another
 repository or worktree may still use the same branch name. A `+N more` suffix
-uses the owner's total distinct context count. Search includes repository and
+uses the owner's total distinct context count and the expanded card offers
+**View details**. Exact inspection replaces the list with a detail pane containing
+up to 64 owner contexts plus occurrence metadata. Search includes repository and
 branch labels, filters the complete loaded catalog locally, and does not query the
 daemon or any Node. Pressing an arrow from search transfers navigation to the
 cards. `Space` or Right expands the selected card, Left collapses it, and Enter,
 the terminal icon, or double-click opens through the source Workspace. The exact
 card spins its icon and exposes **Opening Session...** in the tooltip while that
-request is active. There is no
-alternate destination, inferred resume command, or visible Inspect control.
+request is active. There is no alternate destination or inferred resume command.
 Escape or an outside click releases rail keyboard ownership
 back to the main pane; the rail close button controls its visibility. Closing the
 main Boomux pane also closes the rail to avoid an orphaned reservation or focus
@@ -295,8 +302,9 @@ fallback.
 Use the gear button to:
 
 - Move the pane to the left or right edge.
-- Adjust the main pane and Session rail widths independently in 20-pixel steps.
-- Resize either pane directly with `Super+right-drag`.
+- Adjust the main pane width in 20-pixel steps.
+- Resize the main pane directly with `Super+right-drag`; the Session drawer stays
+  at its full 520-pixel width unless the remaining screen area is narrower.
 - Open `boomux config edit` in a native terminal.
 
 The Nodes view lists registered remote Nodes with route, helper and control
@@ -339,8 +347,7 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 {
   "id": "io.github.gardnmi.boomux",
   "side": "right",
-  "paneWidth": 400,
-  "sessionPaneWidth": 360
+  "paneWidth": 400
 }
 ```
 
@@ -361,10 +368,11 @@ must provide TLS, authentication, and authorization.
 - The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
   remote routing, authentication, and persistence.
 - Session lists are cached only in the running Omarchy Shell process so closing
-  and reopening the pane can render immediately. Stale rows refresh in the
-  background after a ten-second visible TTL. A failed placement refresh retains
-  its last bounded rows with a warning. Requests, process output, and details are cleared on pane close;
-  daemon loss clears the cache. Nothing is written to disk or logged.
+  and reopening the pane can render immediately. A stale source refreshes on
+  entry, relevant owner change, or explicit request, but not on a visible timer.
+  A failed placement refresh retains its last bounded rows with a warning.
+  Requests, process output, and details are cleared on pane close; daemon loss
+  clears the cache. Nothing is written to disk or logged.
 - Workspace Session discovery uses only active, current, non-stale placements
   and exact owner Workspace IDs. It excludes unavailable and close-pending
   placements and never merges equal Workspace names. In-memory results are

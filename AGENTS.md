@@ -43,9 +43,10 @@ publication.
   and never derive remote branch context locally.
 - Observed Agent working contexts are optional protocol-50 presentation under
   `observed_agent_working_contexts`. Preserve their owner ordering, four-item
-  bound, and total count; present `git_branch` as separate launch context and
-  rely on the owner to omit that canonical root from observed rows. Never imply
-  completeness or derive a remote context locally. Do not add the
+  list bound, and total count; exact inspection may return up to 64 contexts for
+  the detail pane. Present `git_branch` as separate launch context and rely on the
+  owner to omit that canonical root from observed rows. Never imply completeness
+  or derive a remote context locally. Do not add the
   capability to `compatibility.json` requirements.
 - Latest Agent attribution, Working Context push status, and worktree status are
   optional protocol-51 presentation under `session_latest_agent_attribution`,
@@ -146,7 +147,7 @@ outcome. There is no unhide action.
 ## Runtime Model
 
 The sliding main pane has a persistent expandable Workspace tree and two lower
-views, plus a user-controlled contextual Session rail on the opposite edge:
+views, plus a user-controlled contextual Session drawer on its inward edge:
 
 - **Workspace tree**: coordinated and external Workspaces, with the currently
   presented Hyprland special Workspace highlighted independently from the
@@ -166,10 +167,12 @@ views, plus a user-controlled contextual Session rail on the opposite edge:
   exact identity, guided creation, guided reauthentication, guided upgrade, and
   local registration removal
 
-The main pane must always retain its configured width. Put the Session rail on
-the opposite edge (`main-left` means `rail-right` and vice versa), with its own
-persisted width, layer-shell namespace, and reservation. Closing the main pane
-must also close the rail and release both reservations. The existing passive
+The main pane must always retain its configured width and edge reservation. Put
+the Session drawer beside its inward edge, mirrored with the main pane side,
+at its fixed maximum width with its own layer-shell namespace but no second
+reservation. Clamp only when the remaining screen area is narrower. Clip its
+reveal at that inner edge so it emerges from the main pane rather than the screen
+boundary. Closing the main pane must also close the drawer. The existing passive
 Boomux toggle opens only the main pane. Passively open or close a Session rail from
 its coordinated Workspace row, or open it with keyboard focus from the action menu;
 do not add a second Hyprland binding.
@@ -385,14 +388,15 @@ path. A future event-driven implementation should retain the passive-daemon
 invariant and handle cursor expiry by reacquiring a baseline.
 
 Session discovery is independent, serial, and lazy while the contextual rail is
-open for a presented coordinated Workspace. Refresh it on rail entry, after a
-10-second visible TTL, and
-after explicit refresh obtains a fresh Node snapshot. Preserve successful Node
-results across partial failures, bound warnings, discard stale generations and
-Node mismatches. Retain the last complete bounded Session rows in process memory
-across pane close, while clearing requests, process output, details, and stale
-generations. Render retained rows immediately and refresh them in the background
-after TTL expiry. Daemon loss clears the cache. Never persist Session data.
+open for a presented coordinated Workspace. Refresh it on cold or stale rail
+entry, relevant owner freshness changes, and after explicit refresh obtains a
+fresh Node snapshot; do not poll catalogs merely because the rail remains open.
+Stage placement results separately from the committed visible catalog and publish
+one aggregate only after every placement settles. Preserve successful Node results
+across partial failures, bound warnings, discard stale generations and Node
+mismatches. Retain at most eight complete bounded Session sources in process
+memory across pane close, while clearing requests, process output, details, and
+stale generations. Daemon loss clears the cache. Never persist Session data.
 For Workspace-scoped discovery, exclude stale, unavailable, and `close_pending`
 placements before constructing argv. Treat Node/owner placement keys as source
 identity and placement owner revisions as source freshness. An identity change

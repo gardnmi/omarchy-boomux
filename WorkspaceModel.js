@@ -348,7 +348,7 @@ function normalizeSessionWorktreeStatus(source) {
   }
 }
 
-function normalizeSessionSummary(source, nodeId, nodeAlias, local) {
+function normalizeSessionSummary(source, nodeId, nodeAlias, local, maxWorkingContexts) {
   if (!source || typeof source !== "object") throw new Error("invalid Session summary")
   if (typeof source.state_is_current !== "boolean") throw new Error("invalid Session currentness")
   var occurrenceCount = requiredTimestamp(source.occurrence_count, "Session occurrence count")
@@ -364,7 +364,8 @@ function normalizeSessionSummary(source, nodeId, nodeAlias, local) {
     ? optionalString(source.latest_agent_name, "Session latest Agent name") : null
   var workingContexts = Object.prototype.hasOwnProperty.call(source, "working_contexts")
     ? source.working_contexts : []
-  if (!Array.isArray(workingContexts) || workingContexts.length > 4)
+  var workingContextLimit = maxWorkingContexts === undefined ? 4 : maxWorkingContexts
+  if (!Array.isArray(workingContexts) || workingContexts.length > workingContextLimit)
     throw new Error("invalid Session working contexts")
   workingContexts = workingContexts.map(function(context) {
     if (!context || typeof context !== "object")
@@ -451,7 +452,7 @@ function normalizeSessionList(raw, node, expectedWorkspaceId) {
 function normalizeSessionInspect(raw, node, expectedSessionId, expectedWorkspaceId) {
   var data = normalizeSessionEnvelope(raw, "session.inspect", node)
   var session = normalizeSessionSummary(data.session, String(node.node_id),
-    String(node.alias || ""), !!node.local)
+    String(node.alias || ""), !!node.local, 64)
   if (session.id !== String(expectedSessionId || ""))
     throw new Error("unexpected Session identity")
   if (String(expectedWorkspaceId || "") !== ""
@@ -718,26 +719,6 @@ function normalizeSessionHideMutation(raw, node, expected) {
     workspace_revision: revision,
     changed: result.changed
   }
-}
-
-function sessionPreviewCommand(session) {
-  if (!session || !session.node_local || !Array.isArray(session.occurrences)) return []
-  var current = session.occurrences.find(function(occurrence) { return occurrence.is_current })
-  if (!current) return []
-  return ["boomux", "read", String(current.shell_id), "--lines", "40", "--json",
-    "--run-id", String(current.run_id), "--after-revision", "0"]
-}
-
-function normalizeSessionPreview(raw, session) {
-  var data = parseEnvelope(raw, "read")
-  var current = session && Array.isArray(session.occurrences)
-    ? session.occurrences.find(function(occurrence) { return occurrence.is_current }) : null
-  if (!current || String(data.shell_id || "") !== String(current.shell_id)
-      || String(data.run_id || "") !== String(current.run_id))
-    throw new Error("unexpected Session preview identity")
-  if (typeof data.output !== "string" || typeof data.status !== "string")
-    throw new Error("invalid Session preview")
-  return { available: true, output: data.output, status: data.status }
 }
 
 function sessionNodeEligible(node, cliFeatures) {
@@ -1754,8 +1735,6 @@ if (typeof module !== "undefined") module.exports = {
   sessionHideCommand: sessionHideCommand,
   normalizeSessionNameMutation: normalizeSessionNameMutation,
   normalizeSessionHideMutation: normalizeSessionHideMutation,
-  sessionPreviewCommand: sessionPreviewCommand,
-  normalizeSessionPreview: normalizeSessionPreview,
   sessionNodeEligible: sessionNodeEligible,
   workspaceSessionRequests: workspaceSessionRequests,
   sessionSourceIdentity: sessionSourceIdentity,

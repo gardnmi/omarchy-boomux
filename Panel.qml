@@ -29,8 +29,7 @@ Panel {
     ? "right" : "left"
   readonly property int paneWidth: Math.max(Style.space(280),
     Math.min(Style.space(520), Number(setting("paneWidth", Style.space(360)))))
-  readonly property int sessionPaneWidth: Math.max(Style.space(280),
-    Math.min(Style.space(520), Number(setting("sessionPaneWidth", Style.space(360)))))
+  readonly property int sessionPaneWidth: Style.space(520)
 
   GlobalShortcut {
     id: paneResizeShortcut
@@ -46,10 +45,16 @@ Panel {
   property var nodes: []
   property var sessions: []
   property var sessionResults: ({})
+  property var sessionPendingResults: ({})
   property var sessionCaches: ({})
+  property var sessionCacheOrder: []
   property var sessionWarnings: []
+  property var sessionPendingWarnings: []
   property var sessionQueue: []
   property var sessionActiveRequest: null
+  property bool sessionDiscoveryActive: false
+  property int sessionDiscoveryCompleted: 0
+  property int sessionDiscoveryTotal: 0
   property int sessionGeneration: 0
   property double sessionExpiresAt: 0
   property bool sessionRefreshPending: false
@@ -59,8 +64,7 @@ Panel {
   property string expandedSessionKey: ""
   property var sessionDetail: null
   property var sessionInspectRequest: null
-  property var sessionPreview: null
-  property var sessionPreviewRequest: null
+  property var pendingSessionInspection: null
   property var sessionOpenRequest: null
   property var sessionNameRequest: null
   property var sessionHideRequest: null
@@ -97,6 +101,7 @@ Panel {
   property bool refreshing: false
   property int refreshPending: 0
   property bool capabilitiesReady: false
+  property bool refreshAfterCapabilities: false
   property bool cliAvailable: false
   property string cliVersion: ""
   property var compatibilityRequirements: null
@@ -633,9 +638,9 @@ Panel {
 
   function refreshInstalledState() {
     invalidateProjectDiscovery()
+    refreshAfterCapabilities = true
     capabilitiesReady = false
     if (!capabilityProcess.running) capabilityProcess.running = true
-    refresh()
   }
 
   function requestExplicitRefresh() {
@@ -815,6 +820,10 @@ Panel {
       console.warn("io.github.gardnmi.boomux:", exception)
     }
     capabilitiesReady = true
+    if (refreshAfterCapabilities) {
+      refreshAfterCapabilities = false
+      Qt.callLater(refresh)
+    }
   }
 
   function normalizeAgent(source, node, workspaceName) {
@@ -2098,18 +2107,21 @@ Panel {
     sessionWorkspaceDropdown.close()
     sessionQueue = []
     sessionActiveRequest = null
+    sessionPendingResults = ({})
+    sessionPendingWarnings = []
+    sessionDiscoveryActive = false
+    sessionDiscoveryCompleted = 0
+    sessionDiscoveryTotal = 0
     sessionRefreshPending = false
     sessionRefreshAfterSnapshot = false
     sessionSnapshotRefreshQueued = false
     sessionDetail = null
     sessionInspectRequest = null
-    sessionPreview = null
-    sessionPreviewRequest = null
+    pendingSessionInspection = null
     sessionOpenRequest = null
     pendingSessionWorkspaceCreation = null
     stopAndClearSessionProcess(sessionListProcess)
     stopAndClearSessionProcess(sessionInspectProcess)
-    stopAndClearSessionProcess(sessionPreviewProcess)
     stopAndClearSessionProcess(sessionOpenProcess)
   }
 
@@ -2117,7 +2129,9 @@ Panel {
     suspendSessionActivity()
     sessions = []
     sessionResults = ({})
+    sessionPendingResults = ({})
     sessionCaches = ({})
+    sessionCacheOrder = []
     sessionWarnings = []
     sessionExpiresAt = 0
     selectedSessionKey = ""
@@ -2164,10 +2178,11 @@ Panel {
     sessionActiveRequest = null
     var node = nodeFor(request.nodeId)
     if (sessionRequestIsCurrent(request, node)) {
-      var warnings = sessionWarnings.slice()
+      var warnings = sessionPendingWarnings.slice()
       warnings.push(String(node.alias || node.node_id) + ": unavailable")
-      sessionWarnings = warnings.slice(-8)
+      sessionPendingWarnings = warnings.slice(-8)
     }
+    sessionDiscoveryCompleted++
     sessionListProcess.command = []
     clearSessionProcessOutput(sessionListProcess)
     if (opened && sessionRailOpen && online) startNextSessionList()
@@ -2181,21 +2196,10 @@ Panel {
     showActionFailure("Session inspection failed", "Could not start Session inspection")
   }
 
-  function recoverStoppedSessionPreview() {
-    if (!sessionPreviewRequest || sessionPreviewProcess.running) return
-    sessionPreviewRequest = null
-    sessionPreviewProcess.command = []
-    clearSessionProcessOutput(sessionPreviewProcess)
-    sessionPreview = { available: false, message: "Could not load recent terminal output." }
-  }
-
   function closeSessionInspection() {
     sessionDetail = null
     sessionInspectRequest = null
-    sessionPreview = null
-    sessionPreviewRequest = null
     stopAndClearSessionProcess(sessionInspectProcess)
-    stopAndClearSessionProcess(sessionPreviewProcess)
   }
 
   function recoverStoppedSessionOpen() {
@@ -2266,6 +2270,11 @@ Panel {
     sessionGeneration++
     sessionQueue = []
     sessionActiveRequest = null
+    sessionPendingResults = ({})
+    sessionPendingWarnings = []
+    sessionDiscoveryActive = false
+    sessionDiscoveryCompleted = 0
+    sessionDiscoveryTotal = 0
     sessionRefreshPending = false
     sessionResults = ({})
     sessionWarnings = []
@@ -2298,6 +2307,12 @@ Panel {
       collapsedGroups: Object.assign({}, sessionCollapsedGroups),
       expiresAt: sessionExpiresAt
     }
+    var order = sessionCacheOrder.filter(function(signature) {
+      return signature !== sessionCacheSourceSignature
+    })
+    order.push(sessionCacheSourceSignature)
+    while (order.length > 8) delete nextCaches[order.shift()]
+    sessionCacheOrder = order
     sessionCaches = nextCaches
   }
 
@@ -2311,6 +2326,9 @@ Panel {
     expandedSessionKey = String(cached.expandedSessionKey || "")
     sessionQuery = String(cached.query || "")
     sessionCollapsedGroups = Object.assign({ "History": true }, cached.collapsedGroups || {})
+    sessionCacheOrder = sessionCacheOrder.filter(function(signature) {
+      return signature !== String(sourceSignature || "")
+    }).concat([String(sourceSignature || "")])
     if (sessionSearchField) sessionSearchField.text = sessionQuery
     sessionExpiresAt = Number(cached.expiresAt || 0)
     syncSessionIndex()
@@ -2374,7 +2392,8 @@ Panel {
     sessionGeneration++
     sessionActiveSourceSignature = currentSessionSourceSignature()
     sessionActiveFreshnessSignature = currentSessionFreshnessSignature()
-    sessionWarnings = []
+    sessionPendingWarnings = []
+    sessionPendingResults = Object.assign({}, sessionResults)
     sessionQueue = sessionDiscoveryRequests().map(function(discovery) {
       return { generation: sessionGeneration, key: discovery.key,
         nodeId: discovery.nodeId, ownerWorkspaceId: discovery.ownerWorkspaceId,
@@ -2382,6 +2401,9 @@ Panel {
         freshnessSignature: sessionActiveFreshnessSignature,
         cliFeatures: cliFeatures.slice() }
     })
+    sessionDiscoveryCompleted = 0
+    sessionDiscoveryTotal = sessionQueue.length
+    sessionDiscoveryActive = true
     startNextSessionList()
   }
 
@@ -2411,10 +2433,13 @@ Panel {
         || sessionActiveFreshnessSignature !== currentSessionFreshnessSignature()) return
     var browserScrollY = sessionBrowserList ? sessionBrowserList.contentY : 0
     var combined = []
-    Object.keys(sessionResults).forEach(function(nodeId) {
-      combined = combined.concat(sessionResults[nodeId] || [])
+    Object.keys(sessionPendingResults).forEach(function(nodeId) {
+      combined = combined.concat(sessionPendingResults[nodeId] || [])
     })
     sessions = WorkspaceModel.sessionsNewestFirst(combined)
+    sessionResults = Object.assign({}, sessionPendingResults)
+    sessionWarnings = sessionPendingWarnings.slice()
+    sessionDiscoveryActive = false
     sessionCacheSourceSignature = sessionActiveSourceSignature
     sessionCacheFreshnessSignature = sessionActiveFreshnessSignature
     sessionExpiresAt = Date.now() + 10000
@@ -2425,10 +2450,8 @@ Panel {
     if (sessionWarnings.length > 0)
       actionMessage = "Some Sessions could not be refreshed · "
         + WorkspaceModel.boundedSessionWarnings(sessionWarnings, 3)
-    if (sessionRefreshPending) {
-      sessionRefreshPending = false
-      Qt.callLater(function() { startSessionDiscovery(true) })
-    }
+    if (pendingSessionInspection || sessionRefreshPending)
+      Qt.callLater(continuePendingSessionRefresh)
   }
 
   function restoreSessionScroll(browserScrollY) {
@@ -2439,7 +2462,21 @@ Panel {
   }
 
   function continuePendingSessionRefresh() {
-    if (!sessionRefreshPending || sessionPrimaryOperationBusy()) return
+    if (sessionPrimaryOperationBusy()) return
+    if (pendingSessionInspection) {
+      var pending = pendingSessionInspection
+      pendingSessionInspection = null
+      if (pending.sourceSignature !== currentSessionSourceSignature()
+          || pending.freshnessSignature !== currentSessionFreshnessSignature()) return
+      for (var index = 0; index < sessions.length; index++) {
+        if (sessions[index].key === pending.key) {
+          inspectSession(sessions[index])
+          return
+        }
+      }
+      return
+    }
+    if (!sessionRefreshPending) return
     sessionRefreshPending = false
     startSessionDiscovery(true)
   }
@@ -2631,9 +2668,15 @@ Panel {
         "This Boomux CLI does not advertise exact Session inspection")
       return
     }
-    if (!sessionNodeIsEligible(session) || sessionPrimaryOperationBusy()) return
-    sessionPreviewRequest = null
-    stopAndClearSessionProcess(sessionPreviewProcess)
+    if (!sessionNodeIsEligible(session)) return
+    if (sessionPrimaryOperationBusy()) {
+      pendingSessionInspection = { key: session.key,
+        sourceSignature: currentSessionSourceSignature(),
+        freshnessSignature: currentSessionFreshnessSignature() }
+      actionMessage = "Opening Session details after refresh..."
+      return
+    }
+    pendingSessionInspection = null
     sessionInspectRequest = { generation: sessionGeneration, nodeId: session.node_id,
       sessionId: session.id, workspaceId: session.workspace_id,
       title: session.description, sourceSignature: currentSessionSourceSignature(),
@@ -2800,23 +2843,6 @@ Panel {
     })
     sessionResults = nextResults
     saveSessionCache()
-  }
-
-  function loadSessionPreview(session) {
-    sessionPreview = null
-    var command = WorkspaceModel.sessionPreviewCommand(session)
-    if (command.length === 0) {
-      sessionPreview = { available: false,
-        message: session && !session.node_local
-          ? "Recent terminal output is not available for remote Sessions yet."
-          : "This Session has no current retained terminal output." }
-      return
-    }
-    sessionPreviewRequest = { generation: sessionGeneration, nodeId: session.node_id,
-      sessionId: session.id }
-    prepareSessionProcess(sessionPreviewProcess)
-    sessionPreviewProcess.command = command
-    sessionPreviewProcess.running = true
   }
 
   function compactPath(path) {
@@ -3796,14 +3822,6 @@ Panel {
   }
 
   Timer {
-    id: sessionTtlTimer
-    interval: 1000
-    repeat: true
-    running: root.opened && root.sessionRailOpen
-    onTriggered: root.ensureSessionDiscovery()
-  }
-
-  Timer {
     id: openRefreshTimer
     interval: 200
     repeat: false
@@ -3956,6 +3974,7 @@ Panel {
     onExited: function(exitCode) {
       if (exitCode === 0) root.parseCapabilities(capabilityStdout.text)
       else {
+        root.refreshAfterCapabilities = false
         root.cliAvailable = false
         root.cliVersion = ""
         root.compatibilityError = ""
@@ -4237,20 +4256,21 @@ Panel {
       var current = root.sessionRequestIsCurrent(request, node)
       if (current && exitCode === 0) {
         try {
-          var nextResults = Object.assign({}, root.sessionResults)
+          var nextResults = Object.assign({}, root.sessionPendingResults)
           nextResults[request.key] = WorkspaceModel.normalizeSessionList(
             stdoutText, node, request.ownerWorkspaceId)
-          root.sessionResults = nextResults
+          root.sessionPendingResults = nextResults
         } catch (exception) {
-          var invalidWarnings = root.sessionWarnings.slice()
+          var invalidWarnings = root.sessionPendingWarnings.slice()
           invalidWarnings.push(String(node.alias || node.node_id) + ": invalid response")
-          root.sessionWarnings = invalidWarnings.slice(-8)
+          root.sessionPendingWarnings = invalidWarnings.slice(-8)
         }
       } else if (current) {
-        var warnings = root.sessionWarnings.slice()
+        var warnings = root.sessionPendingWarnings.slice()
         warnings.push(String(node.alias || node.node_id) + ": unavailable")
-        root.sessionWarnings = warnings.slice(-8)
+        root.sessionPendingWarnings = warnings.slice(-8)
       }
+      root.sessionDiscoveryCompleted++
       sessionListProcess.command = []
       root.clearSessionProcessOutput(sessionListProcess)
       if (root.opened && root.sessionRailOpen && root.online)
@@ -4288,7 +4308,6 @@ Panel {
         var detail = WorkspaceModel.normalizeSessionInspect(
           stdoutText, node, request.sessionId, request.workspaceId)
         root.sessionDetail = detail
-        root.loadSessionPreview(detail)
         if (root.sessionRenameDraft
             && root.sessionRenameDraft.sourceSignature === request.sourceSignature
             && root.sessionRenameDraft.nodeId === detail.node_id
@@ -4303,34 +4322,6 @@ Panel {
           "Boomux returned a different or invalid Session identity")
       }
       Qt.callLater(root.continuePendingSessionRefresh)
-    }
-  }
-
-  Process {
-    id: sessionPreviewProcess
-    onRunningChanged: if (!running) Qt.callLater(root.recoverStoppedSessionPreview)
-    onExited: function(exitCode) {
-      var stdoutText = root.sessionProcessText(sessionPreviewProcess.stdout)
-      var stderrText = root.sessionProcessText(sessionPreviewProcess.stderr)
-      var request = root.sessionPreviewRequest
-      root.sessionPreviewRequest = null
-      sessionPreviewProcess.command = []
-      root.clearSessionProcessOutput(sessionPreviewProcess)
-      if (!request || request.generation !== root.sessionGeneration || !root.sessionDetail
-          || request.nodeId !== root.sessionDetail.node_id
-          || request.sessionId !== root.sessionDetail.id) return
-      if (exitCode !== 0) {
-        root.sessionPreview = { available: false,
-          message: root.processError(stderrText || stdoutText,
-            "Recent terminal output is unavailable.") }
-        return
-      }
-      try {
-        root.sessionPreview = WorkspaceModel.normalizeSessionPreview(stdoutText, root.sessionDetail)
-      } catch (exception) {
-        root.sessionPreview = { available: false,
-          message: "Boomux returned invalid recent terminal output." }
-      }
     }
   }
 
@@ -5186,59 +5177,12 @@ Panel {
             text: "+"
             bordered: true
             focusable: true
-            KeyNavigation.tab: settingsSessionWidthDownButton
+            KeyNavigation.tab: settingsConfigButton
             KeyNavigation.backtab: settingsWidthDownButton
             onActiveFocusChanged: root.revealSettingsItem(settingsWidthUpButton)
             enabled: root.paneWidth < Style.space(520)
             foreground: root.foreground
             onClicked: root.persistPaneSettings({ paneWidth: root.paneWidth + 20 })
-          }
-        }
-
-        PanelSectionHeader {
-          width: parent.width
-          text: "SESSION PANE WIDTH"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-        }
-        Row {
-          width: parent.width
-          spacing: Style.space(8)
-          Button {
-            id: settingsSessionWidthDownButton
-            width: Style.space(42)
-            text: "−"
-            bordered: true
-            focusable: true
-            KeyNavigation.tab: settingsSessionWidthUpButton
-            KeyNavigation.backtab: settingsWidthUpButton
-            onActiveFocusChanged: root.revealSettingsItem(settingsSessionWidthDownButton)
-            enabled: root.sessionPaneWidth > Style.space(280)
-            foreground: root.foreground
-            onClicked: root.persistPaneSettings({ sessionPaneWidth: root.sessionPaneWidth - 20 })
-          }
-          Text {
-            width: parent.width - Style.space(84) - parent.spacing * 2
-            height: Style.space(34)
-            text: root.sessionPaneWidth + " px"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-          }
-          Button {
-            id: settingsSessionWidthUpButton
-            width: Style.space(42)
-            text: "+"
-            bordered: true
-            focusable: true
-            KeyNavigation.tab: settingsConfigButton
-            KeyNavigation.backtab: settingsSessionWidthDownButton
-            onActiveFocusChanged: root.revealSettingsItem(settingsSessionWidthUpButton)
-            enabled: root.sessionPaneWidth < Style.space(520)
-            foreground: root.foreground
-            onClicked: root.persistPaneSettings({ sessionPaneWidth: root.sessionPaneWidth + 20 })
           }
         }
 
@@ -5253,7 +5197,7 @@ Panel {
           bordered: true
           focusable: true
           KeyNavigation.tab: settingsBackButton
-          KeyNavigation.backtab: settingsSessionWidthUpButton
+          KeyNavigation.backtab: settingsWidthUpButton
           onActiveFocusChanged: root.revealSettingsItem(settingsConfigButton)
           enabled: root.cliAvailable
           foreground: root.foreground
@@ -6884,14 +6828,18 @@ Panel {
               }
               Text {
                 width: parent.width
-                text: (root.sessionSourceWorkspaceId !== ""
+                text: root.sessionDiscoveryActive && root.allPaneSessions.length === 0
+                  ? root.sessionSourceWorkspaceName + " · Loading Sessions "
+                    + root.sessionDiscoveryCompleted + "/" + root.sessionDiscoveryTotal
+                  : (root.sessionSourceWorkspaceId !== ""
                   ? root.sessionSourceWorkspaceName + " · " : "No presented Workspace · ")
                   + WorkspaceModel.sessionGroupCount(root.allPaneSessions, "Needs Attention")
                   + " attention · "
                   + WorkspaceModel.sessionGroupCount(root.allPaneSessions, "Active")
                   + " active · " + (root.sessionQuery === "" ? root.filteredPaneSessions.length
                   : root.filteredPaneSessions.length + " of " + root.allPaneSessions.length)
-                  + " total"
+                  + " total" + (root.sessionDiscoveryActive ? " · Refreshing "
+                    + root.sessionDiscoveryCompleted + "/" + root.sessionDiscoveryTotal : "")
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -6971,8 +6919,9 @@ Panel {
                       : "Present a coordinated Workspace to review its Sessions.")
                     : (!root.sessionCatalogSupported
                     ? "Sessions require projected Agent Session support"
-                    : (sessionListProcess.running && root.allPaneSessions.length === 0
-                      ? "Discovering Sessions..."
+                    : (root.sessionDiscoveryActive && root.allPaneSessions.length === 0
+                      ? "Discovering Sessions " + root.sessionDiscoveryCompleted + "/"
+                        + root.sessionDiscoveryTotal + "..."
                       : (root.sessionQuery !== "" && root.allPaneSessions.length > 0
                         ? "No Sessions match your search" : "No Boomux Sessions")))
                   color: root.dim
@@ -7235,15 +7184,21 @@ Panel {
                           }
                         }
                       }
-                      Text {
+                      Button {
                         visible: sessionBrowserRow.expanded && !sessionBrowserRow.editing
-                          && root.sessionWorkingContextsOverflowLabel(modelData) !== ""
                         width: parent.width
-                        leftPadding: Style.space(8)
-                        text: root.sessionWorkingContextsOverflowLabel(modelData)
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
+                        text: (root.sessionWorkingContextsOverflowLabel(modelData) !== ""
+                          ? root.sessionWorkingContextsOverflowLabel(modelData) + " · " : "")
+                          + "View details"
+                        tooltipText: "Inspect complete Session details"
+                        bordered: false
+                        leftAlign: true
+                        foreground: Color.accent
+                        enabled: root.sessionInspectSupported && root.sessionNodeIsEligible(modelData)
+                        onClicked: {
+                          root.selectSession(modelData)
+                          root.inspectSession(modelData)
+                        }
                       }
                       Text {
                         width: parent.width
@@ -7387,7 +7342,7 @@ Panel {
                 anchors.centerIn: parent
                 width: parent.width - Style.space(48)
                 visible: root.sessionDetail === null && root.sessionInspectRequest === null
-                text: "Select a Session to inspect its lifecycle and recent terminal output."
+                text: "Select a Session to inspect its lifecycle, contexts, and occurrences."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -7664,65 +7619,6 @@ Panel {
                         : root.sessionTargetWorkspace !== null)
                       && !root.sessionPrimaryOperationBusy()
                     onClicked: root.activateSession(root.sessionDetail)
-                  }
-                  Row {
-                    width: parent.width
-                    spacing: Style.space(6)
-                    Button {
-                      width: parent.width
-                      text: "Rename"
-                      tooltipText: root.sessionCanChangeDisplayName(root.sessionDetail)
-                        ? "Set a Boomux-only Session display name"
-                        : "This Node does not support Session display names"
-                      bordered: true
-                      foreground: root.foreground
-                      enabled: root.sessionCanChangeDisplayName(root.sessionDetail)
-                        && !root.sessionPrimaryOperationBusy()
-                      onClicked: root.requestSessionRename(root.sessionDetail)
-                    }
-                  }
-                  PanelSeparator { width: parent.width; foreground: root.foreground }
-                  Text {
-                    width: parent.width
-                    text: "RECENT TERMINAL"
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                  }
-                  Rectangle {
-                    width: parent.width
-                    height: Math.max(Style.space(110), sessionPreviewText.implicitHeight
-                      + Style.space(20))
-                    radius: Style.cornerRadius
-                    color: Util.alpha(Color.background, 0.52)
-                    border.width: 1
-                    border.color: Util.alpha(root.foreground, 0.12)
-
-                    BusyIndicator {
-                      anchors.centerIn: parent
-                      visible: root.sessionPreviewRequest !== null
-                      running: visible
-                    }
-                    Text {
-                      id: sessionPreviewText
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.top: parent.top
-                      anchors.margins: Style.space(10)
-                      visible: root.sessionPreviewRequest === null
-                      text: !root.sessionPreview ? "Waiting for terminal output..."
-                        : (root.sessionPreview.available
-                          ? (root.sessionPreview.output || "The retained terminal is empty.")
-                          : root.sessionPreview.message)
-                      color: root.sessionPreview && root.sessionPreview.available
-                        ? root.foreground : root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      wrapMode: Text.WrapAnywhere
-                      maximumLineCount: 40
-                      elide: Text.ElideLeft
-                    }
                   }
                 }
               }
@@ -8063,14 +7959,11 @@ Panel {
     anchorItem: button
     bar: root.bar
     open: root.opened && root.sessionRailOpen
-    side: root.paneSide === "left" ? "right" : "left"
+    side: root.paneSide
+    edgeOffset: Math.round(panel.effectivePaneWidth + Style.gapsOut)
+    slideFromEdgeOffset: true
+    reserveSpace: false
     paneWidth: root.sessionPaneWidth
-    reservationWidth: root.sessionPaneWidth
-    resizeShortcutActive: paneResizeShortcut.pressed
-    onPaneWidthCommitted: function(width) {
-      if (width !== root.sessionPaneWidth)
-        root.persistPaneSettings({ sessionPaneWidth: width })
-    }
     namespace: "omarchy-boomux-session-rail"
     focusColor: Color.accent
     focusTarget: sessionSearchField

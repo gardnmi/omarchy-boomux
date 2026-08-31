@@ -14,6 +14,9 @@ PanelWindow {
   property string side: "left"
   property int paneWidth: Style.space(360)
   property int reservationWidth: paneWidth
+  property int edgeOffset: 0
+  property bool slideFromEdgeOffset: false
+  property bool reserveSpace: true
   property int minimumPaneWidth: Style.space(280)
   property int maximumPaneWidth: Style.space(520)
   property real resizeStartWidth: paneWidth
@@ -48,14 +51,14 @@ PanelWindow {
   readonly property real sideInset: ((barPos === "left" && !onRight)
     || (barPos === "right" && onRight)) ? barW + margin : margin
   readonly property real availablePaneWidth: Math.max(0,
-    screenW - sideInset - margin)
+    screenW - sideInset - margin - edgeOffset)
   readonly property real availablePaneHeight: Math.max(0,
     screenH - topInset - bottomInset)
   readonly property real interactivePaneWidth: resizeActive ? resizePreviewWidth : paneWidth
   readonly property real effectivePaneWidth: Math.min(interactivePaneWidth, availablePaneWidth)
   readonly property real effectiveReservationWidth: Math.min(reservationWidth, availablePaneWidth)
   readonly property real paneX: onRight
-    ? screenW - effectivePaneWidth - sideInset : sideInset
+    ? screenW - effectivePaneWidth - sideInset - edgeOffset : sideInset + edgeOffset
   readonly property real closedX: onRight ? screenW + Style.space(8)
     : -effectivePaneWidth - Style.space(8)
   property real revealProgress: open ? 1 : 0
@@ -146,7 +149,7 @@ PanelWindow {
   PanelWindow {
     id: reservationWindow
     screen: root.screen
-    visible: root.open && root.screen !== null
+    visible: root.reserveSpace && root.open && root.screen !== null
     color: "transparent"
     implicitWidth: Math.ceil(root.sideInset + root.effectiveReservationWidth)
     exclusionMode: ExclusionMode.Normal
@@ -163,9 +166,22 @@ PanelWindow {
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
   }
 
+  Item {
+    id: revealViewport
+    x: root.slideFromEdgeOffset && !root.onRight ? root.paneX : 0
+    width: root.slideFromEdgeOffset
+      ? (root.onRight ? root.paneX + root.effectivePaneWidth : root.screenW - root.paneX)
+      : root.screenW
+    height: root.screenH
+    clip: root.slideFromEdgeOffset
+
   BorderSurface {
     id: card
-    x: root.closedX + (root.paneX - root.closedX) * root.revealProgress
+    x: root.slideFromEdgeOffset
+      ? (root.onRight
+        ? revealViewport.width - width * root.revealProgress
+        : -width + width * root.revealProgress)
+      : root.closedX + (root.paneX - root.closedX) * root.revealProgress
     y: root.topInset
     width: root.effectivePaneWidth
     height: root.availablePaneHeight
@@ -250,5 +266,6 @@ PanelWindow {
       anchors.bottomMargin: card.contentBottomInset
       anchors.leftMargin: card.contentLeftInset
     }
+  }
   }
 }

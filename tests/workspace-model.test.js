@@ -214,10 +214,10 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(panel).toContain('root.persistPaneSettings({ side: "right" })')
   expect(panel).toContain("paneWidth: root.paneWidth - 20")
   expect(panel).toContain("paneWidth: root.paneWidth + 20")
-  expect(panel).toContain("sessionPaneWidth: root.sessionPaneWidth - 20")
-  expect(panel).toContain("sessionPaneWidth: root.sessionPaneWidth + 20")
+  expect(panel).toContain("readonly property int sessionPaneWidth: Style.space(520)")
+  expect(panel).not.toContain("SESSION PANE WIDTH")
   expect(panel).toContain("reservationWidth: root.paneWidth")
-  expect(panel).toContain("reservationWidth: root.sessionPaneWidth")
+  expect(panel).toContain("reserveSpace: false")
   expect(panel).not.toContain('text: "Open Sessions with Boomux"')
   expect(panel).not.toContain('openSessionsWithBoomux')
   const toggle = panel.slice(panel.indexOf("function toggle()"),
@@ -227,6 +227,9 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(toggle).toContain("open()")
   expect(toggle).not.toContain("sessionRail")
   expect(sidePane).toContain("property int reservationWidth: paneWidth")
+  expect(sidePane).toContain("property int edgeOffset: 0")
+  expect(sidePane).toContain("property bool slideFromEdgeOffset: false")
+  expect(sidePane).toContain("property bool reserveSpace: true")
   expect(sidePane).toContain("root.sideInset + root.effectiveReservationWidth")
   expect(sidePane).toContain("acceptedButtons: Qt.RightButton")
   expect(sidePane).toContain("property bool resizeShortcutActive: false")
@@ -235,8 +238,8 @@ test("opens pane settings and the Boomux config editor", () => {
   expect(sidePane).toContain("preventStealing: true")
   expect(sidePane).toContain("signal paneWidthCommitted(int width)")
   expect(panel).toContain('name: "boomux-pane-resize"')
-  expect(panel.match(/resizeShortcutActive: paneResizeShortcut.pressed/g)).toHaveLength(2)
-  expect(panel.match(/onPaneWidthCommitted/g)).toHaveLength(2)
+  expect(panel.match(/resizeShortcutActive: paneResizeShortcut.pressed/g)).toHaveLength(1)
+  expect(panel.match(/onPaneWidthCommitted/g)).toHaveLength(1)
   expect(panel).toContain("omarchy-launch-tui --app-id=TUI.float boomux config edit")
   expect(panel).toContain("Qt.callLater(function() { settingsBackButton.forceActiveFocus() })")
   expect(panel).toContain("KeyNavigation.tab: settingsLeftButton")
@@ -1503,34 +1506,23 @@ describe("Agent Sessions", () => {
     }), remote, session)).toThrow()
   })
 
-  test("reads only the exact current local Session run for preview", () => {
-    const session = { id: "session", node_local: true, occurrences: [
-      { shell_id: "old", run_id: "old-run", is_current: false },
-      { shell_id: "shell", run_id: "run", is_current: true }
-    ] }
-    expect(model.sessionPreviewCommand(session)).toEqual([
-      "boomux", "read", "shell", "--lines", "40", "--json", "--run-id", "run",
-      "--after-revision", "0"
-    ])
-    expect(model.normalizeSessionPreview(envelope("read", {
-      shell_id: "shell", run_id: "run", output: "recent output", status: "running"
-    }), session)).toEqual({ available: true, output: "recent output", status: "running" })
-    expect(model.sessionPreviewCommand(Object.assign({}, session, { node_local: false })))
-      .toEqual([])
-  })
-
   test("normalizes documented local occurrence fields", () => {
     const occurrence = { agent_id: "agent", shell_id: "shell", retained_shell_name: "main",
       retained_shell_cwd: "/home/user/project", source_cwd: "/home/user/project",
       run_id: "run", started_at_ms: 100, ended_at_ms: null, is_current: true,
       observation }
+    const detailContexts = Array.from({ length: 5 }, (_, index) => ({
+      repository: "repository-" + index, branch: "main", observed_at_ms: index + 1
+    }))
     const detail = model.normalizeSessionInspect(envelope("session.inspect", {
-      session: Object.assign(summary(), { source_cwd: "/home/user/project",
+      session: Object.assign(summary({ working_contexts: detailContexts,
+        working_context_count: detailContexts.length }), { source_cwd: "/home/user/project",
         occurrences: [occurrence] })
     }), local, "session;$(false)")
     expect(detail.occurrences[0]).toMatchObject({ agent_id: "agent", is_current: true,
       remote_raw: false, retained_shell_name: "main" })
     expect(detail.workspace_revision).toBe(0)
+    expect(detail.working_contexts).toHaveLength(5)
   })
 
   test("normalizes current remote raw Agent-instance occurrences for display only", () => {
@@ -1621,7 +1613,11 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('data.json_commands.indexOf("session.inspect") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("projected_agent_sessions") >= 0')
     expect(panel).toContain('cliFeatures.indexOf("exact_session_open") >= 0')
-    expect(panel).toContain('running: root.opened && root.sessionRailOpen')
+    expect(panel).not.toContain('id: sessionTtlTimer')
+    expect(panel).toContain('sessionPendingResults = Object.assign({}, sessionResults)')
+    expect(panel).toContain('Object.keys(sessionPendingResults)')
+    expect(panel).toContain('sessionResults = Object.assign({}, sessionPendingResults)')
+    expect(panel).toContain('root.sessionDiscoveryCompleted++')
     expect(panel).toContain('sessionExpiresAt = Date.now() + 10000')
     expect(panel).toContain('if (sessionExpiresAt === 0 || Date.now() >= sessionExpiresAt)')
     expect(panel).toContain('sessionResults = ({})')
@@ -1631,11 +1627,11 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('id: sessionListProcess')
     expect(panel).toContain('if (sessionListProcess.running)')
     expect(panel).toContain('WorkspaceModel.sessionRequestCurrent(request, root.sessionGeneration')
-    expect(panel).toContain('var nextResults = Object.assign({}, root.sessionResults)')
+    expect(panel).toContain('var nextResults = Object.assign({}, root.sessionPendingResults)')
     expect(panel).toContain('nextResults[request.key] = WorkspaceModel.normalizeSessionList(')
-    expect(panel).toContain('combined = combined.concat(sessionResults[nodeId] || [])')
+    expect(panel).toContain('combined = combined.concat(sessionPendingResults[nodeId] || [])')
     expect(panel).toContain('warnings.push(String(node.alias || node.node_id) + ": unavailable")')
-    expect(panel).toContain('sessionWarnings = warnings.slice(-8)')
+    expect(panel).toContain('sessionPendingWarnings = warnings.slice(-8)')
     expect(panel).toContain('clearSessionPrivacy()')
     const suspended = panel.slice(panel.indexOf('function suspendSessionActivity()'),
       panel.indexOf('function clearSessionPrivacy()'))
@@ -1661,9 +1657,11 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('id: sessionBrowser')
     expect(panel).toContain('paneWidth: root.paneWidth')
     expect(panel).toContain('paneWidth: root.sessionPaneWidth')
-    expect(panel).toContain('sessionPaneWidth: width')
+    expect(panel).not.toContain('sessionPaneWidth: width')
     expect(panel).not.toContain('sessionBrowserWidth')
-    expect(panel).toContain('side: root.paneSide === "left" ? "right" : "left"')
+    expect(panel).toContain('side: root.paneSide\n    edgeOffset: Math.round(panel.effectivePaneWidth + Style.gapsOut)')
+    expect(panel).toContain('slideFromEdgeOffset: true')
+    expect(panel).toContain('reserveSpace: false')
     expect(panel).toContain('namespace: "omarchy-boomux-session-rail"')
     expect(panel).toContain('parent: sessionRail.contentContainer')
     expect(panel).toContain('Math.max(Style.space(62), sessionCardContent.implicitHeight')
@@ -1672,6 +1670,8 @@ describe("Agent Sessions", () => {
     expect(panel).toContain('id: sessionCardExpandIndicator')
     expect(panel).not.toContain('id: sessionCardExpandButton')
     expect(panel).toContain('text: sessionBrowserRow.expanded ? "⌄" : "›"')
+    expect(panel).toContain('+ "View details"')
+    expect(panel).toContain('root.inspectSession(modelData)')
     expect(browser).toContain('onClicked: {\n                        root.selectSession(modelData)\n'
       + '                        root.toggleSessionExpanded(modelData)')
     expect(panel).toContain('root.sessionCollapsedContextLabel(modelData)')
@@ -1764,6 +1764,10 @@ describe("Agent Sessions", () => {
       panel.indexOf('function requestSessionRename(session)'))
     expect(inspectSession).not.toContain('sessionDetail = null')
     expect(inspectSession).not.toContain('sessionTargetWorkspaceId =')
+    expect(inspectSession).toContain('pendingSessionInspection = { key: session.key')
+    expect(panel).toContain('if (pendingSessionInspection) {')
+    expect(panel).toContain('inspectSession(sessions[index])')
+    expect(panel).toContain('actionMessage = "Opening Session details after refresh..."')
     expect(panel).toContain('beginInlineSessionRename(request.session, request.requestedName')
     const workspaceExpansion = panel.slice(panel.indexOf('function toggleWorkspaceExpansion'),
       panel.indexOf('function activateWorkspaceRow'))
@@ -2141,8 +2145,10 @@ test("keeps project discovery online, fresh, retryable, and local", () => {
   expect(panel).toContain("projectChooserRequested = true")
   expect(panel).toContain("openFreshProjectChooser()")
   expect(panel).toContain("visible: root.online && root.projectListSupported")
-  expect(panel).toContain("invalidateProjectDiscovery()\n    capabilitiesReady = false\n"
-    + "    if (!capabilityProcess.running)")
+  expect(panel).toContain("invalidateProjectDiscovery()\n    refreshAfterCapabilities = true\n"
+    + "    capabilitiesReady = false\n    if (!capabilityProcess.running)")
+  expect(panel).toContain("if (refreshAfterCapabilities) {")
+  expect(panel).toContain("Qt.callLater(refresh)")
 })
 
 test("documents that generated Workspace creation does not open a terminal", () => {
