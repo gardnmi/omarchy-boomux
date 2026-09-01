@@ -40,9 +40,12 @@ terminals, monitoring Agents, and checking Nodes.
 
 ## Requirements
 
-- Omarchy with shell plugin support.
+- A current Omarchy release with Shell bar-plugin, IPC, and inline-settings
+  support.
 - Boomux 1.7.0 or newer on `PATH`.
-- A native terminal supported by `xdg-terminal-exec`.
+- Omarchy's `omarchy-launch-tui` with a working native terminal configuration.
+- `xdg-terminal-exec` and an available terminal desktop entry for Shell and
+  Agent opens through Boomux.
 
 [`compatibility.json`](compatibility.json) is the machine-readable source of
 truth for the required CLI schema, minimum daemon protocol, capabilities, and
@@ -143,7 +146,7 @@ exits the mode and returns keys to the window Hyprland selects.
 Clicking outside the drawer likewise exits keyboard mode without closing it.
 
 Selecting a coordinated Workspace presents its existing Hyprland layer and
-stores it as Boomux's default Workspace. If the layer has no windows, Boomux
+stores it as Boomux's selected CLI Workspace. If the layer has no windows, Boomux
 opens its existing Shells to populate it; pending or exited Shells can start a
 run. This presentation does not invoke launchers.
 
@@ -154,8 +157,8 @@ Workspace creation is intentionally local and form-free. Boomux generates both
 names and atomically persists the coordinated Workspace, local placement, and
 first Shell without opening a terminal. The project-folder action uses the same
 command with the discovered project name and canonical path returned by
-`project list`. It does not permit name editing, arbitrary path entry, or remote
-fallback.
+`boomux project list --json`. It does not permit name editing, arbitrary path
+entry, or remote fallback.
 
 ## Settings
 
@@ -171,10 +174,6 @@ versions, protocol, freshness, resource counts, and Workspace eligibility. Its
 **Create Shell** action uses the exact selected remote Node and
 the currently active Boomux Workspace; paths and commands are resolved on that
 Node.
-
-For a coordinated Workspace with one active local placement, **Shell Start
-Folder** opens at that placement's current folder or `$HOME`. **Start New Shells
-Here** changes where future Shells begin; existing Shells and runs are unchanged.
 
 When a Node reports **authentication required**, **Authenticate** opens Boomux's
 interactive reauthentication flow in a native terminal. It uses the exact stored
@@ -192,13 +191,15 @@ A newer remote is never downgraded; the pane instead reports **Control machine
 update needed**. Cached transient states remain visible and the guided flow
 revalidates the exact Node live before changing it.
 
-For a current Node that advertises protocol-48 uninstall coordination,
-**Uninstall Boomux** is separate from **Forget Node**. **Uninstall Boomux** opens
-`boomux node uninstall` with the exact Node ID in a native terminal. Boomux
-shows the process, integration, executable, durable-data, configuration, and
-registration impact before requiring confirmation. **Just Forget** never
-contacts the remote Node, stops no remote processes, and removes only the local
-registration and cached projection.
+For an online, non-stale registered Node using protocol 48 or newer, the action
+is available when both the installed CLI and Node advertise
+`node_uninstall_coordination`. **Uninstall Boomux** is separate from **Forget
+Node** and opens `boomux node uninstall` with the exact Node ID in a native
+terminal. Boomux explains that managed processes, current integration assets,
+and the remote executable are removed while durable state and configuration are
+preserved, then requires confirmation. **Just Forget** never contacts the remote
+Node, stops no remote processes, and removes only the local registration and
+cached projection.
 
 Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 
@@ -212,20 +213,24 @@ Omarchy stores pane settings in `~/.config/omarchy/shell.json`:
 
 ## Tailnet Web
 
-The pane shows **Start Web**, **Open**, and **Stop** when the installed Boomux
-supports web management. **Start Web** requires connected Tailscale and runs
-`boomux web start --tailscale`, publishing the Boomux dashboard and enabled
-OpenCode runtime. Suitable tailnet grants and ACLs are still required.
+The pane shows **Start Web**, **Open Web**, and **Stop** when the installed Boomux
+supports web management. **Start Web** requires connected Tailscale and invokes
+`boomux web start --tailscale --json`, publishing the Boomux dashboard and any
+active OpenCode Shared Harness Runtime. Suitable tailnet grants and ACLs are
+still required.
 
 **Stop** stops only the web gateway and removes routes created by Boomux. It does
 not stop the daemon, managed processes, or Shared Harness Runtime. Boomux does
-not authenticate the full-control OpenCode service; the private access layer
-must provide TLS, authentication, and authorization.
+not proxy or authenticate the full-control OpenCode service. Set
+`OPENCODE_SERVER_PASSWORD` unless tailnet policy is intended to provide the
+authentication boundary; suitable TLS and authorization policy remain required.
 
 ## Safety
 
-- The plugin talks only to the local Boomux CLI; Boomux owns daemon lifecycle,
-  remote routing, authentication, and persistence.
+- For Boomux management, the plugin talks only to the local Boomux CLI; Boomux
+  owns daemon lifecycle, remote routing, authentication, and persistence. The
+  pane separately uses Omarchy and Hyprland helpers plus bounded HTTPS release
+  checks for presentation and update discovery.
 - Passive refresh leaves a stopped daemon stopped. The offline pane presents an
   explicit **Start Boomux** action and refreshes automatically after startup.
   Explicit `+`/`N` creation can also start Boomux when needed, refresh its
@@ -291,9 +296,9 @@ required: compatibility is determined by the stable CLI schema, negotiated
 daemon protocol, and advertised capabilities in `compatibility.json`.
 
 Backend changes are released before the plugin begins to require them. New
-Boomux behavior should be additive, and replaced capabilities remain available
-until supported plugin releases no longer need them. Backend-only fixes do not
-require a plugin release when they preserve the declared contract.
+required behavior should be additive; removing a capability requires a
+compatible plugin release first. Backend-only fixes do not require a plugin
+release when they preserve the declared contract.
 
 CI tests the plugin against the oldest declared Boomux release and the current
 stable release. A daily compatibility run detects new backend releases even
@@ -307,8 +312,9 @@ the exact commit that passed `main` CI. Normal Omarchy updates still follow the
 release-ready default branch; tags provide an audit and rollback point.
 
 Guided updates are backend-first: Boomux is updated and verified before Omarchy
-updates the plugin. If plugin replacement then fails, the existing plugin stays
-installed, the pane reports the detected compatibility state, and recovery is:
+updates the plugin. A failed or timed-out plugin update has an unknown outcome
+because Omarchy may already have changed the checkout. Reopen or refresh the pane
+to inspect its compatibility state; the explicit recovery commands are:
 
 ```console
 boomux update
