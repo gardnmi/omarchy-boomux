@@ -1,15 +1,15 @@
 # Omarchy Boomux Development Guide
 
 This repository is an Omarchy Quattro bar plugin for monitoring Boomux Agents
-and Sessions and managing Boomux workspaces. Keep changes small, local-first, and explicit
+and managing Boomux workspaces. Keep changes small, local-first, and explicit
 about operations that can start processes or take over terminals.
 
 ## Repository Map
 
 - `Panel.qml`: runtime integration, bar indicator, and pane content
 - `SidePane.qml`: configurable layer-shell drawer, focus, animation, and dismissal
-- `WorkspaceModel.js`: protocol-51 Session grouping and optional presentation
-  context, identity validation, and exact command construction
+- `WorkspaceModel.js`: snapshot normalization, identity validation, exact command
+  construction, and dormant Session helpers retained during the staged rollback
 - `tests/`: focused Bun tests and versioned snapshot fixtures
 - `manifest.json`: Omarchy plugin identity and marketplace metadata
 - `compatibility.json`: authoritative Boomux schema, protocol, capability, and
@@ -110,44 +110,16 @@ uniqueness.
 Preserve exact argument arrays. Do not join stored commands and pass them
 through a shell. Do not invoke Boomux private transport commands.
 
-Session list and inspect require advertised `session.list`, `session.inspect`,
-and `projected_agent_sessions`. Remote catalog reads additionally require a
-current online non-stale Node and both local and observed
-`typed_node_host_services` and `remote_agent_session_catalog`. Activation
-requires the static `exact_session_open` feature and invokes only
-`boomux session open SESSION_ID [--node NODE_ID] [--workspace WORKSPACE_ID]`; the plugin must not rebuild
-harness resume argv or substitute ordinary Shell opening.
-Workspace-scoped discovery starts only while the Session rail is visible for the
-currently presented coordinated Workspace. The Workspace-row Session icon must
-passively toggle its exact rail, while **Browse Sessions** reveals the rail with
-keyboard focus. Opening either entry must present its exact Workspace first; it
-must not query whichever Workspace was
-active before that presentation completes. Build one request per exact active
-eligible placement using the owner Workspace ID, reject returned rows for
-another owner. Retain catalog-only rows with zero occurrences. Group exact
-attention first, then current Sessions, seven-day recent history, and older
-history. History starts collapsed. Retain collapse, search, and exact selection
-with that source's in-memory cache; clearing pane privacy clears presentation
-state too. Successful activation opens in the source Workspace.
-Keep Session totals in the rail header. Do not query other Workspaces eagerly
-to populate Workspace-row rollups; that would violate source-scoped lazy
-discovery and overstate partial cached results.
-Display-name changes require the exact
-Session ID, Node, and returned owner Workspace revision; never retry a mutation.
-Protocol-49 additive defaults report Workspace revision `0`; browsing and
-inspection remain available, but display-name mutation requires a positive
-revision. Cache Session catalogs only under the exact source identity and active
-placement owner revisions that produced them.
-Hide uses `boomux session hide SESSION_ID --workspace WORKSPACE_ID [--node
-NODE_ID] --json`, validates the exact returned Node, Session, Workspace, revision,
-and `changed`, and invalidates only the originating source cache. Invoke it
-directly from the explicit Session-menu action and do not retry an unknown
-outcome. There is no unhide action.
+Session code is dormant during the staged feature rollback. Do not expose it
+through a Workspace row, action menu, setting, shortcut, IPC method, or automatic
+opening path. The plugin must not require Session capabilities from Boomux or
+start Session catalog discovery. Retain the internal implementation until the
+corresponding backend removal establishes the final compatibility boundary.
 
 ## Runtime Model
 
 The sliding main pane has a persistent expandable Workspace tree and two lower
-views, plus a user-controlled contextual Session drawer on its inward edge:
+views:
 
 - **Workspace tree**: coordinated and external Workspaces, with the currently
   presented Hyprland special Workspace highlighted independently from the
@@ -157,25 +129,14 @@ views, plus a user-controlled contextual Session drawer on its inward edge:
   durable attention, ordered by their latest authoritative update; private
   runner-owned Agents are excluded by shell ownership; capability-gated controls can start,
   open, and stop Boomux Web through Boomux-owned Tailscale exposure
-- **Sessions**: a lazy, cross-Node canonical Agent Session catalog for the
-  currently presented coordinated Workspace, ordered by
-  newest activity, with structural `(node_id, session_id)` identity, exact
-  inspection, Boomux-owned exact activation, coordinated Workspace source
-  scopes, and optional owner-authoritative display-name actions
 - **Nodes**: a health and version table with selected-Node route, helper and
   control versions, protocol, freshness, workload, eligibility,
   exact identity, guided creation, guided reauthentication, guided upgrade, and
   local registration removal
 
-The main pane must always retain its configured width and edge reservation. Put
-the Session drawer beside its inward edge, mirrored with the main pane side,
-at its fixed maximum width with its own layer-shell namespace but no second
-reservation. Clamp only when the remaining screen area is narrower. Clip its
-reveal at that inner edge so it emerges from the main pane rather than the screen
-boundary. Closing the main pane must also close the drawer. The existing passive
-Boomux toggle opens only the main pane. Passively open or close a Session rail from
-its coordinated Workspace row, or open it with keyboard focus from the action menu;
-do not add a second Hyprland binding.
+The main pane must always retain its configured width and edge reservation. The
+existing passive Boomux toggle opens only the main pane; do not add a second
+Hyprland binding.
 
 The header Settings surface owns pane-local presentation settings. Side and
 width changes persist through Omarchy's inline plugin settings API. Opening the
@@ -282,27 +243,9 @@ or lifecycle observation.
 - Agent and Shell opens from the pane retain the pane. Pointer input outside the
   drawer passes through to applications; only explicit close, Escape while the
   pane owns keyboard focus, or its IPC toggle should hide it.
-- Session card body clicks select and toggle context; Enter, the terminal icon,
-  and double-click activate. Spin the icon only for the exact active
-  request. Keep the collapsed row compact, and reveal labeled launch and
-  observed-work context through the card body or Left/Right keyboard controls. Show the effective
-  title, override and attention markers, activity age first, lifecycle, and harness metadata,
-  but not Agent-instance counts. Show latest Agent attribution only when it
-  differs from the harness label. Keep a menu for inline rename, persistent Hide, and conditional attention
-  dismissal. Do not add visible Inspect, Reset Name, or alternate destination
-  controls. Escape or outside click
-  releases keyboard ownership from the rail back to the main pane without
-  hiding the rail; only its close button or main-pane close hides it.
-  Unsupported activation must
-  explain the required Boomux capability rather than silently doing nothing.
-  Done and unavailable Sessions remain visible but non-actionable.
 - Keep drawer visibility separate from keyboard ownership. Opening or toggling
   the persistent pane is passive; the IPC `focus` action toggles an explicit
   keyboard mode with a contrasting outline, inner-edge wash, and focus rail.
-- Keep main-pane and Session-rail keyboard ownership explicit and exclusive.
-  Revealing the rail from keyboard mode transfers ownership to it; release from
-  the rail returns ownership to the still-visible main pane. Search retains
-  ordinary text input and arrows transfer selection to the card list.
 - Keyboard mode uses exclusive layer focus until explicit release. Super-modified
   arrow bindings must invoke the pane's IPC focus release before Hyprland's
   native directional focus dispatcher.
@@ -468,7 +411,7 @@ work here.
 - `preview.png` is the marketplace image; keep it in the repository root.
 - README image URLs should use stable files under `assets/`. Use a new filename
   if GitHub serves stale image content for an unchanged path.
-- Show Agents, Sessions, Workspaces, and Nodes views after meaningful UI changes.
+- Show Agents, Workspaces, and Nodes views after meaningful UI changes.
 - Do not expose personal absolute paths, secrets, private session titles, or
   terminal contents.
 - To demonstrate the yellow spark, temporarily force the **deployed test copy**

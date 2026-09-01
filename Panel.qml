@@ -3017,8 +3017,6 @@ Panel {
     var actions = []
     if (target.kind === "workspace") {
       if (workspaceMutationBusy()) return actions
-      if (target.workspace.is_global && !target.workspace.closing
-          && sessionCatalogSupported) actions.push("sessions")
       if (workspaceCreationReason(target.workspace) === "" && !actionProcess.running
           && !openProcess.running) actions.push("shell")
       if (workspaceCanRename(target.workspace)) actions.push("rename")
@@ -6211,29 +6209,6 @@ Panel {
                   anchors.verticalCenter: expansionTarget.verticalCenter
                   width: visible ? implicitWidth : 0
                   Button {
-                    id: workspaceSessionsButton
-                    visible: modelData.is_global && !modelData.closing
-                      && root.sessionCatalogSupported
-                    width: visible ? Style.space(32) : 0
-                    height: Style.space(32)
-                    iconText: ""
-                    tooltipText: "Browse Sessions for " + String(modelData.name)
-                    bordered: false
-                    active: root.sessionRailIsOpenForWorkspace(modelData)
-                    enabled: !root.workspaceMutationBusy()
-                      && (workspaceTreeDelegate.workspaceActive
-                        || root.workspaceCanOpen(modelData))
-                    foreground: root.foreground
-                    iconSize: Style.font.body
-                    horizontalPadding: Style.space(1)
-                    verticalPadding: 0
-                    onClicked: {
-                      root.focusSection = "workspaces"
-                      root.selectedWorkspaceIndex = workspaceTreeDelegate.index
-                      root.toggleWorkspaceSessionRail(modelData)
-                    }
-                  }
-                  Button {
                     id: workspaceMenuButton
                     width: Style.space(32)
                     height: Style.space(32)
@@ -7726,23 +7701,6 @@ Panel {
             anchors.margins: Style.space(5)
             spacing: Style.space(2)
 
-            Button {
-              visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
-                && root.actionMenuTarget.workspace.is_global
-                && !root.actionMenuTarget.workspace.closing
-                && root.sessionCatalogSupported
-              width: parent.width
-              text: "Browse Sessions"
-              tooltipText: "Load Sessions from this coordinated Workspace's active placements"
-              bordered: false
-              hasCursor: root.currentActionMenuAction === "sessions"
-              leftAlign: true
-              foreground: root.foreground
-              enabled: visible
-              onClicked: root.runActionMenuAction("sessions")
-              onHovered: function(hovered) { if (hovered)
-                root.actionMenuIndex = root.currentActionMenuActions.indexOf("sessions") }
-            }
             Button {
               visible: root.actionMenuTarget && root.actionMenuTarget.kind === "workspace"
               width: parent.width

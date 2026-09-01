@@ -10,7 +10,7 @@ function capabilities(overrides = {}) {
     cli_version: "1.7.2",
     daemon_protocol_version: 49,
     json_schemas: ["boomux.cli/v1"],
-    features: ["exact_session_open"],
+    features: [],
     ...overrides
   }
 }
@@ -19,7 +19,7 @@ test("normalizes the published compatibility declaration", () => {
   expect(requirements).toEqual({
     cli_schema: "boomux.cli/v1",
     minimum_protocol: 49,
-    required_capabilities: ["exact_session_open"],
+    required_capabilities: [],
     minimum_boomux: "1.7.0"
   })
   expect(requirements.required_capabilities).not.toContain("session_display_names")
@@ -48,13 +48,13 @@ test("accepts a backend that satisfies the declared contract", () => {
     .toEqual({ compatible: true, reason: "" })
 })
 
-test("rejects missing schemas, old protocols, and missing capabilities", () => {
+test("rejects missing schemas and old protocols without requiring Session capabilities", () => {
   expect(model.boomuxCompatibility(requirements,
     capabilities({ json_schemas: [] })).reason).toContain("boomux.cli/v1")
   expect(model.boomuxCompatibility(requirements,
     capabilities({ daemon_protocol_version: 48 })).reason).toContain("required protocol 49")
   expect(model.boomuxCompatibility(requirements,
-    capabilities({ features: [] })).reason).toContain("exact_session_open")
+    capabilities({ features: [] }))).toEqual({ compatible: true, reason: "" })
 })
 
 test("treats semantic version as guidance rather than compatibility proof", () => {
