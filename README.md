@@ -353,6 +353,37 @@ bash scripts/test-boomux-releases.sh
 git diff --check
 ```
 
+### Workspace tree virtualization checks
+
+`bun test tests/tree-virtualization.test.js` executes the tree projection and
+navigation functions extracted from `Panel.qml`, with Qt/view and action
+boundaries mocked. Its generated 10-, 100-, and 1,000-item fixtures cover flat row counts,
+qualified Shell/launcher keys, private-Shell exclusion, pointer/keyboard action
+routing, offscreen child navigation, snapshot cursor preservation, empty rows,
+and divider/scroll bounds.
+
+The tree has one clipped `ListView`; expanded children are individual rows with
+viewport-only Loader components, no nested child Repeater, zero cache buffer,
+and delegate reuse. Workspace and item cursors remain separate logical indexes,
+translated to flat row positions before scrolling. Stable keys preserve the
+qualified cursor across snapshot reordering, including Shell-to-Agent changes.
+Unchanged presentation signatures retain the current data model; structural
+changes rebuild its flat row descriptors. This is not an incremental model diff.
+
+For a 340-logical-pixel viewport and minimum 40-logical-pixel row height, at most
+10 rows intersect the viewport whether the expanded Workspace has 10, 100, or
+1,000 children. That is a static geometry bound, not a measured QML object count:
+Qt may also retain pooled or transitional delegates. The JavaScript row data
+still scales with the expanded item count.
+
+Before a release, use the real Omarchy/Quickshell environment to expand fixtures
+of those sizes, scroll to the final child and the following Workspace, cycle all
+three keyboard sections, open exact item menus, refresh while scrolled, and drag
+the divider at the beginning/middle/end of the tree. Confirm chevrons only expand
+and row activation still selects/opens the Workspace. Profile expansion latency,
+live delegate/object count, memory, and worst-frame stalls there; the Bun suite
+does not measure Qt rendering or compositor behavior.
+
 ## License
 
 Code is licensed under the [MIT License](LICENSE). The bomb icon is adapted from

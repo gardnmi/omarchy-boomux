@@ -236,22 +236,33 @@ Panel {
   property double noticeProtectedUntil: 0
   property string eventCursor: ""
   property bool focusRefreshPending: false
+  property bool eventStreamReady: false
+  property bool eventSnapshotPending: false
+  property bool statusRefreshData: true
+  property double nextSnapshotReconcileAt: 0
+  property int offlinePollDelay: 1000
+  property double nextPassiveRefreshAt: 0
+  property double nextWebStatusAt: 0
   property var workspaceSelectionRequested: null
   property var workspaceSelectionActive: null
   property string workspaceSelectionAppliedId: ""
   property string activeBoomuxWorkspaceId: ""
   property bool desktopWorkspaceRefreshPending: false
   property string activeBoomuxTerminalKey: ""
+  property string activeDesktopInitialTitle: ""
+  property bool desktopTerminalReadValid: false
+  property double nextDesktopTerminalRetryAt: 0
   property bool desktopTerminalRefreshPending: false
 
   readonly property var visibleWorkspaces: workspaces
   readonly property var visibleNodes: nodes.filter(function(node) { return !node.local })
-  readonly property var visibleAgents: WorkspaceModel.agentsByLastUpdated(agents.filter(function(agent) {
-    var state = agent.observation ? agent.observation.state : "unknown"
-    return !agentHasPrivateOwner(agent)
-      && ((agentIsProjectedCurrent(agent) && state !== "inactive" && state !== "done")
-        || attentionRevision(agent) > 0)
-  }))
+  // QML caches each lookup until its source array changes. Separate Shell and
+  // Agent indexes also support the legacy independently polled list snapshots.
+  readonly property var nodesById: WorkspaceModel.indexNodes(nodes)
+  readonly property var shellsByIdentity: WorkspaceModel.indexShells(shells)
+  readonly property var agentsByRun: WorkspaceModel.indexCurrentAgents(agents, shellsByIdentity)
+  readonly property var visibleAgents:
+    WorkspaceModel.visibleAgents(agents, shellsByIdentity, agentsByRun)
   readonly property var paneAgents: visibleAgents
   readonly property var allPaneSessions: WorkspaceModel.groupSessions(sessions, clockNow)
   readonly property var filteredPaneSessions:
@@ -260,11 +271,16 @@ Panel {
     WorkspaceModel.visibleGroupedSessions(filteredPaneSessions, sessionCollapsedGroups)
   readonly property var sessionListRows:
     WorkspaceModel.sessionListRows(filteredPaneSessions, sessionCollapsedGroups)
+  // The flattened data model may contain many rows; the ListView creates only
+  // viewport delegates. Keys are structural, never display names or bare IDs.
+  readonly property var workspaceTreeProjection:
+    projectWorkspaceTree(workspaceTreeWorkspaces, expandedWorkspaceKey)
   readonly property var cursorWorkspace: selectedWorkspaceIndex >= 0
     && selectedWorkspaceIndex < workspaceTreeWorkspaces.length
     ? workspaceTreeWorkspaces[selectedWorkspaceIndex] : null
-  readonly property var cursorWorkspaceItems: cursorWorkspace
-    ? WorkspaceModel.workspaceTreeItems(cursorWorkspace) : []
+  readonly property var cursorWorkspaceItems: !cursorWorkspace ? []
+    : (cursorWorkspace.key === expandedWorkspaceKey
+      ? workspaceTreeProjection.items : WorkspaceModel.workspaceTreeItems(cursorWorkspace))
   readonly property var cursorWorkspaceItem: selectedWorkspaceItemIndex >= 0
     && selectedWorkspaceItemIndex < cursorWorkspaceItems.length
     ? cursorWorkspaceItems[selectedWorkspaceItemIndex] : null
@@ -443,12 +459,31 @@ Panel {
   function parseDesktopTerminal(text) {
     try {
       var window = JSON.parse(text)
-      activeBoomuxTerminalKey = WorkspaceModel.boomuxShellWindowKey(
-        window.initialTitle, focusedTerminalKey, shells)
+      activeDesktopInitialTitle = String(window.initialTitle || "")
+      desktopTerminalReadValid = true
+      updateDesktopTerminalIdentity()
       return
     } catch (exception) {
     }
+    desktopTerminalReadValid = false
+    activeDesktopInitialTitle = ""
     activeBoomuxTerminalKey = ""
+  }
+
+  function retryDesktopTerminalIdentity() {
+    if (desktopTerminalReadValid || desktopTerminalProcess.running
+        || Date.now() < nextDesktopTerminalRetryAt) return
+    nextDesktopTerminalRetryAt = Date.now() + 5000
+    requestDesktopTerminalRefresh()
+  }
+
+  function updateDesktopTerminalIdentity() {
+    activeBoomuxTerminalKey = WorkspaceModel.boomuxShellWindowKey(
+      activeDesktopInitialTitle, focusedTerminalKey, shells)
+  }
+
+  function requestDesktopTerminalRefresh() {
+    if (!desktopTerminalRefreshTimer.running) desktopTerminalRefreshTimer.start()
   }
 
   function refreshDesktopTerminal() {
@@ -473,8 +508,7 @@ Panel {
   }
 
   function nodeFor(nodeId) {
-    for (var i = 0; i < nodes.length; i++) if (nodes[i].node_id === nodeId) return nodes[i]
-    return null
+    return nodesById[nodeId] || null
   }
 
   function nodeIsActionable(nodeId, capability) {
@@ -631,12 +665,42 @@ Panel {
     return owner && owner.kind === "schedule" ? "schedule" : "user"
   }
 
-  function refresh() {
+  function passiveRefreshInterval() {
+    if (!online) return offlinePollDelay
+    // Keep the existing one-second fallback if the event stream is unavailable.
+    return eventStreamReady && focusEventsSupported && federationAvailable ? 5000 : 1000
+  }
+
+  function refreshPassively() {
+    var now = Date.now()
+    if (now < nextPassiveRefreshAt) return
+    nextPassiveRefreshAt = now + passiveRefreshInterval()
+    refresh()
+  }
+
+  function refresh(statusOnly) {
     if (!backendReady) return
+    var now = Date.now()
+    if (!statusOnly) nextPassiveRefreshAt = now + passiveRefreshInterval()
+    retryDesktopTerminalIdentity()
     if (opened && activeTab === "agents" && webLifecycleSupported
-        && !webStatusProcess.running && !webStartProcess.running && !webStopProcess.running)
+        && now >= nextWebStatusAt && !webStatusProcess.running
+        && !webStartProcess.running && !webStopProcess.running) {
+      nextWebStatusAt = now + 5000
       webStatusProcess.running = true
-    if (daemonStatusProcess.running) return
+    }
+    var needsSnapshot = !statusOnly || eventSnapshotPending || !eventStreamReady
+      || now >= nextSnapshotReconcileAt
+    if (nodeSnapshotProcess.running && needsSnapshot) {
+      focusRefreshPending = true
+      return
+    }
+    if (daemonStatusProcess.running) {
+      if (needsSnapshot) statusRefreshData = true
+      return
+    }
+    statusRefreshData = needsSnapshot
+    if (needsSnapshot) eventSnapshotPending = false
     daemonStatusCreateGeneration = workspaceCreateGeneration
     daemonStatusProcess.running = true
   }
@@ -683,6 +747,11 @@ Panel {
   function setOffline(message, statusGeneration) {
     pollEpoch++
     eventCursor = ""
+    eventStreamReady = false
+    eventSnapshotPending = false
+    eventRefreshTimer.stop()
+    offlinePollDelay = online ? 1000 : Math.min(15000, offlinePollDelay * 2)
+    nextPassiveRefreshAt = Date.now() + offlinePollDelay
     focusRefreshPending = false
     if (eventProcess.running) eventProcess.running = false
     online = false
@@ -744,8 +813,12 @@ Panel {
         setOffline(compatibilityError, statusGeneration)
         return
       }
+      offlinePollDelay = 1000
       if (explicitCreationCheck) requestFreshWorkspaceCreateSnapshot()
-      else refreshData()
+      else if (statusRefreshData) {
+        nextSnapshotReconcileAt = Date.now() + 5000
+        refreshData()
+      }
       startEventWait()
     } catch (exception) {
       if (explicitCreationCheck)
@@ -867,7 +940,7 @@ Panel {
       var workspaceModelChanged = applyWorkspaceSnapshot(snapshot.workspaces)
       shells = snapshot.shells
       updateFocusedTerminal(snapshot.focused_terminal)
-      refreshDesktopTerminal()
+      updateDesktopTerminalIdentity()
       applyAgentSnapshot(snapshot.agents)
       online = true
       preserveSelections()
@@ -894,15 +967,24 @@ Panel {
   }
 
   function applyWorkspaceSnapshot(nextWorkspaces) {
-    var cursorKey = cursorWorkspace ? cursorWorkspace.key : ""
     workspaces = nextWorkspaces
     var signature = WorkspaceModel.workspaceTreeModelSignature(nextWorkspaces)
     if (signature === workspaceTreeSnapshotSignature) return false
+    var cursorKey = cursorWorkspace ? cursorWorkspace.key : ""
+    var cursorItemKey = cursorWorkspaceItem ? workspaceTreeItemKey(cursorWorkspaceItem) : ""
     workspaceTreeSnapshotSignature = signature
     workspaceTreeWorkspaces = nextWorkspaces
     if (cursorKey !== "") for (var i = 0; i < nextWorkspaces.length; i++) {
       if (nextWorkspaces[i].key === cursorKey) {
         selectedWorkspaceIndex = i
+        break
+      }
+    }
+    if (cursorWorkspace && cursorWorkspace.key === cursorKey && cursorItemKey !== "") {
+      var items = cursorWorkspaceItems
+      for (var j = 0; j < items.length; j++) {
+        if (workspaceTreeItemKey(items[j]) !== cursorItemKey) continue
+        selectedWorkspaceItemIndex = j
         break
       }
     }
@@ -985,30 +1067,33 @@ Panel {
 
   function parseEvents(raw) {
     var data = parseEnvelope(raw, "events")
-    if (typeof data.cursor !== "string" || !Array.isArray(data.events))
+    if (typeof data.cursor !== "string" || data.cursor === "" || !Array.isArray(data.events))
       throw new Error("invalid event batch")
+    var needsSnapshot = eventCursor === "" || !!data.snapshot
     eventCursor = data.cursor
+    eventStreamReady = true
     for (var i = 0; i < data.events.length; i++) {
-      if (data.events[i] && data.events[i].event === "focused_terminal_presentation_changed") {
-        requestFocusedTerminalRefresh()
-      } else if (data.events[i]
-          && ["agent_session_display_name_changed", "agent_working_context_observed",
-            "node_projection_changed"].indexOf(data.events[i].event) >= 0
+      var event = data.events[i]
+      // Output bytes do not change any displayed field. Unknown event types
+      // invalidate conservatively so newer owners cannot silently stale the UI.
+      if (event && typeof event.event === "string" && event.event !== "output_changed")
+        needsSnapshot = true
+      if (event && ["agent_session_display_name_changed", "agent_working_context_observed",
+          "node_projection_changed"].indexOf(event.event) >= 0
           && opened && sessionRailOpen) {
         sessionExpiresAt = 0
         ensureSessionDiscovery()
       }
     }
+    if (needsSnapshot) requestFocusedTerminalRefresh()
   }
 
   function requestFocusedTerminalRefresh() {
-    if (!federationAvailable || daemonProtocolVersion < 39) return
-    if (nodeSnapshotProcess.running) {
-      focusRefreshPending = true
-      return
-    }
-    snapshotActiveEpoch = pollEpoch
-    nodeSnapshotProcess.running = true
+    if (!backendReady || !federationAvailable || daemonProtocolVersion < 39) return
+    // Collapse each event batch and bursts while retaining a bounded 100ms delay.
+    // The callback checks daemon status before any new daemon-backed read.
+    eventSnapshotPending = true
+    if (!eventRefreshTimer.running) eventRefreshTimer.start()
   }
 
   function preserveSelections() {
@@ -1775,11 +1860,55 @@ Panel {
     selectedIndex = Math.max(0, Math.min(selectedIndex, itemCount - 1))
   }
 
+  function workspaceTreeItemKey(item) {
+    return JSON.stringify([item.kind === "launcher" ? "launcher" : "shell", item.key])
+  }
+
+  function projectWorkspaceTree(treeWorkspaces, expandedKey) {
+    var rows = []
+    var workspaceRows = Object.create(null)
+    var expandedItems = []
+    for (var i = 0; i < treeWorkspaces.length; i++) {
+      var workspace = treeWorkspaces[i]
+      var expanded = workspace.key === expandedKey
+      workspaceRows[workspace.key] = rows.length
+      rows.push({ key: JSON.stringify(["workspace", workspace.key]), kind: "workspace",
+        workspace: workspace, workspaceIndex: i, itemIndex: -1, expanded: expanded })
+      if (!expanded) continue
+      expandedItems = WorkspaceModel.workspaceTreeItems(workspace)
+      if (expandedItems.length === 0) {
+        rows.push({ key: JSON.stringify(["empty", workspace.key]), kind: "empty",
+          workspace: workspace, workspaceIndex: i, itemIndex: -1 })
+      }
+      for (var j = 0; j < expandedItems.length; j++) {
+        var item = expandedItems[j]
+        rows.push({ key: JSON.stringify(["item", workspace.key, workspaceTreeItemKey(item)]),
+          kind: "item", workspace: workspace, item: item, workspaceIndex: i,
+          itemIndex: j, last: j === expandedItems.length - 1 })
+      }
+    }
+    return { rows: rows, workspaceRows: workspaceRows, items: expandedItems }
+  }
+
+  function workspaceTreeRowIndex(workspaceIndex, itemIndex) {
+    var workspace = workspaceTreeWorkspaces[workspaceIndex]
+    if (!workspace) return -1
+    var row = workspaceTreeProjection.workspaceRows[workspace.key]
+    if (row === undefined) return -1
+    if (itemIndex < 0) return row
+    if (workspace.key !== expandedWorkspaceKey
+        || itemIndex >= workspaceTreeProjection.items.length) return -1
+    return row + 1 + itemIndex
+  }
+
   function clampWorkspaceCursor() {
     selectedWorkspaceIndex = Math.max(0, Math.min(selectedWorkspaceIndex,
       workspaceTreeWorkspaces.length - 1))
     selectedWorkspaceItemIndex = Math.max(0, Math.min(selectedWorkspaceItemIndex,
       cursorWorkspaceItems.length - 1))
+    if (focusSection === "workspace-items" && (!cursorWorkspace
+        || cursorWorkspace.key !== expandedWorkspaceKey || cursorWorkspaceItems.length === 0))
+      focusSection = "workspaces"
   }
 
   function moveWorkspaceCursor(offset) {
@@ -1787,7 +1916,8 @@ Panel {
     selectedWorkspaceIndex = Math.max(0, Math.min(selectedWorkspaceIndex + offset,
       workspaceTreeWorkspaces.length - 1))
     selectedWorkspaceItemIndex = 0
-    workspaceTreeList.positionViewAtIndex(selectedWorkspaceIndex, ListView.Contain)
+    var row = workspaceTreeRowIndex(selectedWorkspaceIndex, -1)
+    if (row >= 0) workspaceTreeList.positionViewAtIndex(row, ListView.Contain)
   }
 
   function cycleFocusSection(direction) {
@@ -1815,18 +1945,24 @@ Panel {
 
   function ensureFocusSectionVisible() {
     Qt.callLater(function() {
-      if (root.focusSection === "workspaces") root.revealContentItem(workspaceTreeColumn)
-      else if (root.focusSection === "lower") root.revealContentItem(
+      if (root.focusSection === "workspaces") {
+        root.revealContentItem(workspaceTreeColumn)
+        var row = root.workspaceTreeRowIndex(root.selectedWorkspaceIndex, -1)
+        if (row >= 0) workspaceTreeList.positionViewAtIndex(row, ListView.Contain)
+      } else if (root.focusSection === "lower") root.revealContentItem(
         root.activeTab === "agents" ? agentColumn : nodeColumn)
-      else root.revealContentItem(workspaceTreeList)
+      else {
+        root.revealContentItem(workspaceTreeList)
+        root.revealWorkspaceTreeCursor()
+      }
     })
   }
 
   function revealWorkspaceTreeCursor() {
     Qt.callLater(function() {
-      var workspaceDelegate = workspaceTreeList.itemAtIndex(root.selectedWorkspaceIndex)
-      if (workspaceDelegate)
-        workspaceDelegate.revealTreeItem(root.selectedWorkspaceItemIndex)
+      var row = root.workspaceTreeRowIndex(root.selectedWorkspaceIndex,
+        root.selectedWorkspaceItemIndex)
+      if (row >= 0) workspaceTreeList.positionViewAtIndex(row, ListView.Contain)
     })
   }
 
@@ -1964,12 +2100,11 @@ Panel {
     if (!item) return
     if (item.kind === "launcher") openWorkspaceItem(item)
     else {
-      // Retained rows are presentation only; use the current Shell/run and
-      // latest attention revision at activation, including after a restart.
-      var shell = item.shell ? WorkspaceModel.retainedShellForAgent({
-        node_id: item.shell.node_id, shell_id: item.shell.id
-      }, shells) : null
-      if (shell) openShell(shell, WorkspaceModel.latestAgentForShell(shell, agents))
+      // Rows may intentionally survive lifecycle-only refreshes. Resolve both
+      // objects at activation, including a changed run or attention revision.
+      var shell = item.shell ? WorkspaceModel.indexedShell(shellsByIdentity,
+        item.shell.node_id, item.shell.id) : null
+      if (shell) openShell(shell, WorkspaceModel.latestShellAgent(shell, agentsByRun))
     }
   }
 
@@ -1992,14 +2127,13 @@ Panel {
   }
 
   function applyWorkspacePosition(workspaceKey) {
-    for (var i = 0; i < visibleWorkspaces.length; i++) {
-      if (visibleWorkspaces[i].key !== workspaceKey) continue
-      var index = i
-      Qt.callLater(function() {
+    Qt.callLater(function() {
+      // Resolve after the model/expansion binding has settled, including when a
+      // newer snapshot reorders Workspace headers before this callback runs.
+      var index = root.workspaceTreeProjection.workspaceRows[workspaceKey]
+      if (index !== undefined)
         workspaceTreeList.positionViewAtIndex(index, ListView.Beginning)
-      })
-      return
-    }
+    })
   }
 
   function setWorkspaceTreeHeight(height) {
@@ -2947,7 +3081,7 @@ Panel {
 
   function openAgent(agent) {
     if (!agent) return
-    var shell = WorkspaceModel.retainedShellForAgent(agent, shells)
+    var shell = WorkspaceModel.indexedShell(shellsByIdentity, agent.node_id, agent.shell_id)
     if (!shell) {
       if (attentionRevision(agent) > 0 && !agentCanAcknowledge(agent)) {
         showActionFailure("Agent unavailable",
@@ -2958,8 +3092,8 @@ Panel {
       }
       return
     }
-    var target = WorkspaceModel.agentOpenTarget(agent, shells,
-      nodeIsActionable(agent.node_id, "remote_pty_attachment"))
+    var target = resourceIsActionable(agent, "remote_pty_attachment")
+      && resourceIsActionable(shell, "remote_pty_attachment") ? shell : null
     if (!target) {
       showActionFailure("Agent unavailable", "This Agent placement is unavailable")
       return
@@ -2968,43 +3102,20 @@ Panel {
   }
 
   function agentShellRetained(agent) {
-    return WorkspaceModel.retainedShellForAgent(agent, shells) !== null
+    return !!agent && WorkspaceModel.indexedShell(shellsByIdentity,
+      agent.node_id, agent.shell_id) !== null
   }
 
   function agentIsCurrent(agent) {
-    if (!agent || !agent.shell_id || !agent.run_id) return false
-    for (var i = 0; i < shells.length; i++) {
-      var shell = shells[i]
-      if (shell.node_id === agent.node_id && shell.id === agent.shell_id
-          && shell.run && resourceId(shell.run.id) === agent.run_id)
-        return true
-    }
-    return false
+    return WorkspaceModel.indexedAgentIsCurrent(agent, shellsByIdentity)
   }
 
   function agentHasPrivateOwner(agent) {
-    return WorkspaceModel.agentHasPrivateOwner(agent, shells)
+    return WorkspaceModel.indexedAgentHasPrivateOwner(agent, shellsByIdentity)
   }
 
   function agentIsProjectedCurrent(agent) {
-    if (!agentIsCurrent(agent)) return false
-    var observedAt = agent.observation ? Number(agent.observation.observed_at_ms || 0) : 0
-    var startedAt = Number(agent.started_at_ms || 0)
-    for (var i = 0; i < agents.length; i++) {
-      var candidate = agents[i]
-      var state = candidate.observation ? candidate.observation.state : "unknown"
-      if (candidate.key === agent.key || candidate.node_id !== agent.node_id
-          || candidate.shell_id !== agent.shell_id
-          || candidate.run_id !== agent.run_id || state === "inactive" || state === "done") continue
-      var candidateObservedAt = candidate.observation
-        ? Number(candidate.observation.observed_at_ms || 0) : 0
-      var candidateStartedAt = Number(candidate.started_at_ms || 0)
-      if (candidateObservedAt > observedAt
-          || (candidateObservedAt === observedAt && candidateStartedAt > startedAt)
-          || (candidateObservedAt === observedAt && candidateStartedAt === startedAt
-            && String(candidate.id) > String(agent.id))) return false
-    }
-    return true
+    return WorkspaceModel.indexedAgentIsProjectedCurrent(agent, shellsByIdentity, agentsByRun)
   }
 
   function openWorkspaceItem(item) {
@@ -3577,15 +3688,7 @@ Panel {
   }
 
   function countCompletedAgents() {
-    var completed = ({})
-    for (var i = 0; i < agents.length; i++) {
-      if (agentHasPrivateOwner(agents[i])) continue
-      if (completedAgents[agents[i].key] && agentIsProjectedCurrent(agents[i]))
-        completed[agents[i].key] = true
-      if (attentionReason(agents[i]) === "completed" && attentionRevision(agents[i]) > 0)
-        completed[agents[i].key] = true
-    }
-    return Object.keys(completed).length
+    return WorkspaceModel.completedAgentCount(agents, completedAgents, shellsByIdentity, agentsByRun)
   }
 
   function clearCompletedAgent(agentKey) {
@@ -3977,7 +4080,7 @@ Panel {
         root.refreshDesktopWorkspace()
       if (name === "activewindow" || name === "activewindowv2" || name === "openwindow"
           || name === "closewindow" || name === "movewindow" || name === "movewindowv2")
-        root.refreshDesktopTerminal()
+        root.requestDesktopTerminalRefresh()
     }
   }
 
@@ -4009,6 +4112,13 @@ Panel {
     }
   }
 
+  Timer {
+    id: desktopTerminalRefreshTimer
+    interval: 50
+    repeat: false
+    onTriggered: root.refreshDesktopTerminal()
+  }
+
   Process {
     id: desktopTerminalProcess
     command: ["hyprctl", "-j", "activewindow"]
@@ -4020,7 +4130,8 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.parseDesktopTerminal(text)
     }
-    onExited: function() {
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.desktopTerminalReadValid = false
       if (!root.desktopTerminalRefreshPending) return
       root.desktopTerminalRefreshPending = false
       Qt.callLater(root.refreshDesktopTerminal)
@@ -4032,6 +4143,8 @@ Panel {
     interval: 2000
     repeat: false
     onTriggered: {
+      root.desktopTerminalReadValid = false
+      root.activeDesktopInitialTitle = ""
       root.activeBoomuxTerminalKey = ""
       desktopTerminalProcess.running = false
     }
@@ -4305,7 +4418,7 @@ Panel {
         Qt.callLater(function() { root.requestFreshWorkspaceCreateSnapshot() })
       if (root.focusRefreshPending) {
         root.focusRefreshPending = false
-        Qt.callLater(function() { root.requestFocusedTerminalRefresh() })
+        Qt.callLater(function() { root.refresh() })
       }
       if (root.sessionSnapshotRefreshQueued) {
         root.sessionSnapshotRefreshQueued = false
@@ -4324,12 +4437,19 @@ Panel {
           root.parseEvents(eventStdout.text)
         } catch (exception) {
           root.eventCursor = ""
+          root.eventStreamReady = false
           console.warn("io.github.gardnmi.boomux:", exception)
         }
-        Qt.callLater(function() { root.startEventWait() })
+        // Every renewal goes through a fresh passive status check. Never
+        // blindly restart an events command after the daemon has stopped.
+        if (root.eventStreamReady && !eventRefreshTimer.running)
+          eventRefreshTimer.start()
       } else {
         root.eventCursor = ""
+        root.eventStreamReady = false
       }
+      if (!root.eventStreamReady && root.online)
+        root.nextPassiveRefreshAt = Math.min(root.nextPassiveRefreshAt, Date.now() + 1000)
     }
   }
 
@@ -4936,8 +5056,17 @@ Panel {
     triggeredOnStart: true
     onTriggered: {
       root.clockNow = Date.now()
-      root.refresh()
+      root.refreshPassively()
     }
+  }
+
+  Timer {
+    id: eventRefreshTimer
+    // Output-only traffic renews at most once a second; meaningful changes
+    // receive a short coalescing delay. Every renewal rechecks daemon status.
+    interval: root.eventSnapshotPending ? 100 : 1000
+    repeat: false
+    onTriggered: root.refresh(true)
   }
 
   Timer {
@@ -6170,333 +6299,346 @@ Panel {
               visible: root.visibleWorkspaces.length > 0
               width: parent.width
               height: root.workspaceTreeHeight
-              model: root.workspaceTreeWorkspaces
-              spacing: Style.space(3)
+              model: root.workspaceTreeProjection.rows
+              spacing: 0
               clip: true
+              cacheBuffer: 0
+              reuseItems: true
               boundsBehavior: Flickable.StopAtBounds
               ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              delegate: Rectangle {
-                id: workspaceTreeDelegate
+              delegate: Item {
+                id: workspaceTreeRow
                 required property var modelData
                 required property int index
-                readonly property bool workspaceActive: modelData.is_global
-                  && modelData.id === root.activeBoomuxWorkspaceId
-                readonly property bool workspaceExpanded:
-                  modelData.key === root.expandedWorkspaceKey
-                readonly property bool workspaceDefault: modelData.is_global
-                  && modelData.id === root.workspaceSelectionAppliedId
-                readonly property bool cursorSelected: root.focusSection === "workspaces"
-                  && index === root.selectedWorkspaceIndex
-                readonly property var treeItems: WorkspaceModel.workspaceTreeItems(modelData)
-                readonly property int visibleShellCount: modelData.shells
-                  ? treeItems.filter(function(item) { return item.kind !== "launcher" }).length
-                  : WorkspaceModel.userShellCount(root.shells, modelData.node_id, modelData.id)
-                readonly property int rowHeight: Style.space(48)
-                function revealTreeItem(itemIndex) {
-                  var item = treeItemRepeater.itemAt(itemIndex)
-                  if (!item) return
-                  var point = item.mapToItem(workspaceTreeList.contentItem, 0, 0)
-                  var maximumY = Math.max(0,
-                    workspaceTreeList.contentHeight - workspaceTreeList.height)
-                  if (point.y < workspaceTreeList.contentY)
-                    workspaceTreeList.contentY = Math.max(0, point.y)
-                  else if (point.y + item.height > workspaceTreeList.contentY
-                      + workspaceTreeList.height)
-                    workspaceTreeList.contentY = Math.min(maximumY,
-                      point.y + item.height - workspaceTreeList.height)
-                }
+                readonly property string rowKey: modelData.key
                 width: ListView.view.width
-                height: rowHeight + (workspaceExpanded ? childColumn.implicitHeight : 0)
-                radius: Style.cornerRadius
-                color: workspaceActive
-                  ? Util.alpha(Color.accent, 0.16)
-                  : (cursorSelected ? root.keyboardCursorFill
-                  : (workspaceExpanded ? Util.alpha(root.foreground, 0.055)
-                    : (workspaceRowMouse.containsMouse
-                      ? Util.alpha(root.foreground, 0.04) : "transparent")))
-                clip: true
+                height: modelData.kind === "workspace"
+                  ? Style.space(modelData.expanded ? 48 : 51)
+                  : (modelData.kind === "empty" ? Style.space(42)
+                    : Style.space(modelData.last ? 46 : 40))
 
-                Behavior on height {
-                  NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                // Components are instantiated only for visible ListView rows.
+                // There is deliberately no expanded-Workspace child Repeater.
+                Loader {
+                  width: parent.width
+                  height: workspaceTreeRow.modelData.kind === "workspace"
+                    ? Style.space(48) : parent.height
+                  sourceComponent: workspaceTreeRow.modelData.kind === "workspace"
+                    ? workspaceHeaderComponent : workspaceChildComponent
                 }
 
-                Rectangle {
-                  visible: workspaceTreeDelegate.workspaceActive
-                  x: root.paneSide === "left" ? 0 : parent.width - width
-                  width: Style.space(3)
-                  height: workspaceTreeDelegate.rowHeight
-                  color: Color.accent
-                  radius: width / 2
-                }
+                Component {
+                  id: workspaceHeaderComponent
+                  Rectangle {
+                    id: workspaceTreeDelegate
+                    readonly property var modelData: workspaceTreeRow.modelData.workspace
+                    readonly property int workspaceIndex: workspaceTreeRow.modelData.workspaceIndex
+                    readonly property bool workspaceActive: modelData.is_global
+                      && modelData.id === root.activeBoomuxWorkspaceId
+                    readonly property bool workspaceExpanded: workspaceTreeRow.modelData.expanded
+                    readonly property bool workspaceDefault: modelData.is_global
+                      && modelData.id === root.workspaceSelectionAppliedId
+                    readonly property bool cursorSelected: root.focusSection === "workspaces"
+                      && workspaceIndex === root.selectedWorkspaceIndex
+                    readonly property int visibleShellCount: modelData.shells
+                      ? modelData.shells.filter(function(shell) {
+                        return shell && WorkspaceModel.shellOwner(shell.owner) !== "schedule"
+                      }).length
+                      : WorkspaceModel.userShellCount(root.shells, modelData.node_id, modelData.id)
+                    readonly property int rowHeight: Style.space(48)
+                    radius: Style.cornerRadius
+                    color: workspaceActive
+                      ? Util.alpha(Color.accent, 0.16)
+                      : (cursorSelected ? root.keyboardCursorFill
+                      : (workspaceExpanded ? Util.alpha(root.foreground, 0.055)
+                        : (workspaceRowMouse.containsMouse
+                          ? Util.alpha(root.foreground, 0.04) : "transparent")))
+                    clip: true
 
-                Item {
-                  id: expansionTarget
-                  width: Style.space(28)
-                  height: workspaceTreeDelegate.rowHeight
-                  anchors.left: parent.left
+                    Rectangle {
+                      visible: workspaceTreeDelegate.workspaceActive
+                      x: root.paneSide === "left" ? 0 : parent.width - width
+                      width: Style.space(3)
+                      height: workspaceTreeDelegate.rowHeight
+                      color: Color.accent
+                      radius: width / 2
+                    }
 
-                  Text {
-                    anchors.centerIn: parent
-                    text: workspaceTreeDelegate.workspaceExpanded ? "▾" : "▸"
-                    color: workspaceTreeDelegate.workspaceExpanded ? Color.accent : root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
-                  MouseArea {
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                      root.focusSection = "workspaces"
-                      root.selectedWorkspaceIndex = workspaceTreeDelegate.index
-                      root.selectedWorkspaceItemIndex = 0
-                      root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)
+                    Item {
+                      id: expansionTarget
+                      width: Style.space(28)
+                      height: workspaceTreeDelegate.rowHeight
+                      anchors.left: parent.left
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: workspaceTreeDelegate.workspaceExpanded ? "▾" : "▸"
+                        color: workspaceTreeDelegate.workspaceExpanded ? Color.accent : root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                      }
+                      MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                          root.focusSection = "workspaces"
+                          root.selectedWorkspaceIndex = workspaceTreeDelegate.workspaceIndex
+                          root.selectedWorkspaceItemIndex = 0
+                          root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)
+                        }
+                      }
+                    }
+
+                    Rectangle {
+                      id: workspaceStateDot
+                      anchors.left: expansionTarget.right
+                      anchors.leftMargin: Style.space(2)
+                      anchors.verticalCenter: expansionTarget.verticalCenter
+                      width: Style.space(7)
+                      height: width
+                      radius: width / 2
+                      color: workspaceTreeDelegate.workspaceActive ? Color.accent
+                        : (Number(modelData.attention_count || 0) > 0 ? root.urgent
+                          : (root.workspaceCanOpen(modelData) ? root.dim : "transparent"))
+                      border.width: root.workspaceCanOpen(modelData) ? 0 : 1
+                      border.color: root.dim
+                    }
+
+                    Column {
+                      anchors.left: workspaceStateDot.right
+                      anchors.leftMargin: Style.space(9)
+                      anchors.right: workspaceBadge.left
+                      anchors.rightMargin: Style.space(8)
+                      anchors.verticalCenter: expansionTarget.verticalCenter
+                      spacing: 0
+                      Text {
+                        width: parent.width
+                        text: String(modelData.name)
+                        color: workspaceTreeDelegate.workspaceActive ? Color.accent : root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: workspaceTreeDelegate.workspaceActive
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        width: parent.width
+                        text: workspaceTreeDelegate.visibleShellCount + " Shell"
+                          + (workspaceTreeDelegate.visibleShellCount === 1 ? "" : "s")
+                          + " · " + root.workspaceVisibleAgentCount(modelData) + " Agent"
+                          + (root.workspaceVisibleAgentCount(modelData) === 1 ? "" : "s")
+                          + (workspaceTreeDelegate.workspaceDefault ? " · default" : "")
+                          + (Number(modelData.attention_count || 0) > 0 ? " · attention" : "")
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+                    }
+
+                    Text {
+                      id: workspaceBadge
+                      anchors.right: workspaceHeaderActions.left
+                      anchors.rightMargin: Style.space(6)
+                      anchors.verticalCenter: expansionTarget.verticalCenter
+                      text: workspaceTreeDelegate.workspaceDefault
+                        && !workspaceTreeDelegate.workspaceActive ? "◆" : ""
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Row {
+                      id: workspaceHeaderActions
+                      visible: true
+                      z: 2
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(5)
+                      anchors.verticalCenter: expansionTarget.verticalCenter
+                      width: visible ? implicitWidth : 0
+                      Button {
+                        id: workspaceMenuButton
+                        width: Style.space(32)
+                        height: Style.space(32)
+                        text: "⋮"
+                        tooltipText: "Workspace actions"
+                        bordered: false
+                        enabled: !root.workspaceMutationBusy()
+                        foreground: root.foreground
+                        fontSize: Style.font.body
+                        horizontalPadding: Style.space(1)
+                        verticalPadding: 0
+                        onClicked: root.showActionMenu({ kind: "workspace",
+                          workspace: workspaceTreeDelegate.modelData }, workspaceMenuButton)
+                      }
+                    }
+
+                    MouseArea {
+                      id: workspaceRowMouse
+                      anchors.left: expansionTarget.right
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      height: workspaceTreeDelegate.rowHeight
+                      hoverEnabled: true
+                      enabled: root.workspaceCanOpen(workspaceTreeDelegate.modelData)
+                      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                      onEntered: {
+                        if (panel.keyboardMode) return
+                        root.focusSection = "workspaces"
+                        root.selectedWorkspaceIndex = workspaceTreeDelegate.workspaceIndex
+                      }
+                      onClicked: {
+                        root.focusSection = "workspaces"
+                        root.selectedWorkspaceIndex = workspaceTreeDelegate.workspaceIndex
+                        root.activateWorkspaceRow(workspaceTreeDelegate.modelData)
+                      }
                     }
                   }
                 }
 
-                Rectangle {
-                  id: workspaceStateDot
-                  anchors.left: expansionTarget.right
-                  anchors.leftMargin: Style.space(2)
-                  anchors.verticalCenter: expansionTarget.verticalCenter
-                  width: Style.space(7)
-                  height: width
-                  radius: width / 2
-                  color: workspaceTreeDelegate.workspaceActive ? Color.accent
-                    : (Number(modelData.attention_count || 0) > 0 ? root.urgent
-                      : (root.workspaceCanOpen(modelData) ? root.dim : "transparent"))
-                  border.width: root.workspaceCanOpen(modelData) ? 0 : 1
-                  border.color: root.dim
-                }
+                Component {
+                  id: workspaceChildComponent
+                  Rectangle {
+                    readonly property var workspace: workspaceTreeRow.modelData.workspace
+                    color: workspace.is_global && workspace.id === root.activeBoomuxWorkspaceId
+                      ? Util.alpha(Color.accent, 0.16) : Util.alpha(root.foreground, 0.055)
+                    radius: Style.cornerRadius
 
-                Column {
-                  anchors.left: workspaceStateDot.right
-                  anchors.leftMargin: Style.space(9)
-                  anchors.right: workspaceBadge.left
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: expansionTarget.verticalCenter
-                  spacing: 0
-                  Text {
-                    width: parent.width
-                    text: String(modelData.name)
-                    color: workspaceTreeDelegate.workspaceActive ? Color.accent : root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: workspaceTreeDelegate.workspaceActive
-                    elide: Text.ElideRight
-                  }
-                  Text {
-                    width: parent.width
-                    text: workspaceTreeDelegate.visibleShellCount + " Shell"
-                      + (workspaceTreeDelegate.visibleShellCount === 1 ? "" : "s")
-                      + " · " + root.workspaceVisibleAgentCount(modelData) + " Agent"
-                      + (root.workspaceVisibleAgentCount(modelData) === 1 ? "" : "s")
-                      + (workspaceTreeDelegate.workspaceDefault ? " · default" : "")
-                      + (Number(modelData.attention_count || 0) > 0 ? " · attention" : "")
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                }
+                    Text {
+                      visible: workspaceTreeRow.modelData.kind === "empty"
+                      x: Style.space(36)
+                      width: parent.width - x - Style.space(5)
+                      height: Style.space(34)
+                      text: "No Shells or launchers"
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      verticalAlignment: Text.AlignVCenter
+                    }
 
-                Text {
-                  id: workspaceBadge
-                  anchors.right: workspaceHeaderActions.left
-                  anchors.rightMargin: Style.space(6)
-                  anchors.verticalCenter: expansionTarget.verticalCenter
-                  text: workspaceTreeDelegate.workspaceDefault
-                    && !workspaceTreeDelegate.workspaceActive ? "◆" : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Row {
-                  id: workspaceHeaderActions
-                  visible: true
-                  z: 2
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(5)
-                  anchors.verticalCenter: expansionTarget.verticalCenter
-                  width: visible ? implicitWidth : 0
-                  Button {
-                    id: workspaceMenuButton
-                    width: Style.space(32)
-                    height: Style.space(32)
-                    text: "⋮"
-                    tooltipText: "Workspace actions"
-                    bordered: false
-                    enabled: !root.workspaceMutationBusy()
-                    foreground: root.foreground
-                    fontSize: Style.font.body
-                    horizontalPadding: Style.space(1)
-                    verticalPadding: 0
-                    onClicked: root.showActionMenu({ kind: "workspace",
-                      workspace: workspaceTreeDelegate.modelData }, workspaceMenuButton)
-                  }
-                }
-
-                MouseArea {
-                  id: workspaceRowMouse
-                  anchors.left: expansionTarget.right
-                  anchors.right: parent.right
-                  anchors.top: parent.top
-                  height: workspaceTreeDelegate.rowHeight
-                  hoverEnabled: true
-                  enabled: root.workspaceCanOpen(workspaceTreeDelegate.modelData)
-                  cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                  onEntered: {
-                    if (panel.keyboardMode) return
-                    root.focusSection = "workspaces"
-                    root.selectedWorkspaceIndex = index
-                  }
-                  onClicked: {
-                    root.focusSection = "workspaces"
-                    root.selectedWorkspaceIndex = index
-                    root.activateWorkspaceRow(workspaceTreeDelegate.modelData)
-                  }
-                }
-
-                Column {
-                  id: childColumn
-                  visible: workspaceTreeDelegate.workspaceExpanded
-                  x: Style.space(24)
-                  y: workspaceTreeDelegate.rowHeight
-                  width: parent.width - x - Style.space(5)
-                  spacing: Style.space(2)
-                  bottomPadding: Style.space(5)
-
-                  Text {
-                    visible: workspaceTreeDelegate.treeItems.length === 0
-                    width: parent.width
-                    height: Style.space(34)
-                    text: "No Shells or launchers"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: Style.space(12)
-                  }
-
-                  Repeater {
-                    id: treeItemRepeater
-                    model: workspaceTreeDelegate.workspaceExpanded
-                      ? workspaceTreeDelegate.treeItems : []
-                    delegate: Rectangle {
-                      id: treeItemDelegate
-                      required property var modelData
-                      required property int index
-                      readonly property bool terminalFocused:
-                        WorkspaceModel.workspaceTreeItemFocused(
-                          modelData, root.activeBoomuxTerminalKey)
-                      width: childColumn.width
+                    Loader {
+                      active: workspaceTreeRow.modelData.kind === "item"
+                      x: Style.space(24)
+                      width: parent.width - x - Style.space(5)
                       height: Style.space(38)
-                      radius: Style.cornerRadius
-                      readonly property bool cursorSelected:
-                        root.focusSection === "workspace-items"
-                        && workspaceTreeDelegate.index === root.selectedWorkspaceIndex
-                        && index === root.selectedWorkspaceItemIndex
-                      color: terminalFocused ? Util.alpha(Color.accent, 0.045)
-                        : (cursorSelected ? root.keyboardCursorFill
-                        : (treeItemMouse.containsMouse
-                          ? Util.alpha(root.foreground, 0.035) : "transparent"))
-                      opacity: treeItemMouse.enabled ? 1 : 0.48
+                      sourceComponent: workspaceItemComponent
+                    }
+                  }
+                }
 
+                Component {
+                  id: workspaceItemComponent
+                  Rectangle {
+                    id: treeItemDelegate
+                    readonly property var modelData: workspaceTreeRow.modelData.item
+                    readonly property int workspaceIndex: workspaceTreeRow.modelData.workspaceIndex
+                    readonly property int itemIndex: workspaceTreeRow.modelData.itemIndex
+                    readonly property bool terminalFocused:
+                      WorkspaceModel.workspaceTreeItemFocused(
+                        modelData, root.activeBoomuxTerminalKey)
+                    radius: Style.cornerRadius
+                    readonly property bool cursorSelected:
+                      root.focusSection === "workspace-items"
+                      && workspaceIndex === root.selectedWorkspaceIndex
+                      && itemIndex === root.selectedWorkspaceItemIndex
+                    color: terminalFocused ? Util.alpha(Color.accent, 0.045)
+                      : (cursorSelected ? root.keyboardCursorFill
+                      : (treeItemMouse.containsMouse
+                        ? Util.alpha(root.foreground, 0.035) : "transparent"))
+                    opacity: treeItemMouse.enabled ? 1 : 0.48
+
+                    Text {
+                      id: treeItemGlyph
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.space(9)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: modelData.kind === "launcher" ? "↗"
+                        : (modelData.kind === "command" ? ">" : "○")
+                      color: modelData.status === "running" ? Color.accent : root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                    Column {
+                      anchors.left: treeItemGlyph.right
+                      anchors.leftMargin: Style.space(9)
+                      anchors.right: treeItemMenuButton.left
+                      anchors.rightMargin: Style.space(8)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: 0
                       Text {
-                        id: treeItemGlyph
-                        anchors.left: parent.left
-                        anchors.leftMargin: Style.space(9)
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.kind === "launcher" ? "↗"
-                          : (modelData.kind === "command" ? ">" : "○")
-                        color: modelData.status === "running" ? Color.accent : root.dim
+                        width: parent.width
+                        text: String(modelData.name)
+                        color: treeItemDelegate.terminalFocused
+                          ? Color.accent : root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
-                      }
-                      Column {
-                        anchors.left: treeItemGlyph.right
-                        anchors.leftMargin: Style.space(9)
-                        anchors.right: treeItemMenuButton.left
-                        anchors.rightMargin: Style.space(8)
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 0
-                        Text {
-                          width: parent.width
-                          text: String(modelData.name)
-                          color: treeItemDelegate.terminalFocused
-                            ? Color.accent : root.foreground
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
-                          font.bold: true
-                          elide: Text.ElideRight
-                        }
-                        Text {
-                          width: parent.width
-                          text: String(modelData.kind) + " · " + String(modelData.status)
-                            + (modelData.node_alias === "local" ? "" : " · " + modelData.node_alias)
-                            + (modelData.status === "exited" ? " · open starts a new run" : "")
-                          color: root.dim
-                          font.family: root.fontFamily
-                          font.pixelSize: Math.max(8, Style.font.caption - 1)
-                          elide: Text.ElideRight
-                        }
+                        font.bold: true
+                        elide: Text.ElideRight
                       }
                       Text {
-                        id: treeItemFocusBadge
-                        visible: treeItemDelegate.terminalFocused
-                        anchors.right: treeItemMenuButton.left
-                        anchors.rightMargin: Style.space(8)
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "●"
-                        color: Color.accent
+                        width: parent.width
+                        text: String(modelData.kind) + " · " + String(modelData.status)
+                          + (modelData.node_alias === "local" ? "" : " · " + modelData.node_alias)
+                          + (modelData.status === "exited" ? " · open starts a new run" : "")
+                        color: root.dim
                         font.family: root.fontFamily
-                        font.pixelSize: Math.max(7, Style.font.caption - 2)
+                        font.pixelSize: Math.max(8, Style.font.caption - 1)
+                        elide: Text.ElideRight
                       }
-                      MouseArea {
-                        id: treeItemMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        enabled: root.resourceIsActionable(
-                          modelData.kind === "launcher" ? modelData.launcher : modelData.shell,
-                          modelData.kind === "launcher"
-                            ? "remote_launcher_invocation" : "remote_pty_attachment")
-                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        ToolTip.visible: containsMouse && modelData.status === "exited"
-                        ToolTip.text: "Opening this item starts a new run"
-                        onEntered: {
-                          if (panel.keyboardMode) return
-                          root.focusSection = "workspace-items"
-                          root.selectedWorkspaceIndex = workspaceTreeDelegate.index
-                          root.selectedWorkspaceItemIndex = index
-                        }
-                        onClicked: {
-                          root.focusSection = "workspace-items"
-                          root.selectedWorkspaceIndex = workspaceTreeDelegate.index
-                          root.selectedWorkspaceItemIndex = index
-                          root.openWorkspaceTreeItem(modelData)
-                        }
+                    }
+                    Text {
+                      id: treeItemFocusBadge
+                      visible: treeItemDelegate.terminalFocused
+                      anchors.right: treeItemMenuButton.left
+                      anchors.rightMargin: Style.space(8)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "●"
+                      color: Color.accent
+                      font.family: root.fontFamily
+                      font.pixelSize: Math.max(7, Style.font.caption - 2)
+                    }
+                    MouseArea {
+                      id: treeItemMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      enabled: root.resourceIsActionable(
+                        modelData.kind === "launcher" ? modelData.launcher : modelData.shell,
+                        modelData.kind === "launcher"
+                          ? "remote_launcher_invocation" : "remote_pty_attachment")
+                      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                      ToolTip.visible: containsMouse && modelData.status === "exited"
+                      ToolTip.text: "Opening this item starts a new run"
+                      onEntered: {
+                        if (panel.keyboardMode) return
+                        root.focusSection = "workspace-items"
+                        root.selectedWorkspaceIndex = treeItemDelegate.workspaceIndex
+                        root.selectedWorkspaceItemIndex = treeItemDelegate.itemIndex
                       }
-                      Button {
-                        id: treeItemMenuButton
-                        visible: root.itemCanRename(modelData)
-                        z: 1
-                        anchors.right: parent.right
-                        anchors.rightMargin: Style.space(5)
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: Style.space(32)
-                        height: Style.space(32)
-                        text: "⋮"
-                        tooltipText: "Item actions"
-                        bordered: false
-                        enabled: !root.workspaceMutationBusy()
-                        foreground: root.foreground
-                        fontSize: Style.font.caption
-                        horizontalPadding: Style.space(1)
-                        verticalPadding: 0
-                        onClicked: root.showActionMenu(modelData, treeItemMenuButton)
+                      onClicked: {
+                        root.focusSection = "workspace-items"
+                        root.selectedWorkspaceIndex = treeItemDelegate.workspaceIndex
+                        root.selectedWorkspaceItemIndex = treeItemDelegate.itemIndex
+                        root.openWorkspaceTreeItem(modelData)
                       }
+                    }
+                    Button {
+                      id: treeItemMenuButton
+                      visible: root.itemCanRename(modelData)
+                      z: 1
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(5)
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(32)
+                      height: Style.space(32)
+                      text: "⋮"
+                      tooltipText: "Item actions"
+                      bordered: false
+                      enabled: !root.workspaceMutationBusy()
+                      foreground: root.foreground
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.space(1)
+                      verticalPadding: 0
+                      onClicked: root.showActionMenu(modelData, treeItemMenuButton)
                     }
                   }
                 }

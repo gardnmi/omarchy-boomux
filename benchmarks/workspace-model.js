@@ -3,6 +3,7 @@ const crypto = require("node:crypto")
 const fs = require("node:fs")
 const os = require("node:os")
 const model = require("../WorkspaceModel.js")
+const { referenceViews } = require("./view-reference.js")
 
 function qualified(nodeId, innerId) {
   return { node_id: nodeId, inner_id: innerId }
@@ -128,18 +129,55 @@ function rounded(value) {
   return Number(value.toFixed(3))
 }
 
-function benchmark(name, configuration) {
-  const data = fixture(configuration.remoteNodes, configuration.workspaces,
-    configuration.resourcesPerWorkspace)
-  for (let index = 0; index < configuration.warmups; index++)
-    model.normalizeNodeSnapshot(data)
+function snapshotViews(snapshot, completed) {
+  const nodesById = model.indexNodes(snapshot.nodes)
+  const shellsByIdentity = model.indexShells(snapshot.shells)
+  const agentsByRun = model.indexCurrentAgents(snapshot.agents, shellsByIdentity)
+  return {
+    nodesById,
+    visible: model.visibleAgents(snapshot.agents, shellsByIdentity, agentsByRun),
+    completed: model.completedAgentCount(snapshot.agents, completed, shellsByIdentity, agentsByRun),
+    signature: model.workspaceTreeModelSignature(snapshot.workspaces),
+    items: snapshot.workspaces.map(model.workspaceTreeItems)
+  }
+}
 
-  const samples = []
-  let result
-  for (let index = 0; index < configuration.runs; index++) {
+function compactViews(views) {
+  return {
+    visible: views.visible.map(agent => [agent.node_id, agent.id]),
+    completed: views.completed,
+    signature: views.signature,
+    items: views.items.map(items => items.map(item =>
+      [item.key, item.kind, item.name, item.status, item.detail, item.node_id, item.placement_state]))
+  }
+}
+
+function timings(samples) {
+  return {
+    median_ms: rounded(percentile(samples, 0.5)),
+    p95_ms: rounded(percentile(samples, 0.95)),
+    min_ms: rounded(Math.min(...samples))
+  }
+}
+
+function benchmark(name, configuration, compareBaseline) {
+  const samples = { normalization: [], view_derivation: [], snapshot_to_view: [] }
+  let result, views
+  // Allocate fresh raw input before timing every iteration. Normalization,
+  // index construction, visible/completed derivation, tree projection and tree
+  // signature generation are all inside the snapshot-to-view measurement.
+  for (let index = -configuration.warmups; index < configuration.runs; index++) {
+    const data = fixture(configuration.remoteNodes, configuration.workspaces,
+      configuration.resourcesPerWorkspace)
     const start = process.hrtime.bigint()
     result = model.normalizeNodeSnapshot(data)
-    samples.push(Number(process.hrtime.bigint() - start) / 1e6)
+    const normalizedAt = process.hrtime.bigint()
+    views = snapshotViews(result, {})
+    const end = process.hrtime.bigint()
+    if (index < 0) continue
+    samples.normalization.push(Number(normalizedAt - start) / 1e6)
+    samples.view_derivation.push(Number(end - normalizedAt) / 1e6)
+    samples.snapshot_to_view.push(Number(end - start) / 1e6)
   }
 
   const expectedResources = configuration.remoteNodes * configuration.workspaces
@@ -151,10 +189,26 @@ function benchmark(name, configuration) {
   assert.equal(result.shells.length, expectedResources)
   assert.equal(result.agents.length, expectedResources)
   assert.equal(launcherCount, expectedResources)
+  assert.deepEqual(compactViews(views), compactViews(referenceViews(result, {})))
+
+  const baselineSamples = []
+  if (compareBaseline) {
+    for (let index = -configuration.warmups; index < configuration.runs; index++) {
+      const data = fixture(configuration.remoteNodes, configuration.workspaces,
+        configuration.resourcesPerWorkspace)
+      const start = process.hrtime.bigint()
+      // Both pipelines use the current normalizer. This conservatively isolates
+      // the view improvement and does not credit indexed normalization gains.
+      const baseline = referenceViews(model.normalizeNodeSnapshot(data), {})
+      const elapsed = Number(process.hrtime.bigint() - start) / 1e6
+      if (index >= 0) baselineSamples.push(elapsed)
+      assert.deepEqual(compactViews(views), compactViews(baseline))
+    }
+  }
 
   const output = JSON.stringify(result)
   return {
-    name: name,
+    name,
     fixture: {
       remote_nodes: configuration.remoteNodes,
       workspaces: configuration.workspaces,
@@ -163,9 +217,13 @@ function benchmark(name, configuration) {
     },
     warmups: configuration.warmups,
     runs: configuration.runs,
-    median_ms: rounded(percentile(samples, 0.5)),
-    p95_ms: rounded(percentile(samples, 0.95)),
-    min_ms: rounded(Math.min(...samples)),
+    normalization: timings(samples.normalization),
+    view_derivation: timings(samples.view_derivation),
+    snapshot_to_view: timings(samples.snapshot_to_view),
+    baseline_snapshot_to_view: baselineSamples.length ? timings(baselineSamples) : null,
+    parity: true,
+    visible_agents: views.visible.length,
+    tree_items: views.items.reduce((total, items) => total + items.length, 0),
     output_bytes: output.length,
     output_sha256: crypto.createHash("sha256").update(output).digest("hex")
   }
@@ -173,36 +231,49 @@ function benchmark(name, configuration) {
 
 function markdown(report) {
   const lines = [
-    "## Workspace Model Benchmark",
+    "## Workspace Model Benchmark", "",
+    `${report.runtime.name} ${report.runtime.version} on ${report.runtime.platform}/${report.runtime.arch}.`,
+    "Fresh snapshots include normalization, indexes, Agent views, tree rows and signatures.",
+    "Synthetic JavaScript timings are informational, not live QML frame times or CI thresholds.",
     "",
-    `Bun ${report.runtime.bun} on ${report.runtime.platform}/${report.runtime.arch}.`,
-    "Timings are informational and are not a CI failure threshold.",
-    "",
-    "| Fixture | Median | p95 | Minimum | Output | SHA-256 |",
+    "| Fixture | Normalize median | Views median | Pipeline median / p95 | Baseline median | Parity |",
     "| --- | ---: | ---: | ---: | ---: | --- |"
   ]
   for (const result of report.results) lines.push(
-    `| ${result.name} | ${result.median_ms} ms | ${result.p95_ms} ms | `
-      + `${result.min_ms} ms | ${result.output_bytes} bytes | `
-      + `\`${result.output_sha256.substring(0, 12)}\` |`)
+    `| ${result.name} | ${result.normalization.median_ms} ms | `
+      + `${result.view_derivation.median_ms} ms | ${result.snapshot_to_view.median_ms} / `
+      + `${result.snapshot_to_view.p95_ms} ms | `
+      + `${result.baseline_snapshot_to_view ? result.baseline_snapshot_to_view.median_ms + " ms" : "not timed"} | pass |`)
   return lines.join("\n") + "\n"
 }
 
-const report = {
-  schema: "omarchy-boomux.workspace-model-benchmark/v1",
-  runtime: { bun: Bun.version, platform: os.platform(), arch: os.arch() },
-  results: [
-    benchmark("small", {
-      remoteNodes: 2, workspaces: 10, resourcesPerWorkspace: 2, warmups: 10, runs: 31
-    }),
-    benchmark("large", {
-      remoteNodes: 4, workspaces: 250, resourcesPerWorkspace: 4, warmups: 5, runs: 15
-    })
-  ]
+function main() {
+  const report = {
+    schema: "omarchy-boomux.workspace-model-benchmark/v2",
+    runtime: {
+      name: typeof Bun !== "undefined" ? "Bun" : "Node",
+      version: typeof Bun !== "undefined" ? Bun.version : process.version,
+      platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model
+    },
+    methodology: "Fresh fixture per iteration outside timing; current normalizer and complete view "
+      + "derivation inside timing. Baseline is the pre-index view algorithm using the same current "
+      + "normalizer. No daemon, compositor or QML rendering. Parity is checked for every fixture.",
+    results: [
+      ["small-40", 2, 10, 2],
+      ["1000-agents", 4, 125, 2],
+      ["2000-agents", 4, 250, 2],
+      ["large-4000", 4, 250, 4],
+      ["8000-agents", 4, 500, 4],
+      ["single-workspace-4000", 4, 1, 1000]
+    ].map(([name, remoteNodes, workspaces, resourcesPerWorkspace]) =>
+      benchmark(name, { remoteNodes, workspaces, resourcesPerWorkspace, warmups: 3, runs: 9 },
+        process.argv.includes("--compare-baseline")))
+  }
+  if (process.env.GITHUB_STEP_SUMMARY)
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown(report))
+  if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2))
+  else process.stdout.write(markdown(report))
 }
 
-if (process.env.GITHUB_STEP_SUMMARY)
-  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown(report))
-
-if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2))
-else process.stdout.write(markdown(report))
+module.exports = { fixture, snapshotViews, compactViews }
+if (require.main === module) main()

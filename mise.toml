@@ -15,5 +15,5 @@ description = "Test the oldest supported and current Boomux releases"
 run = "bash scripts/test-boomux-releases.sh"
 
 [tasks.bench]
-description = "Benchmark Workspace snapshot normalization"
+description = "Benchmark complete Workspace snapshot-to-view derivation"
 run = "bun benchmarks/workspace-model.js"

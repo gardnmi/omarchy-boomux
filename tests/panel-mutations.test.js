@@ -41,9 +41,17 @@ function processStub() {
 
 function context(functions, state = {}, exits = {}) {
   const s = Object.assign({ WorkspaceModel: model, console, queued: [], failures: [],
-    notices: [], opened: true, actionMessage: "", refreshes: 0 }, state)
+    notices: [], opened: true, actionMessage: "", refreshes: 0,
+    online: false, offlinePollDelay: 1000, eventStreamReady: false,
+    eventSnapshotPending: false, statusRefreshData: true, nextSnapshotReconcileAt: 0,
+    nextPassiveRefreshAt: 0, nextWebStatusAt: 0, focusRefreshPending: false,
+    focusEventsSupported: false, desktopTerminalReadValid: true,
+    eventRefreshTimer: { stop() {} } }, state)
   for (const [key, value] of Object.entries(state))
     if (typeof value === "function") s[key] = value.bind(s)
+  // Mirror the Panel's derived index rather than freezing the initial Nodes.
+  // Tests replace arrays and mutate fixture owners to exercise dispatch races.
+  Object.defineProperty(s, "nodesById", { get: () => model.indexNodes(s.nodes || []) })
   s.root = s
   s.Qt = { callLater(callback) { s.queued.push(callback) } }
   s.showActionFailure = (...args) => s.failures.push(args)
@@ -340,7 +348,8 @@ describe("explicit Workspace selection intents", () => {
 })
 
 function creationContext() {
-  return context(["refresh", "workspaceMutationBusy", "requestGeneratedWorkspace",
+  return context(["refresh", "passiveRefreshInterval", "retryDesktopTerminalIdentity",
+    "workspaceMutationBusy", "requestGeneratedWorkspace",
     "requestFreshWorkspaceCreateStatus", "requestFreshWorkspaceCreateSnapshot",
     "parseDaemonStatus", "setOffline", "failWorkspaceCreation", "parseEnvelope"],
   Object.assign(offlineState(), {
@@ -414,7 +423,14 @@ describe("Workspace creation request generations", () => {
     const s = creationContext()
     s.requestGeneratedWorkspace("/new/project")
     finishStatus(s, "running")
-    s.refresh()
+    // A healthy event stream can renew status while the explicit snapshot is
+    // still running. Exercise a real second status launch, not a fabricated exit.
+    assert.equal(s.nodeSnapshotProcess.running, true)
+    s.eventStreamReady = true
+    s.nextSnapshotReconcileAt = Date.now() + 5000
+    s.refresh(true)
+    assert.equal(s.daemonStatusProcess.launches.length, 2)
+    assert.equal(s.daemonStatusCreateGeneration, 1)
     finishStatus(s, "stopped")
     assert.equal(s.workspaceCreateRequested, null)
     assert.equal(s.workspaceCreateSnapshotQueued, false)
