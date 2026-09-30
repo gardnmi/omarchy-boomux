@@ -144,6 +144,9 @@ shade as pointer hover. Because layer-shell drawers are not Hyprland windows,
 `Super+Arrow` cannot navigate into the pane; while keyboard mode is active it
 exits the mode and returns keys to the window Hyprland selects.
 Clicking outside the drawer likewise exits keyboard mode without closing it.
+Re-entering keyboard mode restores the active form, picker, Settings, or modal.
+Guided terminal actions release drawer keyboard ownership before launching and
+keep the pane visible.
 
 Selecting a coordinated Workspace presents its existing Hyprland layer and
 stores it as Boomux's selected CLI Workspace. If the layer has no windows, Boomux
@@ -356,3 +359,6 @@ Code is licensed under the [MIT License](LICENSE). The bomb icon is adapted from
 [Font Awesome Free](https://fontawesome.com/icons/bomb) under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+See [review regression validation](docs/review-validation.md) for executable
+coverage and the remaining real Omarchy/Wayland smoke checks.

@@ -1606,6 +1606,29 @@ function agentMatchesShell(agent, shell) {
   return !!runId && agent.run_id === runId
 }
 
+// A tree row can survive lifecycle-only snapshot changes. Resolve its current
+// run's latest live Agent when activated, never from a captured projected row.
+function latestAgentForShell(shell, agents) {
+  if (!shell || shellOwner(shell.owner) === "schedule") return null
+  var latest = null
+  for (var i = 0; i < (agents || []).length; i++) {
+    var candidate = agents[i]
+    var state = candidate && candidate.observation ? candidate.observation.state : "unknown"
+    if (!agentMatchesShell(candidate, shell) || candidate.ended_at_ms != null
+        || state === "inactive" || state === "done") continue
+    var observed = candidate.observation ? Number(candidate.observation.observed_at_ms || 0) : 0
+    var previousObserved = latest && latest.observation
+      ? Number(latest.observation.observed_at_ms || 0) : 0
+    var started = Number(candidate.started_at_ms || 0)
+    var previousStarted = latest ? Number(latest.started_at_ms || 0) : 0
+    if (!latest || observed > previousObserved
+        || (observed === previousObserved && started > previousStarted)
+        || (observed === previousObserved && started === previousStarted
+          && String(candidate.id) > String(latest.id))) latest = candidate
+  }
+  return latest
+}
+
 function retainedShellForAgent(agent, shells) {
   if (!agent || !agent.shell_id) return null
   for (var i = 0; i < shells.length; i++)
@@ -1682,13 +1705,32 @@ function acknowledgementIdentity(agent, revision) {
   return {
     agentKey: resourceKey(agent.node_id, agent.id),
     nodeId: String(agent.node_id),
+    nodeLocal: agent.node_local === true,
     agentId: String(agent.id),
     revision: Number(revision)
   }
 }
 
 function acknowledgementResponseMatches(data, identity) {
-  return !!data && !!data.agent && resourceId(data.agent.id) === identity.agentId
+  if (!data || !identity || !data.agent || typeof data.changed !== "boolean"
+      || typeof identity.agentId !== "string" || identity.agentId === ""
+      || !Number.isSafeInteger(identity.revision) || identity.revision <= 0)
+    return false
+  var agent = data.agent
+  var nodeId = String(identity.nodeId || "")
+  var responseNode = resourceNode(agent.id, data.node_id || agent.node_id)
+  if (resourceId(agent.id) !== identity.agentId || nodeId === ""
+      || (responseNode !== "" && responseNode !== nodeId)
+      || (data.node_id !== undefined && data.node_id !== nodeId)
+      || (agent.node_id !== undefined && agent.node_id !== nodeId)
+      || (!identity.nodeLocal && responseNode !== nodeId)) return false
+  // The stable contract returns the resulting Agent, not an echoed guard.
+  // Its lifecycle may already be newer than the acknowledged attention.
+  var revision = agent.observation && agent.observation.revision
+  return agent.attention === null && Number.isSafeInteger(revision)
+    && revision >= identity.revision
+    && (data.observation_revision === undefined
+      || data.observation_revision === identity.revision)
 }
 
 if (typeof module !== "undefined") module.exports = {
@@ -1786,6 +1828,7 @@ if (typeof module !== "undefined") module.exports = {
   suggestionIdentity: suggestionIdentity,
   suggestionResponseMatches: suggestionResponseMatches,
   agentMatchesShell: agentMatchesShell,
+  latestAgentForShell: latestAgentForShell,
   retainedShellForAgent: retainedShellForAgent,
   agentOpenTarget: agentOpenTarget,
   projectDiscoveryIdentity: projectDiscoveryIdentity,

@@ -136,6 +136,7 @@ Panel {
   property bool webLifecycleSupported: false
   property bool focusEventsSupported: false
   property bool workspaceSelectionSupported: false
+  property bool attentionAcknowledgementSupported: false
   property bool sessionCatalogSupported: false
   property bool sessionInspectSupported: false
   property bool exactSessionOpenSupported: false
@@ -184,6 +185,7 @@ Panel {
   property string nodeReauthenticateAlias: ""
   property string formMode: ""
   property bool settingsOpen: false
+  property bool terminalLaunchPending: false
   property string projectQuery: ""
   property int selectedProjectIndex: -1
   property string projectError: ""
@@ -204,11 +206,14 @@ Panel {
   property var pendingAction: null
   property var pendingWorkspaceOpen: null
   property var workspaceCreateRequested: null
+  property int workspaceCreateGeneration: 0
+  property int daemonStatusCreateGeneration: 0
   property bool workspaceCreateStatusQueued: false
   property bool workspaceCreateStatusActive: false
   property bool daemonStartRequested: false
   property bool workspaceCreateSnapshotQueued: false
   property bool workspaceCreateSnapshotActive: false
+  property int workspaceCreateSnapshotGeneration: 0
   property var pendingWorkspaceCreation: null
   property double pendingWorkspaceConfirmationDeadline: 0
   property var defaultPathTarget: null
@@ -367,10 +372,7 @@ Panel {
   onAgentHostNameChanged: if (agentHostDropdown)
     agentHostDropdown.value = agentHostName
 
-  onConfirmationTargetChanged: Qt.callLater(function() {
-    if (confirmationTarget) confirmationDialogKeyHandler.forceActiveFocus()
-    else if (opened) keyCatcher.forceActiveFocus()
-  })
+  onConfirmationTargetChanged: Qt.callLater(root.restorePaneFocus)
 
   onRenameTargetChanged: Qt.callLater(function() {
     if (renameTarget) {
@@ -381,12 +383,12 @@ Panel {
             || renameTarget.session.description || "")
           : String(renameTarget.name))
       renameField.selectAll()
-      renameField.forceActiveFocus()
-    } else if (opened) {
+      restorePaneFocus()
+    } else if (opened && panel.keyboardMode) {
       if (renameReturnToSessionRail && sessionRailOpen) {
         renameReturnToSessionRail = false
         focusSessionRail()
-      } else keyCatcher.forceActiveFocus()
+      } else restorePaneFocus()
     }
   })
 
@@ -635,6 +637,7 @@ Panel {
         && !webStatusProcess.running && !webStartProcess.running && !webStopProcess.running)
       webStatusProcess.running = true
     if (daemonStatusProcess.running) return
+    daemonStatusCreateGeneration = workspaceCreateGeneration
     daemonStatusProcess.running = true
   }
 
@@ -677,7 +680,7 @@ Panel {
     daemonStartProcess.running = true
   }
 
-  function setOffline(message) {
+  function setOffline(message, statusGeneration) {
     pollEpoch++
     eventCursor = ""
     focusRefreshPending = false
@@ -701,10 +704,16 @@ Panel {
     previousAgentStates = ({})
     completedAgents = ({})
     automaticAttentionRevisions = ({})
+    acknowledgeQueue = []
+    workspaceSelectionRequested = null
     agentBaselineReady = false
     invalidateProjectDiscovery()
     if (workspaceCreateRequested && !daemonStartProcess.running) {
-      failWorkspaceCreation("Boomux went offline before creation could obtain a fresh Node snapshot")
+      // A passive status read started before this intent cannot cancel it.
+      // Its queued fresh check must decide whether explicit startup is needed.
+      if (statusGeneration === undefined
+          || statusGeneration >= workspaceCreateRequested.generation)
+        failWorkspaceCreation("Boomux went offline before creation could obtain a fresh Node snapshot")
     }
     if (pendingDefaultCwd) {
       actionMessage = "Shell start folder changed; waiting for Boomux to confirm the snapshot"
@@ -715,7 +724,7 @@ Panel {
     error = message
   }
 
-  function parseDaemonStatus(raw, explicitCreationCheck) {
+  function parseDaemonStatus(raw, explicitCreationCheck, statusGeneration) {
     try {
       var data = parseEnvelope(raw, "daemon.status")
       if (data.status !== "running") {
@@ -723,7 +732,7 @@ Panel {
           actionMessage = "Starting Boomux..."
           daemonStartProcess.running = true
         }
-        setOffline("Boomux daemon is stopped")
+        setOffline("Boomux daemon is stopped", statusGeneration)
         return
       }
       daemonProtocolVersion = Number(data.protocol_version || 0)
@@ -732,7 +741,7 @@ Panel {
       if (!compatibility.compatible) {
         compatibilityError = compatibility.reason + " Update Boomux to "
           + compatibilityRequirements.minimum_boomux + " or newer."
-        setOffline(compatibilityError)
+        setOffline(compatibilityError, statusGeneration)
         return
       }
       if (explicitCreationCheck) requestFreshWorkspaceCreateSnapshot()
@@ -741,7 +750,7 @@ Panel {
     } catch (exception) {
       if (explicitCreationCheck)
         failWorkspaceCreation("Could not validate Boomux daemon status before creation")
-      else setOffline("Boomux daemon is stopped")
+      else setOffline("Boomux daemon is stopped", statusGeneration)
     }
   }
 
@@ -756,6 +765,8 @@ Panel {
       if (!Array.isArray(data.json_commands)) throw new Error("missing JSON commands")
       cliVersion = String(data.cli_version || "")
       cliFeatures = Array.isArray(data.features) ? data.features : []
+      attentionAcknowledgementSupported = data.json_commands.indexOf("attention.acknowledge") >= 0
+        && cliFeatures.indexOf("persistent_agent_attention") >= 0
       var compatibility = WorkspaceModel.boomuxCompatibility(
         compatibilityRequirements, data)
       compatibilityError = compatibility.compatible ? "" : compatibility.reason
@@ -815,6 +826,7 @@ Panel {
       webLifecycleSupported = false
       focusEventsSupported = false
       workspaceSelectionSupported = false
+      attentionAcknowledgementSupported = false
       sessionCatalogSupported = false
       sessionInspectSupported = false
       exactSessionOpenSupported = false
@@ -1430,7 +1442,9 @@ Panel {
         "This Boomux CLI does not support atomic Workspace and Shell creation")
       return
     }
-    workspaceCreateRequested = { cwd: path, name: String(name || "") }
+    workspaceCreateGeneration++
+    workspaceCreateRequested = { cwd: path, name: String(name || ""),
+      generation: workspaceCreateGeneration }
     actionMessage = "Checking Boomux before creation..."
     requestFreshWorkspaceCreateStatus()
   }
@@ -1443,6 +1457,7 @@ Panel {
     }
     workspaceCreateStatusQueued = false
     workspaceCreateStatusActive = true
+    daemonStatusCreateGeneration = workspaceCreateGeneration
     daemonStatusProcess.running = true
   }
 
@@ -1459,6 +1474,7 @@ Panel {
     }
     workspaceCreateSnapshotQueued = false
     workspaceCreateSnapshotActive = true
+    workspaceCreateSnapshotGeneration = workspaceCreateRequested.generation
     snapshotActiveEpoch = pollEpoch
     nodeSnapshotProcess.running = true
   }
@@ -1541,7 +1557,7 @@ Panel {
     projectQuery = ""
     selectedProjectIndex = -1
     actionMessage = ""
-    Qt.callLater(function() { projectSearchField.forceActiveFocus() })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function workspaceCanChangeDefaultPath(workspace) {
@@ -1565,7 +1581,7 @@ Panel {
     directoryPickerIndex = 0
     directoryPickerOpen = true
     panel.enterKeyboardMode()
-    Qt.callLater(function() { directoryPickerKeyHandler.forceActiveFocus() })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function submitWorkspaceDefaultPath(path) {
@@ -1947,7 +1963,14 @@ Panel {
   function openWorkspaceTreeItem(item) {
     if (!item) return
     if (item.kind === "launcher") openWorkspaceItem(item)
-    else openShell(item.shell)
+    else {
+      // Retained rows are presentation only; use the current Shell/run and
+      // latest attention revision at activation, including after a restart.
+      var shell = item.shell ? WorkspaceModel.retainedShellForAgent({
+        node_id: item.shell.node_id, shell_id: item.shell.id
+      }, shells) : null
+      if (shell) openShell(shell, WorkspaceModel.latestAgentForShell(shell, agents))
+    }
   }
 
   function positionActiveWorkspace() {
@@ -1986,6 +2009,10 @@ Panel {
   }
 
   function requestWorkspaceSelection(workspace) {
+    if (!online || !backendReady) {
+      showActionFailure("Workspace selection unavailable", "Boomux must be online to change the default Workspace")
+      return
+    }
     if (!workspaceSelectionSupported) {
       showActionFailure("Workspace selection unavailable",
         "Boomux 0.27.0 or newer is required for a default Workspace")
@@ -2000,10 +2027,16 @@ Panel {
 
   function startWorkspaceSelection() {
     if (!workspaceSelectionRequested || workspaceSelectionProcess.running) return
-    if (workspaceSelectionRequested.id === workspaceSelectionAppliedId) {
+    var request = workspaceSelectionRequested
+    // Consume each explicit intent once, including clears and failed commands.
+    // The applied ID is presentation only: another CLI can change the default.
+    workspaceSelectionRequested = null
+    if (!online || !backendReady || !workspaceSelectionSupported) {
+      showActionFailure("Workspace selection unavailable",
+        "Boomux is no longer online or eligible; refresh and try again")
       return
     }
-    workspaceSelectionActive = workspaceSelectionRequested
+    workspaceSelectionActive = request
     workspaceSelectionProcess.command = workspaceSelectionActive.id === ""
       ? ["boomux", "workspace", "clear"]
       : ["boomux", "workspace", "select", workspaceSelectionActive.id]
@@ -2988,7 +3021,7 @@ Panel {
       actionProcess.running = true
       return
     }
-    openShell(item.shell, item.agent)
+    openWorkspaceTreeItem(item)
   }
 
   function showActionMenu(target, source) {
@@ -3229,6 +3262,7 @@ Panel {
   }
 
   function confirmAction() {
+    if (terminalLaunchPending) return
     var item = confirmationTarget
     confirmationTarget = null
     if (item && item.kind === "plugin-update") {
@@ -3239,7 +3273,7 @@ Panel {
       if (!pluginUpdateAvailable || pluginUpdateLaunchProcess.running) return
       actionMessage = "Updating the Boomux plugin..."
       pluginUpdateLaunchProcess.command = WorkspaceModel.guidedPluginUpdateCommand()
-      pluginUpdateLaunchProcess.running = true
+      launchTerminalAction(function() { pluginUpdateLaunchProcess.running = true })
       return
     }
     if (item && item.kind === "workspace") {
@@ -3268,7 +3302,7 @@ Panel {
       actionMessage = "Opening guided uninstall for " + String(item.node.alias) + "..."
       nodeUninstallAlias = String(item.node.alias)
       nodeUninstallProcess.command = WorkspaceModel.guidedNodeUninstallCommand(item.node.node_id)
-      nodeUninstallProcess.running = true
+      launchTerminalAction(function() { nodeUninstallProcess.running = true })
       return
     }
     if (!item || actionProcess.running) return
@@ -3294,23 +3328,61 @@ Panel {
     if (bar && bar.shell) bar.shell.updateEntryInline(moduleName, next)
   }
 
+  function mainPaneFocusTarget() {
+    if (confirmationTarget) return confirmationDialogKeyHandler
+    if (renameTarget) return renameField
+    if (settingsOpen) return settingsBackButton
+    if (directoryPickerOpen) return directoryPickerKeyHandler
+    if (formMode === "project") return projectSearchField
+    if (formMode === "shell" || formMode === "agent") return nameField
+    return keyCatcher
+  }
+
+  function restorePaneFocus(preferredTarget) {
+    if (!opened || !panel.keyboardMode || terminalLaunchPending) return
+    // A delayed dismissal must not steal focus from a newer modal or editor.
+    if (preferredTarget && !confirmationTarget && !renameTarget && !settingsOpen
+        && !directoryPickerOpen && (formMode === "shell" || formMode === "agent")
+        && preferredTarget.visible && preferredTarget.enabled)
+      preferredTarget.forceActiveFocus()
+    else panel.restoreKeyboardFocus()
+  }
+
+  function launchTerminalAction(launch) {
+    if (terminalLaunchPending) return false
+    terminalLaunchPending = true
+    panel.exitKeyboardMode()
+    sessionRail.exitKeyboardMode()
+    // Yield to the event loop with layer keyboard interactivity set to None
+    // before starting a terminal. Keep the pane and its edge reservation open.
+    Qt.callLater(function() {
+      try {
+        launch()
+      } finally {
+        root.terminalLaunchPending = false
+      }
+    })
+    return true
+  }
+
   function showSettings() {
     panel.enterKeyboardMode()
     cancelForm()
     confirmationTarget = null
     settingsOpen = true
-    Qt.callLater(function() { settingsBackButton.forceActiveFocus() })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function hideSettings() {
     settingsOpen = false
-    if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function openBoomuxConfig() {
-    if (!bar || !cliAvailable) return
-    bar.run("omarchy-launch-tui --app-id=TUI.float boomux config edit")
-    close()
+    if (!bar || !cliAvailable || terminalLaunchPending) return
+    launchTerminalAction(function() {
+      bar.run("omarchy-launch-tui --app-id=TUI.float boomux config edit")
+    })
   }
 
   function applyWebStatus(raw, command) {
@@ -3340,12 +3412,15 @@ Panel {
   }
 
   function createNode() {
-    if (!bar || !federationAvailable) return
-    bar.run("omarchy-launch-tui --app-id=TUI.float boomux __guided-node-add")
+    if (!bar || !federationAvailable || terminalLaunchPending) return
+    launchTerminalAction(function() {
+      bar.run("omarchy-launch-tui --app-id=TUI.float boomux __guided-node-add")
+    })
   }
 
   function createShellOnNode(node) {
-    if (!node || node.local || nodeShellProcess.running || nodeUpgradeProcess.running
+    if (terminalLaunchPending || !node || node.local
+        || nodeShellProcess.running || nodeUpgradeProcess.running
         || nodeUninstallProcess.running || nodeReauthenticateProcess.running
         || !nodeIsActionable(node.node_id)) return
     if (activeBoomuxWorkspaceId === "") {
@@ -3358,27 +3433,27 @@ Panel {
     actionMessage = "Creating Shell on " + nodeShellAlias + "..."
     nodeShellProcess.command = ["boomux", "shell", "create",
       String(activeBoomuxWorkspaceId), "--node", String(node.node_id), "--open"]
-    nodeShellProcess.running = true
+    launchTerminalAction(function() { nodeShellProcess.running = true })
   }
 
   function updateNode(node) {
-    if (!nodeCanUpgrade(node) || nodeUpgradeProcess.running || nodeShellProcess.running
+    if (terminalLaunchPending || !nodeCanUpgrade(node)
+        || nodeUpgradeProcess.running || nodeShellProcess.running
         || nodeUninstallProcess.running || nodeReauthenticateProcess.running
         || actionProcess.running) return
     nodeUpgradeAlias = String(node.alias)
     nodeUpgradeProcess.command = WorkspaceModel.guidedNodeUpgradeCommand(node.node_id)
-    nodeUpgradeProcess.running = true
+    launchTerminalAction(function() { nodeUpgradeProcess.running = true })
   }
 
   function reauthenticateNode(node) {
-    if (!nodeCanReauthenticate(node) || nodeReauthenticateProcess.running
+    if (terminalLaunchPending || !nodeCanReauthenticate(node) || nodeReauthenticateProcess.running
         || nodeUpgradeProcess.running || nodeUninstallProcess.running
         || nodeShellProcess.running || actionProcess.running) return
     nodeReauthenticateAlias = String(node.alias)
     nodeReauthenticateProcess.command
       = WorkspaceModel.guidedNodeReauthenticateCommand(node.node_id)
-    nodeReauthenticateProcess.running = true
-    close()
+    launchTerminalAction(function() { nodeReauthenticateProcess.running = true })
   }
 
   function formatTimestamp(timestamp) {
@@ -3427,12 +3502,20 @@ Panel {
   }
 
   function agentCanAcknowledge(agent) {
-    return !!agent && nodeIsActionable(agent.node_id, "persistent_agent_attention")
+    return online && backendReady && attentionAcknowledgementSupported
+      && cliFeatures.indexOf("persistent_agent_attention") >= 0
+      && !!agent && nodeIsActionable(agent.node_id, "persistent_agent_attention")
   }
 
   function acknowledgeAgent(agent, dismissed, automatic) {
     var revision = attentionRevision(agent)
-    if (revision <= 0 || !agentCanAcknowledge(agent)) return
+    if (!Number.isSafeInteger(revision) || revision <= 0 || !agentCanAcknowledge(agent)) return
+    var active = activeAcknowledgement
+    if (active && active.agentKey === agent.key && active.revision === revision) {
+      if (dismissed) activeAcknowledgement = Object.assign({}, active,
+        { dismissed: true, automatic: false })
+      return
+    }
     var queue = acknowledgeQueue.slice()
     for (var i = 0; i < queue.length; i++) {
       if (queue[i].agentKey !== agent.key || queue[i].revision !== revision) continue
@@ -3443,7 +3526,10 @@ Panel {
       }
       return
     }
+    var owner = nodeFor(agent.node_id)
     queue.push(Object.assign(WorkspaceModel.acknowledgementIdentity(agent, revision), {
+      nodeLocal: owner ? !!owner.local : !federationAvailable && agent.node_id === "local",
+      registrationRevision: owner ? owner.registration_revision : undefined,
       dismissed: !!dismissed,
       automatic: !!automatic
     }))
@@ -3464,13 +3550,30 @@ Panel {
   }
 
   function startNextAcknowledgement() {
-    if (acknowledgeProcess.running || acknowledgeQueue.length === 0) return
-    activeAcknowledgement = acknowledgeQueue[0]
-    acknowledgeProcess.command = ["boomux", "attention", "acknowledge",
-      activeAcknowledgement.agentId, "--observation-revision",
-      String(activeAcknowledgement.revision), "--json"].concat(
-        nodeArgs(activeAcknowledgement.nodeId, "persistent_agent_attention") || [])
-    acknowledgeProcess.running = true
+    if (acknowledgeProcess.running) return
+    while (acknowledgeQueue.length > 0) {
+      var request = acknowledgeQueue[0]
+      acknowledgeQueue = acknowledgeQueue.slice(1)
+      var owner = nodeFor(request.nodeId)
+      var sameOwner = owner
+        ? !!owner.local === request.nodeLocal
+          && owner.registration_revision === request.registrationRevision
+        : request.nodeLocal && !federationAvailable && request.nodeId === "local"
+      if (!sameOwner || !agentCanAcknowledge({ node_id: request.nodeId })
+          || (!request.nodeLocal && !federationAvailable)) {
+        showActionFailure("Agent attention unavailable",
+          "The owning Node is no longer current or eligible; refresh and try again")
+        continue
+      }
+      activeAcknowledgement = request
+      // Never let a missing or changed owner turn a remote mutation into local argv.
+      var routing = request.nodeLocal ? [] : ["--node", request.nodeId]
+      acknowledgeProcess.command = ["boomux", "attention", "acknowledge",
+        request.agentId, "--observation-revision", String(request.revision), "--json"]
+        .concat(routing)
+      acknowledgeProcess.running = true
+      return
+    }
   }
 
   function countCompletedAgents() {
@@ -3527,9 +3630,7 @@ Panel {
     applyCreationNodeDefaults()
     requestShellNameSuggestion()
     if (mode === "agent") loadAgentHosts()
-    Qt.callLater(function() {
-      nameField.forceActiveFocus()
-    })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function placementForNode(workspace, nodeId) {
@@ -3581,7 +3682,7 @@ Panel {
     agentHostError = ""
     suggestedNameRequestedIdentity = null
     formMode = ""
-    if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function openDirectoryPicker() {
@@ -3589,7 +3690,7 @@ Panel {
     directoryPickerPath = cwd.indexOf("/") === 0 ? cwd : home
     directoryPickerIndex = 0
     directoryPickerOpen = true
-    Qt.callLater(function() { directoryPickerKeyHandler.forceActiveFocus() })
+    Qt.callLater(root.restorePaneFocus)
   }
 
   function closeDirectoryPicker() {
@@ -3598,7 +3699,7 @@ Panel {
       return
     }
     directoryPickerOpen = false
-    Qt.callLater(function() { browseButton.forceActiveFocus() })
+    Qt.callLater(function() { root.restorePaneFocus(browseButton) })
   }
 
   function parentDirectory(path) {
@@ -3643,7 +3744,7 @@ Panel {
     cwdField.text = path
     cwdIsExact = true
     directoryPickerOpen = false
-    Qt.callLater(function() { cwdField.forceActiveFocus() })
+    Qt.callLater(function() { root.restorePaneFocus(cwdField) })
   }
 
   function submitForm() {
@@ -3732,9 +3833,13 @@ Panel {
       latestBoomuxUrl = String(data.release_url || boomuxRepositoryUrl + "/releases")
       boomuxUpdateAction = String(data.recommended_action || "")
       if (localUpdateVerificationPending) {
-        var current = String(data.current || "")
-        if (localUpdateExpectedVersion !== ""
-            && !WorkspaceModel.versionIsNewer(localUpdateExpectedVersion, current)) {
+        var current = typeof data.current === "string" ? data.current : ""
+        // Guided updates install stable releases. Do not let coercion, a
+        // development suffix, or an unknown version prove replacement success.
+        var stableRelease = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+        var direction = stableRelease.test(current) && stableRelease.test(localUpdateExpectedVersion)
+          ? WorkspaceModel.versionDirection(current, localUpdateExpectedVersion) : "unknown"
+        if (direction === "current" || direction === "newer") {
           localUpdateVerificationPending = false
           localUpdateVerificationTimer.stop()
           cliVersion = current
@@ -3770,14 +3875,14 @@ Panel {
   }
 
   function startLocalUpdate() {
-    if (localUpdateProcess.running) return
+    if (terminalLaunchPending || localUpdateProcess.running) return
     if (!guidedLocalUpdateSupported || boomuxUpdateAction !== "run_update") {
       Qt.openUrlExternally(latestBoomuxUrl || boomuxRepositoryUrl + "/releases")
       return
     }
     actionMessage = "Opening guided Boomux update..."
     localUpdateProcess.command = WorkspaceModel.guidedLocalUpdateCommand()
-    localUpdateProcess.running = true
+    launchTerminalAction(function() { localUpdateProcess.running = true })
   }
 
   function requestPluginUpdate() {
@@ -3797,6 +3902,7 @@ Panel {
   }
 
   function focusPane() {
+    if (terminalLaunchPending) return
     if (opened && panel.keyboardMode) {
       panel.exitKeyboardMode()
       return
@@ -4133,13 +4239,16 @@ Panel {
     command: ["boomux", "daemon", "status", "--json"]
     stdout: StdioCollector { id: daemonStatusStdout; waitForEnd: true }
     onExited: function(exitCode) {
+      var statusGeneration = root.daemonStatusCreateGeneration
       var explicitCreationCheck = root.workspaceCreateStatusActive
+        && root.workspaceCreateRequested
+        && root.workspaceCreateRequested.generation === statusGeneration
       root.workspaceCreateStatusActive = false
       if (exitCode === 0) root.parseDaemonStatus(
-        daemonStatusStdout.text, explicitCreationCheck)
+        daemonStatusStdout.text, explicitCreationCheck, statusGeneration)
       else if (explicitCreationCheck)
         root.failWorkspaceCreation("Could not check Boomux daemon status before creation")
-      else root.setOffline("Boomux daemon is stopped")
+      else root.setOffline("Boomux daemon is stopped", statusGeneration)
       if (root.workspaceCreateStatusQueued && root.workspaceCreateRequested
           && !daemonStartProcess.running)
         Qt.callLater(function() { root.requestFreshWorkspaceCreateStatus() })
@@ -4180,6 +4289,8 @@ Panel {
     stderr: StdioCollector { id: nodeSnapshotStderr; waitForEnd: true }
     onExited: function(exitCode) {
       var explicitCreationSnapshot = root.workspaceCreateSnapshotActive
+        && root.workspaceCreateRequested
+        && root.workspaceCreateRequested.generation === root.workspaceCreateSnapshotGeneration
       root.workspaceCreateSnapshotActive = false
       root.finishRefresh()
       if (exitCode === 0) root.parseNodeSnapshot(
@@ -4511,8 +4622,7 @@ Panel {
           "Could not select the default Workspace"))
       }
       root.workspaceSelectionActive = null
-      if (root.workspaceSelectionRequested
-          && root.workspaceSelectionRequested.id !== root.workspaceSelectionAppliedId)
+      if (root.workspaceSelectionRequested)
         Qt.callLater(function() { root.startWorkspaceSelection() })
     }
   }
@@ -4784,9 +4894,6 @@ Panel {
         root.showActionFailure("Agent attention failed", failure)
       } else if (root.opened && !automatic)
         root.actionMessage = dismissed ? "Agent notification dismissed" : "Agent attention acknowledged"
-      var queue = root.acknowledgeQueue.slice()
-      if (queue.length > 0) queue.shift()
-      root.acknowledgeQueue = queue
       root.activeAcknowledgement = null
       root.refresh()
       root.startNextAcknowledgement()
@@ -5031,7 +5138,8 @@ Panel {
       if (width !== root.paneWidth) root.persistPaneSettings({ paneWidth: width })
     }
     focusColor: root.urgent
-    focusTarget: keyCatcher
+    keyboardModeBlocked: root.terminalLaunchPending
+    focusTarget: root.mainPaneFocusTarget()
     onKeyboardModeChanged: if (keyboardMode) sessionRail.exitKeyboardMode()
     onOutsideClicked: panel.exitKeyboardMode()
 
@@ -5515,6 +5623,11 @@ Panel {
           Column {
             id: formColumn
             width: parent.width
+            // Also handle Escape after Tab moves from an editor to its buttons.
+            Keys.onEscapePressed: {
+              if (root.directoryPickerOpen) root.closeDirectoryPicker()
+              else root.cancelForm()
+            }
             spacing: Style.space(6)
             PanelSectionHeader {
               width: parent.width
@@ -7972,6 +8085,7 @@ Panel {
     paneWidth: root.sessionPaneWidth
     namespace: "omarchy-boomux-session-rail"
     focusColor: Color.accent
+    keyboardModeBlocked: root.terminalLaunchPending
     focusTarget: sessionSearchField
     onKeyboardModeChanged: if (keyboardMode) panel.exitKeyboardMode()
     onOutsideClicked: root.releaseSessionRailFocus()

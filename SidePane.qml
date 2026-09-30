@@ -32,6 +32,7 @@ PanelWindow {
   property color focusColor: Color.urgent
   property Item focusTarget: null
   property bool keyboardMode: false
+  property bool keyboardModeBlocked: false
   property real focusEmphasis: 0
   signal outsideClicked()
   signal paneWidthCommitted(int width)
@@ -76,13 +77,17 @@ PanelWindow {
     return resizeArea.mapToItem(null, mouse.x, mouse.y).x
   }
 
+  function restoreKeyboardFocus() {
+    if (open && keyboardMode && !keyboardModeBlocked && focusTarget
+        && focusTarget.visible && focusTarget.enabled)
+      focusTarget.forceActiveFocus()
+  }
+
   function enterKeyboardMode() {
-    if (!open) return
+    if (!open || keyboardModeBlocked) return
     keyboardMode = true
-    if (focusTarget) Qt.callLater(function() {
-      if (root.open && root.keyboardMode && root.focusTarget)
-        root.focusTarget.forceActiveFocus()
-    })
+    // Resolve the current target after form/modal visibility bindings settle.
+    Qt.callLater(root.restoreKeyboardFocus)
   }
 
   function exitKeyboardMode() {
