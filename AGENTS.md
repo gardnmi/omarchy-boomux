@@ -323,12 +323,30 @@ and use the returned canonical path for snapshot confirmation. Bound
 post-success confirmation and clear busy state with a completed-but-unconfirmed
 warning; never replay the successful mutation.
 
-Polling currently checks daemon status once per second and fetches Agent, shell,
-and Workspace snapshots only while the daemon is running. With protocol 38 it
-groups one combined Node snapshot by coordinator Workspace; protocol 37 uses the
-same read with owner-local grouping. Older daemons retain the local list polling
-path. A future event-driven implementation should retain the passive-daemon
-invariant and handle cursor expiry by reacquiring a baseline.
+Polling checks passive daemon status before every snapshot or event-wait renewal;
+it must never deliberately start a stopped daemon. A healthy event-backed stream
+reconciles snapshots every five seconds; unsupported or failed event streams keep
+the one-second fallback. Stopped-daemon checks back off to at most 15 seconds,
+while explicit refresh and mutations bypass that backoff. Every new status
+process captures the current Workspace-creation generation so a pre-intent result
+cannot authorize or cancel a newer creation request.
+
+Coalesce meaningful event batches for 100 ms after delivery, including attention
+while the pane is closed. Output-only traffic renews at most once per second
+without rebuilding snapshots; an event occurring during that renewal gap can
+therefore take about 1.1 seconds before refresh begins, plus CLI/snapshot time.
+Do not describe 100 ms as an end-to-end attention guarantee. Status-only renewals
+must not postpone reconciliation or queue an unnecessary snapshot while one is
+already running. Cursor expiry or invalid event responses require a new baseline.
+Hyprland event bursts likewise coalesce; remap cached window identity after a
+snapshot, and retry failed identity reads on bounded reconciliation. Web status
+has an independent five-second read budget.
+
+With protocol 38, snapshots group one combined Node snapshot by coordinator
+Workspace; protocol 37 uses the same read with owner-local grouping. Older
+daemons retain the local list polling path. Synthetic JavaScript benchmarks do
+not establish live CPU, QML object counts, frame times, or end-to-end latency;
+verify those separately in a real Omarchy/Quickshell compositor.
 
 Session discovery is independent, serial, and lazy while the contextual rail is
 open for a presented coordinated Workspace. Refresh it on cold or stale rail

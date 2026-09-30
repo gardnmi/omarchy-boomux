@@ -489,7 +489,7 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("SidePane {")
   expect(panel).not.toContain('workspaceTreeDelegate.workspaceActive ? "ACTIVE"')
   expect(panel).toContain("modelData.id === root.activeBoomuxWorkspaceId")
-  expect(panel).toContain("root.selectedWorkspaceIndex = workspaceTreeDelegate.index")
+  expect(panel).toContain("root.selectedWorkspaceIndex = workspaceTreeDelegate.workspaceIndex")
   expect(panel).toContain("root.toggleWorkspaceExpansion(workspaceTreeDelegate.modelData)")
   expect(panel).toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Beginning)")
   expect(panel).not.toContain("onActiveBoomuxTerminalKeyChanged")
@@ -502,19 +502,17 @@ test("uses a configurable sliding side pane with an active Workspace tree", () =
   expect(panel).toContain("property int workspaceTreeHeight: Style.space(340)")
   expect(panel).toContain("cursorShape: Qt.SizeVerCursor")
   expect(panel).toContain("root.setWorkspaceTreeHeight(startingHeight + translation.y)")
-  expect(panel).toContain("workspaceDelegate.revealTreeItem(root.selectedWorkspaceItemIndex)")
-  expect(panel).toContain("id: treeItemRepeater")
-  expect(panel).toContain("model: workspaceTreeDelegate.workspaceExpanded")
-  expect(panel).toContain("? workspaceTreeDelegate.treeItems : []")
+  expect(panel).toContain("root.workspaceTreeRowIndex(root.selectedWorkspaceIndex,")
+  expect(panel).not.toContain("id: treeItemRepeater")
+  expect(panel).toContain("model: root.workspaceTreeProjection.rows")
+  expect(panel).toContain("readonly property string rowKey: modelData.key")
   expect(panel).not.toContain("else if (root.expandedWorkspaceKey !== \"\")")
   expect(panel).not.toContain("setWorkspaceTreeHeight(workspaceTreeHeight)")
   expect(panel).toContain("panel.height - Style.space(260)")
   expect(panel).not.toContain("workspaceTreeList.positionViewAtIndex(index, ListView.Contain)")
-  expect(panel).toContain("onClicked: {\n                    root.focusSection = \"workspaces\"\n"
-    + "                    root.selectedWorkspaceIndex = index\n"
-    + "                    root.activateWorkspaceRow(workspaceTreeDelegate.modelData)")
+  expect(panel).toMatch(/onClicked: \{\s*root.focusSection = "workspaces"\s*root.selectedWorkspaceIndex = workspaceTreeDelegate.workspaceIndex\s*root.activateWorkspaceRow\(workspaceTreeDelegate.modelData\)/)
   const workspaceRow = panel.slice(panel.indexOf("id: workspaceHeaderActions"),
-    panel.indexOf("id: childColumn"))
+    panel.indexOf("id: workspaceChildComponent"))
   expect(workspaceRow).toContain('text: "⋮"')
   expect(workspaceRow).not.toContain('id: workspaceSessionsButton')
   expect(workspaceRow).not.toContain('root.toggleWorkspaceSessionRail(modelData)')
@@ -596,7 +594,7 @@ test("does not expose scheduled work UI, polling, or commands", () => {
   expect(panel).not.toContain("LAST 10 RUNS")
   expect("schedules" in snapshot).toBe(false)
   expect("executions" in snapshot).toBe(false)
-  expect(manifest.version).toBe("2.8.3")
+  expect(manifest.version).toBe("2.8.4")
   expect(manifest.barWidget.aliases).not.toContain("schedule")
 })
 
@@ -691,8 +689,8 @@ test("bounds passive update responses before collecting stdout", () => {
 test("uses Boomux events to refresh focused terminal state promptly", () => {
   const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
   expect(panel).toContain('["boomux", "events", "--json"]')
-  expect(panel).toContain('"focused_terminal_presentation_changed"')
-  expect(panel).toContain("root.requestFocusedTerminalRefresh()")
+  expect(panel).toContain('event.event !== "output_changed"')
+  expect(panel).toContain("if (needsSnapshot) requestFocusedTerminalRefresh()")
 })
 
 test("shows the active Boomux special Workspace name in the bar", () => {
@@ -819,7 +817,7 @@ test("preserves the Workspace tree viewport across polling snapshots", () => {
   expect(panel).toContain("var workspaceModelChanged = applyWorkspaceSnapshot(")
   expect(panel).toContain("WorkspaceModel.workspaceTreeModelSignature(nextWorkspaces)")
   expect(panel).toContain("if (signature === workspaceTreeSnapshotSignature) return false")
-  expect(panel).toContain("model: root.workspaceTreeWorkspaces")
+  expect(panel).toContain("model: root.workspaceTreeProjection.rows")
   expect(panel).toContain('if (root.pendingWorkspacePositionKey !== "") return')
   expect(panel).toContain("workspaceTreeList.contentY = Math.max(0,")
 })

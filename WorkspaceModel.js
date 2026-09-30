@@ -846,23 +846,136 @@ function shellOwner(owner) {
   return owner && owner.kind === "schedule" ? "schedule" : "user"
 }
 
-function agentHasPrivateOwner(agent, shells) {
-  if (!agent || !agent.shell_id) return false
-  for (var i = 0; i < shells.length; i++) {
-    var shell = shells[i]
-    if (shell && shell.node_id === agent.node_id && shell.id === agent.shell_id)
-      return shellOwner(shell.owner) === "schedule"
+// Index normalized snapshot resources by structural identity, never by a bare ID
+// or a delimiter that can also occur in an ID. Keep the first Shell/Node just as
+// the former lookup scans did. These maps belong to one snapshot array version.
+function indexNodes(nodes) {
+  var result = Object.create(null)
+  for (var i = 0; i < (nodes || []).length; i++) {
+    var node = nodes[i]
+    if (node && !result[node.node_id]) result[node.node_id] = node
   }
-  return false
+  return result
+}
+
+function indexShells(shells) {
+  var result = Object.create(null)
+  for (var i = 0; i < (shells || []).length; i++) {
+    var shell = shells[i]
+    if (!shell) continue
+    var key = ownerKey(shell.node_id, shell.id)
+    if (!result[key]) result[key] = shell
+  }
+  return result
+}
+
+function indexedShell(shellsByIdentity, nodeId, shellId) {
+  return shellsByIdentity[ownerKey(nodeId, shellId)] || null
+}
+
+function agentRunIdentity(agent) {
+  return JSON.stringify([String(agent.node_id || ""), String(agent.shell_id || ""),
+    String(agent.run_id || "")])
+}
+
+function agentProjectionNewer(left, right) {
+  var leftObserved = left.observation ? Number(left.observation.observed_at_ms || 0) : 0
+  var rightObserved = right.observation ? Number(right.observation.observed_at_ms || 0) : 0
+  var leftStarted = Number(left.started_at_ms || 0)
+  var rightStarted = Number(right.started_at_ms || 0)
+  return leftObserved > rightObserved || (leftObserved === rightObserved
+    && (leftStarted > rightStarted || (leftStarted === rightStarted
+      && String(left.id) > String(right.id))))
+}
+
+function indexedAgentIsCurrent(agent, shellsByIdentity) {
+  if (!agent || !agent.shell_id || !agent.run_id) return false
+  var shell = indexedShell(shellsByIdentity, agent.node_id, agent.shell_id)
+  // The legacy local list path retains raw Shell records. Keep accepting the
+  // qualified run IDs that Panel's former resourceId-based scan understood.
+  var rawRun = shell ? (shell.run ? shell.run.id : shell.run_id) : null
+  if (rawRun && typeof rawRun === "object" && rawRun.node_id !== undefined
+      && String(rawRun.node_id) !== String(shell.node_id)) return false
+  var runId = resourceId(rawRun)
+  return runId !== "" && agent.run_id === runId
+}
+
+function indexCurrentAgents(agents, shellsByIdentity) {
+  var current = Object.create(null)
+  var live = Object.create(null)
+  for (var i = 0; i < (agents || []).length; i++) {
+    var agent = agents[i]
+    var state = agent && agent.observation ? agent.observation.state : "unknown"
+    if (!indexedAgentIsCurrent(agent, shellsByIdentity)
+        || state === "inactive" || state === "done") continue
+    var key = agentRunIdentity(agent)
+    if (!current[key] || agentProjectionNewer(agent, current[key])) current[key] = agent
+    // Tree Agent rows represent a live lifecycle; historical durable attention
+    // stays in the Agents view and must not be attached to a restarted Shell.
+    if (agent.ended_at_ms == null && (!live[key] || agentProjectionNewer(agent, live[key])))
+      live[key] = agent
+  }
+  return { current: current, live: live }
+}
+
+function indexedAgentIsProjectedCurrent(agent, shellsByIdentity, agentsByRun) {
+  if (!indexedAgentIsCurrent(agent, shellsByIdentity)) return false
+  var latest = agentsByRun.current[agentRunIdentity(agent)]
+  return !latest || latest.key === agent.key || !agentProjectionNewer(latest, agent)
+}
+
+function latestShellAgent(shell, agentsByRun) {
+  if (!shell || shellOwner(shell.owner) === "schedule") return null
+  var runId = shell.run ? resourceId(shell.run.id) : resourceId(shell.run_id)
+  if (!runId) return null
+  return agentsByRun.live[agentRunIdentity({ node_id: shell.node_id,
+    shell_id: shell.id, run_id: runId })] || null
+}
+
+function indexedAgentHasPrivateOwner(agent, shellsByIdentity) {
+  var shell = agent && agent.shell_id
+    ? indexedShell(shellsByIdentity, agent.node_id, agent.shell_id) : null
+  return !!shell && shellOwner(shell.owner) === "schedule"
+}
+
+function agentHasPrivateOwner(agent, shells) {
+  return indexedAgentHasPrivateOwner(agent, indexShells(shells))
+}
+
+function visibleAgents(agents, shellsByIdentity, agentsByRun) {
+  return agentsByLastUpdated((agents || []).filter(function(agent) {
+    var state = agent.observation ? agent.observation.state : "unknown"
+    var revision = agent.attention && agent.attention.observation
+      ? Number(agent.attention.observation.revision) : 0
+    return !indexedAgentHasPrivateOwner(agent, shellsByIdentity)
+      && ((indexedAgentIsProjectedCurrent(agent, shellsByIdentity, agentsByRun)
+        && state !== "inactive" && state !== "done") || revision > 0)
+  }))
+}
+
+function completedAgentCount(agents, completedAgents, shellsByIdentity, agentsByRun) {
+  var completed = Object.create(null)
+  for (var i = 0; i < (agents || []).length; i++) {
+    var agent = agents[i]
+    if (indexedAgentHasPrivateOwner(agent, shellsByIdentity)) continue
+    if (completedAgents[agent.key]
+        && indexedAgentIsProjectedCurrent(agent, shellsByIdentity, agentsByRun))
+      completed[agent.key] = true
+    if (agent.attention && agent.attention.reason === "completed"
+        && agent.attention.observation && Number(agent.attention.observation.revision) > 0)
+      completed[agent.key] = true
+  }
+  return Object.keys(completed).length
 }
 
 function userWorkspaceResources(shells, agents) {
+  var shellsByIdentity = indexShells(shells)
   return {
     shells: shells.filter(function(shell) {
       return shellOwner(shell.owner) !== "schedule"
     }),
     agents: agents.filter(function(agent) {
-      return !agentHasPrivateOwner(agent, shells)
+      return !indexedAgentHasPrivateOwner(agent, shellsByIdentity)
     })
   }
 }
@@ -1306,21 +1419,11 @@ function workspaceTreeItems(workspace) {
   if (!workspace) return []
   var items = []
   var shells = workspace.shells || []
-  var agents = workspace.agents || []
+  var agentsByRun = indexCurrentAgents(workspace.agents || [], indexShells(shells))
   for (var s = 0; s < shells.length; s++) {
     var shell = shells[s]
     if (!shell || shellOwner(shell.owner) === "schedule") continue
-    var activeAgent = null
-    for (var a = 0; a < agents.length; a++) {
-      var candidate = agents[a]
-      var state = candidate && candidate.observation
-        ? String(candidate.observation.state || "unknown") : "unknown"
-      if (agentMatchesShell(candidate, shell) && candidate.ended_at_ms == null
-          && state !== "inactive" && state !== "done") {
-        activeAgent = candidate
-        break
-      }
-    }
+    var activeAgent = latestShellAgent(shell, agentsByRun)
     items.push({
       key: String(shell.key || resourceKey(shell.node_id, shell.id)),
       kind: activeAgent ? "agent"
@@ -1606,27 +1709,9 @@ function agentMatchesShell(agent, shell) {
   return !!runId && agent.run_id === runId
 }
 
-// A tree row can survive lifecycle-only snapshot changes. Resolve its current
-// run's latest live Agent when activated, never from a captured projected row.
 function latestAgentForShell(shell, agents) {
-  if (!shell || shellOwner(shell.owner) === "schedule") return null
-  var latest = null
-  for (var i = 0; i < (agents || []).length; i++) {
-    var candidate = agents[i]
-    var state = candidate && candidate.observation ? candidate.observation.state : "unknown"
-    if (!agentMatchesShell(candidate, shell) || candidate.ended_at_ms != null
-        || state === "inactive" || state === "done") continue
-    var observed = candidate.observation ? Number(candidate.observation.observed_at_ms || 0) : 0
-    var previousObserved = latest && latest.observation
-      ? Number(latest.observation.observed_at_ms || 0) : 0
-    var started = Number(candidate.started_at_ms || 0)
-    var previousStarted = latest ? Number(latest.started_at_ms || 0) : 0
-    if (!latest || observed > previousObserved
-        || (observed === previousObserved && started > previousStarted)
-        || (observed === previousObserved && started === previousStarted
-          && String(candidate.id) > String(latest.id))) latest = candidate
-  }
-  return latest
+  if (!shell) return null
+  return latestShellAgent(shell, indexCurrentAgents(agents, indexShells([shell])))
 }
 
 function retainedShellForAgent(agent, shells) {
@@ -1794,6 +1879,16 @@ if (typeof module !== "undefined") module.exports = {
   normalizeAgent: normalizeAgent,
   normalizeShell: normalizeShell,
   normalizeLauncher: normalizeLauncher,
+  indexNodes: indexNodes,
+  indexShells: indexShells,
+  indexedShell: indexedShell,
+  indexCurrentAgents: indexCurrentAgents,
+  indexedAgentIsCurrent: indexedAgentIsCurrent,
+  indexedAgentIsProjectedCurrent: indexedAgentIsProjectedCurrent,
+  indexedAgentHasPrivateOwner: indexedAgentHasPrivateOwner,
+  latestShellAgent: latestShellAgent,
+  visibleAgents: visibleAgents,
+  completedAgentCount: completedAgentCount,
   agentHasPrivateOwner: agentHasPrivateOwner,
   userShellCount: userShellCount,
   normalizeFocusedTerminal: normalizeFocusedTerminal,
